@@ -1,6 +1,6 @@
 module.exports = {
     // 指令前綴
-    PREFIX: '-',
+    PREFIX: '!',
 
     // 特殊用戶設定
     SPECIAL_USERS: [
