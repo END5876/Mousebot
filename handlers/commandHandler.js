@@ -8,7 +8,7 @@ function setupBasicCommands(client) {
         const content = message.content;
 
         // !help
-        if (content === '!help') {
+        /*if (content === '!help') {
             const embed = new EmbedBuilder()
                 .setColor(0x5865F2)
                 .setTitle('🤖 Bot 指令列表')
@@ -47,7 +47,7 @@ function setupBasicCommands(client) {
                 .setTimestamp();
 
             message.reply({ embeds: [embed] });
-        }
+        }*/
 
         // !ping
         if (content === '!ping') {
