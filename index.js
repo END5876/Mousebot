@@ -29,7 +29,7 @@ client.once('clientReady', () => {
     
     // 設定 Bot 狀態
     client.user.setPresence({
-        activities: [{ name: '!help 查看指令 | !ai 問我問題', type: 2 }],
+        activities: [{ name: '逼逼 機油好難喝', type: 2 }],
         status: 'online'
     });
 });
