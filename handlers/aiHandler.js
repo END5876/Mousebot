@@ -4,17 +4,17 @@ const { PREFIX } = require('../config/settings');
 const { SYSTEM_PROMPT, GENERATION_CONFIG } = require('../config/aiSettings');
 
 // --- 設定區域 ---
-// 嘗試使用 latest 別名，或者你可以改為 'gemini-pro' (最穩定)
 const MODEL_NAME = "gemini-2.5-flash-lite"; 
+const RANDOM_REPLY_CHANCE = 0.05; // 5% 機率自動回應
 
 // 初始化 API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// 獲取模型實例的函數 (方便動態切換)
+// 獲取模型實例的函數
 function getModel() {
     return genAI.getGenerativeModel({ 
         model: MODEL_NAME,
-        systemInstruction: SYSTEM_PROMPT, // 加入系統指令
+        systemInstruction: SYSTEM_PROMPT,
         safetySettings: [
             { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
             { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
@@ -54,7 +54,7 @@ async function getGeminiResponse(userId, prompt) {
         
         const chat = model.startChat({
             history: history,
-            generationConfig: GENERATION_CONFIG, // 使用配置
+            generationConfig: GENERATION_CONFIG,
         });
 
         const result = await chat.sendMessage(prompt);
@@ -70,11 +70,51 @@ async function getGeminiResponse(userId, prompt) {
     }
 }
 
+// --- 新增：短回應生成函數 ---
+async function getShortResponse(userId, message) {
+    try {
+        const model = getModel();
+        const history = getUserHistory(userId);
+        
+        // 創建一個特殊的 prompt，要求簡短回應
+        const shortPrompt = `請用10個字以內簡短回應這句話（不要使用標點符號結尾）：「${message}」`;
+        
+        const chat = model.startChat({
+            history: history,
+            generationConfig: {
+                ...GENERATION_CONFIG,
+                maxOutputTokens: 30, // 限制輸出長度
+            },
+        });
+
+        const result = await chat.sendMessage(shortPrompt);
+        let response = result.response.text().trim();
+        
+        // 確保回應不超過10個字（中文字符）
+        if (response.length > 10) {
+            response = response.substring(0, 10);
+        }
+
+        // 不更新歷史記錄，保持隨機回應的獨立性
+        // updateUserHistory(userId, 'user', message);
+        // updateUserHistory(userId, 'model', response);
+
+        return response;
+    } catch (error) {
+        console.error(`Short Response Error:`, error.message);
+        return null;
+    }
+}
+
 // --- Discord 訊息處理 ---
 
 function setupAICommands(client) {
   client.on('messageCreate', async message => {
+      // 忽略 bot 自己的訊息
       if (message.author.bot) return;
+      
+      // 忽略沒有文字內容的訊息（例如只有圖片）
+      if (!message.content || message.content.trim() === '') return;
 
       const content = message.content.trim();
       
@@ -82,37 +122,34 @@ function setupAICommands(client) {
       const isClearCommand = content === `${PREFIX}reset` || content === `${PREFIX}clearai`;
       if (isClearCommand) {
           clearUserHistory(message.author.id);
-          return message.reply('🧠 已清除你的對話記憶。');
+          return message.channel.send('🧠 已清除你的對話記憶。');
       }
 
       // 檢查是否被 tag (提及)
       const isMentioned = message.mentions.has(client.user);
       
       if (isMentioned) {
-          // 移除 bot 的 mention，取得實際問題內容
+          // === 原有的 mention 回應邏輯 ===
           let question = content
-              .replace(/<@!?\d+>/g, '') // 移除所有 mention 標籤
+              .replace(/<@!?\d+>/g, '')
               .trim();
           
           if (!question) return;
-          if (!process.env.GEMINI_API_KEY) return message.reply('❌ 未設定 API Key');
+          if (!process.env.GEMINI_API_KEY) return message.channel.send('❌ 未設定 API Key');
 
           let thinkingMsg = null;
           try {
-              thinkingMsg = await message.reply('⏳ 思考中...');
+              thinkingMsg = await message.channel.send('⏳ 思考中...');
               const answer = await getGeminiResponse(message.author.id, question);
               if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
 
               if (answer.length <= 2000) {
-                  await message.reply(answer);
+                  await message.channel.send(answer);
               } else {
                   const chunks = splitMessage(answer);
                   
-                  // 第一則訊息用 reply
-                  await message.reply(chunks[0]);
-                  
-                  // 後續訊息直接發送
-                  for (let i = 1; i < chunks.length; i++) {
+                  // 所有訊息都用 channel.send
+                  for (let i = 0; i < chunks.length; i++) {
                       await message.channel.send(chunks[i]);
                   }
               }
@@ -120,10 +157,26 @@ function setupAICommands(client) {
               if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
               
               let errorMsg = `❌ 錯誤：${error.message}`;
-              if (error.message.includes('404')) errorMsg = `❌ 找不到模型 ${MODEL_NAME}，請嘗試更改模型名稱 (例如 gemini-pro)`;
-              if (error.message.includes('429')) errorMsg = '⚠️ 請求太頻繁 (Rate Limit)，請稍後再試';
+              if (error.message.includes('404')) errorMsg = `❌ 找不到模型 ${MODEL_NAME}，請嘗試更改模型名稱`;
+              if (error.message.includes('429')) errorMsg = '⚠️ 請求太頻繁，請稍後再試';
               
-              message.reply(errorMsg);
+              message.channel.send(errorMsg);
+          }
+      } else {
+          // === 新增：5% 機率隨機回應 ===
+          if (!process.env.GEMINI_API_KEY) return;
+          
+          const randomValue = Math.random();
+          if (randomValue < RANDOM_REPLY_CHANCE) {
+              try {
+                  const shortReply = await getShortResponse(message.author.id, content);
+                  if (shortReply) {
+                      await message.channel.send(shortReply);
+                  }
+              } catch (error) {
+                  // 靜默處理錯誤，不影響正常聊天
+                  console.error('Random reply error:', error.message);
+              }
           }
       }
   });
