@@ -5,7 +5,7 @@ const { SYSTEM_PROMPT, GENERATION_CONFIG } = require('../config/aiSettings');
 
 // --- 設定區域 ---
 const MODEL_NAME = "gemini-2.5-flash-lite"; 
-const RANDOM_REPLY_CHANCE = 0.08; // 8% 機率自動回應
+const RANDOM_REPLY_CHANCE = 0.15; // 15% 機率自動回應
 
 // 初始化 API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -163,7 +163,7 @@ function setupAICommands(client) {
               message.channel.send(errorMsg);
           }
       } else {
-          // === 新增：5% 機率隨機回應 ===
+          // === 新增：15% 機率隨機回應 ===
           if (!process.env.GEMINI_API_KEY) return;
           
           const randomValue = Math.random();
