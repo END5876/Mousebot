@@ -77,7 +77,7 @@ async function getShortResponse(userId, message) {
         const history = getUserHistory(userId);
         
         // 創建一個特殊的 prompt，要求簡短回應
-        const shortPrompt = `請用20個字以內簡短回應這句話（不要使用標點符號結尾）：「${message}」`;
+        const shortPrompt = `請用20個字以內簡短回應這句話（不要使用標點符號）：「${message}」`;
         
         const chat = model.startChat({
             history: history,
