@@ -5,7 +5,7 @@ const { SYSTEM_PROMPT, GENERATION_CONFIG } = require('../config/aiSettings');
 
 // --- 設定區域 ---
 const MODEL_NAME = "gemini-2.5-flash-lite"; 
-const RANDOM_REPLY_CHANCE = 0.05; // 5% 機率自動回應
+const RANDOM_REPLY_CHANCE = 0.08; // 8% 機率自動回應
 
 // 初始化 API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -77,7 +77,7 @@ async function getShortResponse(userId, message) {
         const history = getUserHistory(userId);
         
         // 創建一個特殊的 prompt，要求簡短回應
-        const shortPrompt = `請用10個字以內簡短回應這句話（不要使用標點符號結尾）：「${message}」`;
+        const shortPrompt = `請用15個字以內簡短回應這句話（不要使用標點符號結尾）：「${message}」`;
         
         const chat = model.startChat({
             history: history,
@@ -91,8 +91,8 @@ async function getShortResponse(userId, message) {
         let response = result.response.text().trim();
         
         // 確保回應不超過10個字（中文字符）
-        if (response.length > 10) {
-            response = response.substring(0, 10);
+        if (response.length > 20) {
+            response = response.substring(0, 20);
         }
 
         // 不更新歷史記錄，保持隨機回應的獨立性
