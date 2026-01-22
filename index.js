@@ -7,7 +7,7 @@ const { setupMusicCommands } = require('./handlers/musicHandler');
 const { setupVoiceCommands } = require('./handlers/voiceHandler');
 const { setupBasicCommands } = require('./handlers/commandHandler');
 const { setupCustomResponses } = require('./handlers/responseHandler');
-const { setupAICommands } = require('./handlers/aiHandler'); // 新增
+const { setupAICommands } = require('./handlers/ai/aiHandler'); // 新增
 
 // 創建客戶端
 const client = new Client({
