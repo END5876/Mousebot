@@ -12,10 +12,18 @@ function selectMode(userId, message) {
         return 'lover';
     }
 
-    // 其他用戶從四種模式中隨機選擇
-    const modes = ['loss', 'mambaMentor', 'mygo', 'inmu'];
-    const randomIndex = Math.floor(Math.random() * modes.length);
-    return modes[randomIndex];
+    // 其他用戶使用加權隨機
+    const rand = Math.random(); // 0.0000 ~ 0.9999
+    
+    if (rand < 0.40) {
+        return 'loss';         // 0.00 ~ 0.39 → 40%
+    } else if (rand < 0.60) {
+        return 'mambaMentor';  // 0.40 ~ 0.59 → 20%
+    } else if (rand < 0.80) {
+        return 'mygo';         // 0.60 ~ 0.79 → 20%
+    } else {
+        return 'inmu';         // 0.80 ~ 0.99 → 20%
+    }
 }
 
 /**
