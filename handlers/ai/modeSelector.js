@@ -15,17 +15,16 @@ function selectMode(userId, message) {
     // 其他用戶使用加權隨機
     const rand = Math.random(); // 0.0000 ~ 0.9999
     
-    if (rand < 0.40) {
-        return 'loss';         // 0.00 ~ 0.39 → 40%
-    } else if (rand < 0.60) {
-        return 'mambaMentor';  // 0.40 ~ 0.59 → 20%
-    } else if (rand < 0.80) {
-        return 'mygo';         // 0.60 ~ 0.79 → 20%
+    if (rand < 0.15) {
+        return 'loss';         
+    } else if (rand < 0.35) {
+        return 'mambaMentor'; 
+    } else if (rand < 0.55) {
+        return 'mygo';         
     } else {
-        return 'inmu';         // 0.80 ~ 0.99 → 20%
-    }
+        return 'inmu';         
 }
-
+}
 /**
  * 獲取模式的顯示名稱（用於日誌）
  */
