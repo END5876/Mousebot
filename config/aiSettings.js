@@ -7,5 +7,6 @@ module.exports = {
     },
     
     // 特殊用戶 ID（戀人模式專用）
-    LOVER_MODE_USER_ID: '342266542500741120'
+    LOVER_MODE_USER_ID: '342266542500741120',
+    DEVELOPER_MODE_USER_ID: '598054316510806017'
 };

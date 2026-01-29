@@ -2,6 +2,8 @@ const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@googl
 const { PREFIX } = require('../../config/settings');
 const { GENERATION_CONFIG } = require('../../config/aiSettings');
 const { selectMode, getModeName } = require('./modeSelector');
+const developerMode = require('./modes/developerMode');
+
 
 // 導入所有模式
 const lossMode = require('./modes/lossMode');
@@ -23,7 +25,8 @@ const MODE_MAP = {
     mambaMentor: mambaMentorMode,
     mygo: mygoMode,
     inmu: inmuMode,
-    lover: loverMode
+    lover: loverMode,
+    developer: developerMode
 };
 
 /**
