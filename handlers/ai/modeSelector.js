@@ -21,13 +21,13 @@ function selectMode(userId, message) {
     const rand = Math.random(); // 0.0000 ~ 0.9999
     
     if (rand < 0.15) {
-        return 'loss';         
+        return 'inmu';         
     } else if (rand < 0.35) {
         return 'mambaMentor'; 
     } else if (rand < 0.55) {
         return 'mygo';         
     } else {
-        return 'inmu';         
+        return 'loss';         
 }
 }
 /**
@@ -39,7 +39,7 @@ function getModeName(mode) {
         mambaMentor: '牢大模式',
         mygo: 'MyGO模式',
         inmu: '淫夢模式',
-        lover: '戀人模式',
+        lover: '戀人模式'
         developer: '開發者模式'
     };
     return names[mode] || '未知模式';
