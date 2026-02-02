@@ -39,7 +39,7 @@ function getModeName(mode) {
         mambaMentor: '牢大模式',
         mygo: 'MyGO模式',
         inmu: '淫夢模式',
-        lover: '戀人模式'
+        lover: '戀人模式',
         developer: '開發者模式'
     };
     return names[mode] || '未知模式';
