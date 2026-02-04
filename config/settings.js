@@ -46,6 +46,7 @@ module.exports = {
             '裊氣': '干嘛...',
             '棄鳥': '干嘛...',
             '欸欸欸': '干嘛...',
+            'chen-endfield-arknights-qianyu-silly':'https://tenor.com/view/chen-endfield-arknights-qianyu-silly-gif-2603914693282121266'
         }
     },
 
