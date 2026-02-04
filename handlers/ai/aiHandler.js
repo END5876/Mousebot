@@ -3,7 +3,7 @@ const { PREFIX } = require('../../config/settings');
 const { GENERATION_CONFIG } = require('../../config/aiSettings');
 const { selectMode, getModeName } = require('./modeSelector');
 const developerMode = require('./modes/developerMode');
-
+const guguMode = require('./modes/gugugagaMode'); // 🆕 新增
 
 // 導入所有模式
 const lossMode = require('./modes/lossMode');
@@ -26,7 +26,8 @@ const MODE_MAP = {
     mygo: mygoMode,
     inmu: inmuMode,
     lover: loverMode,
-    developer: developerMode
+    developer: developerMode,
+    gugu: guguMode
 };
 
 /**
@@ -213,6 +214,21 @@ function setupAICommands(client) {
       } else {
           // === 隨機回應邏輯 ===
           if (!process.env.GEMINI_API_KEY) return;
+            // 檢查是否包含網址
+            const urlPattern = /(https?:\/\/[^\s]+)|(www\.[^\s]+)/gi;
+            const hasUrl = urlPattern.test(content);
+            
+            // 檢查是否為純圖片訊息（有附件但沒有文字內容，或文字內容很短）
+            const hasAttachment = message.attachments.size > 0;
+            const isPureImage = hasAttachment && (!content || content.length < 10);
+
+            // 檢查是否為 !gugu 指令
+            const isGuguCommand = content.startsWith('!gugu');
+            
+            // 如果包含網址或純圖片，跳過隨機回應
+            if (hasUrl || isPureImage || isGuguCommand) {
+                return;
+            }
           
           const randomValue = Math.random();
           if (randomValue < RANDOM_REPLY_CHANCE) {
