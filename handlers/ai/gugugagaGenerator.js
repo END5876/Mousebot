@@ -93,7 +93,7 @@ client.on('messageCreate', async (message) => {
 
     try {
         // 發送思考訊息
-        const thinkingMsg = await message.reply('⏳ 我操了老鐵...');
+        const thinkingMsg = await message.channel.send('⏳ 我操了老鐵...');
 
         // 生成文章
         const article = await generateGuguArticle(topic);
