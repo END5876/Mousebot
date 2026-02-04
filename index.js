@@ -7,7 +7,8 @@ const { setupMusicCommands } = require('./handlers/musicHandler');
 const { setupVoiceCommands } = require('./handlers/voiceHandler');
 const { setupBasicCommands } = require('./handlers/commandHandler');
 const { setupCustomResponses } = require('./handlers/responseHandler');
-const { setupAICommands } = require('./handlers/ai/aiHandler'); // 新增
+const { setupAICommands } = require('./handlers/ai/aiHandler');
+const { setupGuguGenerator } = require('./handlers/ai/gugugagaGenerator');
 
 // 創建客戶端
 const client = new Client({
@@ -39,7 +40,8 @@ setupMusicCommands(client);
 setupVoiceCommands(client);
 setupBasicCommands(client);
 setupCustomResponses(client);
-setupAICommands(client); // 新增
+setupAICommands(client);
+setupGuguGenerator(client);
 
 // 錯誤處理
 client.on('error', error => {
