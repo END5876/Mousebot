@@ -12,6 +12,8 @@ const { EmbedBuilder } = require('discord.js');
 const { getQueue } = require('./musicHandler');
 const { PREFIX } = require('../config/settings');
 const { Readable } = require('stream');
+const fs = require('fs');
+const path = require('path');
 
 // 創建靜音音頻流
 function createSilenceStream() {
@@ -31,9 +33,11 @@ function createSilenceStream() {
   });
 }
 
-// 全局變量存儲靜音播放器和定時器
+// 全局變量存儲播放器和定時器
 const silencePlayers = new Map();
 const silenceTimers = new Map();
+const dangPlayers = new Map(); // 存儲 dang 音效播放器
+const dang2Players = new Map(); // 存儲 dang2 音效播放器
 
 function setupVoiceCommands(client) {
   client.on('messageCreate', async message => {
@@ -71,8 +75,10 @@ function setupVoiceCommands(client) {
                   } catch (error) {
                       connection.destroy();
                       console.log('❌ 語音連接已斷開');
-                      // 清理靜音播放器
+                      // 清理所有播放器
                       stopSilenceAudio(message.guild.id);
+                      stopDangSound(message.guild.id);
+                      stopDang2Sound(message.guild.id);
                   }
               });
 
@@ -100,8 +106,10 @@ function setupVoiceCommands(client) {
           const queue = getQueue(message.guild.id);
           queue.clear();
           
-          // 停止靜音音頻
+          // 停止所有音效
           stopSilenceAudio(message.guild.id);
+          stopDangSound(message.guild.id);
+          stopDang2Sound(message.guild.id);
           
           console.log(`👋 已離開語音頻道 (${message.guild.name})`);
           message.reply('👋 已離開語音頻道');
@@ -117,6 +125,8 @@ function setupVoiceCommands(client) {
 
           const channel = message.guild.channels.cache.get(connection.joinConfig.channelId);
           const isSilencePlaying = silencePlayers.has(message.guild.id);
+          const isDangPlaying = dangPlayers.has(message.guild.id);
+          const isDang2Playing = dang2Players.has(message.guild.id);
           
           const embed = new EmbedBuilder()
               .setColor(0x00FF00)
@@ -125,7 +135,9 @@ function setupVoiceCommands(client) {
                   { name: '頻道名稱', value: channel?.name || '未知', inline: true },
                   { name: '連接狀態', value: connection.state.status, inline: true },
                   { name: '頻道成員', value: `${channel?.members.size || 0} 人`, inline: true },
-                  { name: '防踢狀態', value: isSilencePlaying ? '🔇 靜音播放中' : '⏸️ 未啟用', inline: true }
+                  { name: '防踢狀態', value: isSilencePlaying ? '🔇 靜音播放中' : '⏸️ 未啟用', inline: true },
+                  { name: 'Dang 音效', value: isDangPlaying ? '🔔 播放中' : '⏸️ 未播放', inline: true },
+                  { name: 'Dang2 音效', value: isDang2Playing ? '🔔 播放中' : '⏸️ 未播放', inline: true }
               )
               .setTimestamp();
 
@@ -182,6 +194,80 @@ function setupVoiceCommands(client) {
 
           silenceTimers.set(message.guild.id, timer);
           message.reply('⏰ 已設置自動靜音模式，5分鐘後將自動開始播放靜音音頻');
+      }
+
+      // !dang - 循環播放/停止 dang.mp3
+      if (content === `${PREFIX}dang`) {
+          // 如果正在播放，則停止
+          if (dangPlayers.has(message.guild.id)) {
+              stopDangSound(message.guild.id);
+              message.reply('⏹️ 已停止播放 dang.mp3');
+              return;
+          }
+
+          const connection = getVoiceConnection(message.guild.id);
+          
+          if (!connection) {
+              // 如果 bot 不在語音頻道，嘗試加入用戶的頻道
+              if (!message.member.voice.channel) {
+                  return message.reply('❌ 你必須先加入語音頻道！');
+              }
+
+              try {
+                  const newConnection = joinVoiceChannel({
+                      channelId: message.member.voice.channel.id,
+                      guildId: message.guild.id,
+                      adapterCreator: message.guild.voiceAdapterCreator,
+                      selfDeaf: false,
+                      selfMute: false,
+                  });
+
+                  await entersState(newConnection, VoiceConnectionStatus.Ready, 30_000);
+                  playDangSound(message.guild.id, newConnection, message, 'dang.mp3');
+              } catch (error) {
+                  console.error('加入語音頻道時發生錯誤：', error);
+                  return message.reply('❌ 加入語音頻道時發生錯誤');
+              }
+          } else {
+              playDangSound(message.guild.id, connection, message, 'dang.mp3');
+          }
+      }
+
+      // !dang2 - 循環播放/停止 dang2.mp3
+      if (content === `${PREFIX}dang2`) {
+          // 如果正在播放，則停止
+          if (dang2Players.has(message.guild.id)) {
+              stopDang2Sound(message.guild.id);
+              message.reply('⏹️ 已停止播放 dang2.mp3');
+              return;
+          }
+
+          const connection = getVoiceConnection(message.guild.id);
+          
+          if (!connection) {
+              // 如果 bot 不在語音頻道，嘗試加入用戶的頻道
+              if (!message.member.voice.channel) {
+                  return message.reply('❌ 你必須先加入語音頻道！');
+              }
+
+              try {
+                  const newConnection = joinVoiceChannel({
+                      channelId: message.member.voice.channel.id,
+                      guildId: message.guild.id,
+                      adapterCreator: message.guild.voiceAdapterCreator,
+                      selfDeaf: false,
+                      selfMute: false,
+                  });
+
+                  await entersState(newConnection, VoiceConnectionStatus.Ready, 30_000);
+                  playDangSound(message.guild.id, newConnection, message, 'dang2.mp3');
+              } catch (error) {
+                  console.error('加入語音頻道時發生錯誤：', error);
+                  return message.reply('❌ 加入語音頻道時發生錯誤');
+              }
+          } else {
+              playDangSound(message.guild.id, connection, message, 'dang2.mp3');
+          }
       }
   });
 }
@@ -245,4 +331,86 @@ function stopSilenceAudio(guildId) {
   }
 }
 
-module.exports = { setupVoiceCommands, startSilenceAudio, stopSilenceAudio };
+// 播放 dang 音效（循環）
+function playDangSound(guildId, connection, message, fileName) {
+  try {
+      const dangPath = path.join(__dirname, '..', 'sounds', fileName);
+      
+      // 檢查檔案是否存在
+      if (!fs.existsSync(dangPath)) {
+          console.error(`❌ ${fileName} 檔案不存在:`, dangPath);
+          return message.reply(`❌ 找不到 ${fileName} 音效檔`);
+      }
+
+      const player = createAudioPlayer();
+      const playerMap = fileName === 'dang.mp3' ? dangPlayers : dang2Players;
+      
+      // 播放函數
+      const playLoop = () => {
+          const resource = createAudioResource(dangPath, {
+              inlineVolume: true
+          });
+
+          // 設置音量
+          resource.volume.setVolume(0.5);
+          player.play(resource);
+      };
+
+      // 當播放結束時，重新播放（循環）
+      player.on(AudioPlayerStatus.Idle, () => {
+          if (playerMap.has(guildId)) {
+              //console.log(`🔁 循環播放 ${fileName}`);
+              playLoop();
+          }
+      });
+
+      player.on('error', (error) => {
+          console.error(`❌ 播放 ${fileName} 時發生錯誤：`, error);
+          message.reply('❌ 播放音效時發生錯誤');
+          playerMap.delete(guildId);
+      });
+
+      // 儲存播放器
+      playerMap.set(guildId, player);
+      
+      // 開始播放
+      playLoop();
+      connection.subscribe(player);
+
+      message.react('🔔').catch(() => {});
+      message.reply(`🔁 開始循環播放 ${fileName}`);
+      console.log(`🔔 開始循環播放 ${fileName} (Guild: ${guildId})`);
+
+  } catch (error) {
+      console.error('❌ 創建音效播放器時發生錯誤：', error);
+      message.reply('❌ 播放音效時發生錯誤');
+  }
+}
+
+// 停止 dang.mp3
+function stopDangSound(guildId) {
+  const player = dangPlayers.get(guildId);
+  if (player) {
+      player.stop();
+      dangPlayers.delete(guildId);
+      console.log(`⏹️ 停止播放 dang.mp3 (Guild: ${guildId})`);
+  }
+}
+
+// 停止 dang2.mp3
+function stopDang2Sound(guildId) {
+  const player = dang2Players.get(guildId);
+  if (player) {
+      player.stop();
+      dang2Players.delete(guildId);
+      console.log(`⏹️ 停止播放 dang2.mp3 (Guild: ${guildId})`);
+  }
+}
+
+module.exports = { 
+    setupVoiceCommands, 
+    startSilenceAudio, 
+    stopSilenceAudio,
+    stopDangSound,
+    stopDang2Sound
+};
