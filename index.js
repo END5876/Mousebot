@@ -9,6 +9,7 @@ const { setupBasicCommands } = require('./handlers/commandHandler');
 const { setupCustomResponses } = require('./handlers/responseHandler');
 const { setupAICommands } = require('./handlers/ai/aiHandler');
 const { setupGuguGenerator } = require('./handlers/ai/gugugagaGenerator');
+const { setupBilibiliCommands } = require('./handlers/bilibiliHandler');
 
 // 創建客戶端
 const client = new Client({
@@ -42,6 +43,7 @@ setupBasicCommands(client);
 setupCustomResponses(client);
 setupAICommands(client);
 setupGuguGenerator(client);
+setupBilibiliCommands(client);
 
 // 錯誤處理
 client.on('error', error => {
