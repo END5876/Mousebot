@@ -1,4 +1,4 @@
-// handlers/bilibiliHandler.js (Heroku 版本)
+// handlers/bilibiliHandler.js - 完整修復版本
 const {
     joinVoiceChannel,
     getVoiceConnection,
@@ -13,16 +13,21 @@ const { EmbedBuilder } = require('discord.js');
 const { PREFIX } = require('../config/settings');
 const { spawn, exec } = require('child_process');
 const { promisify } = require('util');
-const path = require('path');
 
 const execAsync = promisify(exec);
 
 // 存儲 Bilibili 播放器
 const bilibiliPlayers = new Map();
 
-// 檢測環境並設置正確的路徑
+// 檢測環境
 const isHeroku = process.env.DYNO !== undefined;
-const ytdlpPath = isHeroku ? 'yt-dlp' : (process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
+const ytdlpPath = 'yt-dlp';
+
+// Bilibili 需要的 headers
+const BILIBILI_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Referer': 'https://www.bilibili.com/'
+};
 
 async function checkYtDlp() {
     try {
@@ -31,22 +36,29 @@ async function checkYtDlp() {
         return true;
     } catch (error) {
         console.error('❌ yt-dlp 未安裝');
-        if (isHeroku) {
-            console.error('請確認 Heroku Buildpack 已正確設置');
-        } else {
-            console.error('請安裝 yt-dlp: https://github.com/yt-dlp/yt-dlp/releases');
-        }
         return false;
     }
 }
 
 async function checkFFmpeg() {
     try {
-        const { stdout } = await execAsync('ffmpeg -version');
-        console.log('✅ FFmpeg 已安裝');
-        return true;
+        // 嘗試多個可能的路徑
+        const paths = ['ffmpeg', '/app/vendor/ffmpeg/ffmpeg', '/usr/bin/ffmpeg'];
+        
+        for (const ffmpegPath of paths) {
+            try {
+                const { stdout } = await execAsync(`${ffmpegPath} -version`);
+                console.log(`✅ FFmpeg 已安裝: ${ffmpegPath}`);
+                return true;
+            } catch (e) {
+                continue;
+            }
+        }
+        
+        console.error('❌ FFmpeg 未找到');
+        return false;
     } catch (error) {
-        console.error('❌ FFmpeg 未安裝');
+        console.error('❌ FFmpeg 檢測錯誤:', error);
         return false;
     }
 }
@@ -73,8 +85,8 @@ function setupBilibiliCommands(client) {
             return;
         }
 
-        // !stop
-        if (content === `${PREFIX}stop`) {
+        // !stopbili
+        if (content === `${PREFIX}stopbili`) {
             if (!bilibiliPlayers.has(message.guild.id)) {
                 return message.reply('❌ 目前沒有播放音頻');
             }
@@ -108,7 +120,7 @@ function setupBilibiliCommands(client) {
             return;
         }
 
-        // !sysinfo - 系統資訊（除錯用）
+        // !sysinfo
         if (content === `${PREFIX}sysinfo`) {
             const ytdlpOk = await checkYtDlp();
             const ffmpegOk = await checkFFmpeg();
@@ -139,7 +151,7 @@ async function handleBilibiliPlay(message, url) {
     }
 
     if (bilibiliPlayers.has(guildId)) {
-        return message.reply('❌ 已經在播放音頻，請先使用 `!stop` 停止');
+        return message.reply('❌ 已經在播放音頻，請先使用 `!stopbili` 停止');
     }
 
     if (!isValidUrl(url)) {
@@ -204,7 +216,7 @@ async function playBilibiliLoop(guildId, connection, videoInfo) {
         try {
             console.log(`🔁 播放: ${videoInfo.title}`);
             
-            // Heroku 環境使用更穩定的參數
+            // 構建 yt-dlp 參數
             const ytdlpArgs = [
                 '-f', 'bestaudio/best',
                 '-o', '-',
@@ -214,14 +226,22 @@ async function playBilibiliLoop(guildId, connection, videoInfo) {
                 '--extract-audio',
                 '--audio-format', 'opus',
                 '--audio-quality', '0',
-                videoInfo.url
             ];
 
-            // 如果是 Heroku，添加額外的穩定性參數
-            if (isHeroku) {
+            // 如果是 Bilibili，添加必要的 headers
+            if (videoInfo.url.includes('bilibili.com')) {
+                ytdlpArgs.push('--add-header', `User-Agent:${BILIBILI_HEADERS['User-Agent']}`);
+                ytdlpArgs.push('--add-header', `Referer:${BILIBILI_HEADERS['Referer']}`);
                 ytdlpArgs.push('--no-check-certificate');
-                ytdlpArgs.push('--prefer-free-formats');
             }
+
+            // Heroku 環境的額外參數
+            if (isHeroku) {
+                ytdlpArgs.push('--prefer-free-formats');
+                ytdlpArgs.push('--socket-timeout', '30');
+            }
+
+            ytdlpArgs.push(videoInfo.url);
 
             const ytdlp = spawn(ytdlpPath, ytdlpArgs);
 
@@ -295,12 +315,22 @@ async function playBilibiliLoop(guildId, connection, videoInfo) {
 
 async function getVideoInfo(url) {
     return new Promise((resolve, reject) => {
-        const ytdlp = spawn(ytdlpPath, [
+        const ytdlpArgs = [
             '--dump-json',
             '--no-playlist',
             '--no-warnings',
-            url
-        ]);
+        ];
+
+        // 如果是 Bilibili，添加 headers
+        if (url.includes('bilibili.com')) {
+            ytdlpArgs.push('--add-header', `User-Agent:${BILIBILI_HEADERS['User-Agent']}`);
+            ytdlpArgs.push('--add-header', `Referer:${BILIBILI_HEADERS['Referer']}`);
+            ytdlpArgs.push('--no-check-certificate');
+        }
+
+        ytdlpArgs.push(url);
+
+        const ytdlp = spawn(ytdlpPath, ytdlpArgs);
 
         let data = '';
         let errorData = '';
@@ -316,7 +346,15 @@ async function getVideoInfo(url) {
         ytdlp.on('close', (code) => {
             if (code !== 0) {
                 console.error('yt-dlp 錯誤輸出:', errorData);
-                reject(new Error('無法獲取影片資訊'));
+                
+                // 提供更友善的錯誤訊息
+                if (errorData.includes('412')) {
+                    reject(new Error('Bilibili 拒絕訪問，可能需要登入或使用代理'));
+                } else if (errorData.includes('403')) {
+                    reject(new Error('影片無法訪問，可能有地區限制'));
+                } else {
+                    reject(new Error('無法獲取影片資訊'));
+                }
                 return;
             }
 
