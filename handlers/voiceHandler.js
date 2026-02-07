@@ -107,9 +107,13 @@ function setupVoiceCommands(client) {
           queue.clear();
           
           // 停止所有音效
-          stopSilenceAudio(message.guild.id);
-          stopDangSound(message.guild.id);
-          stopDang2Sound(message.guild.id);
+         stopSilenceAudio(message.guild.id);
+        
+         const { stopAllSounds } = require('./soundEffectHandler');
+         stopAllSounds(message.guild.id);
+        
+         const { stopBilibiliAudio } = require('./bilibiliHandler');
+         stopBilibiliAudio(message.guild.id);
           
           console.log(`👋 已離開語音頻道 (${message.guild.name})`);
           message.reply('👋 已離開語音頻道');
