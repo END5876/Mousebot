@@ -1,4 +1,4 @@
-// handlers/bilibiliHandler.js - 完整修復版本
+// handlers/bilibiliHandler.js - 完整版
 const {
     joinVoiceChannel,
     getVoiceConnection,
@@ -16,14 +16,14 @@ const { promisify } = require('util');
 
 const execAsync = promisify(exec);
 
-// 存儲 Bilibili 播放器
+// 存儲播放器
 const bilibiliPlayers = new Map();
 
 // 檢測環境
 const isHeroku = process.env.DYNO !== undefined;
 const ytdlpPath = 'yt-dlp';
 
-// Bilibili 需要的 headers
+// Headers
 const BILIBILI_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Referer': 'https://www.bilibili.com/'
@@ -42,12 +42,11 @@ async function checkYtDlp() {
 
 async function checkFFmpeg() {
     try {
-        // 嘗試多個可能的路徑
         const paths = ['ffmpeg', '/app/vendor/ffmpeg/ffmpeg', '/usr/bin/ffmpeg'];
         
         for (const ffmpegPath of paths) {
             try {
-                const { stdout } = await execAsync(`${ffmpegPath} -version`);
+                await execAsync(`${ffmpegPath} -version`);
                 console.log(`✅ FFmpeg 已安裝: ${ffmpegPath}`);
                 return true;
             } catch (e) {
@@ -64,7 +63,6 @@ async function checkFFmpeg() {
 }
 
 function setupBilibiliCommands(client) {
-    // 啟動時檢查依賴
     Promise.all([checkYtDlp(), checkFFmpeg()]).then(([ytdlp, ffmpeg]) => {
         if (ytdlp && ffmpeg) {
             console.log('✅ Bilibili 功能已就緒');
@@ -78,14 +76,12 @@ function setupBilibiliCommands(client) {
 
         const content = message.content;
 
-        // !bili <URL>
         if (content.startsWith(`${PREFIX}bili `)) {
             const url = content.slice(`${PREFIX}bili `.length).trim();
             await handleBilibiliPlay(message, url);
             return;
         }
 
-        // !stopbili
         if (content === `${PREFIX}stopbili`) {
             if (!bilibiliPlayers.has(message.guild.id)) {
                 return message.reply('❌ 目前沒有播放音頻');
@@ -96,7 +92,6 @@ function setupBilibiliCommands(client) {
             return;
         }
 
-        // !biliinfo
         if (content === `${PREFIX}biliinfo`) {
             const playerData = bilibiliPlayers.get(message.guild.id);
             
@@ -120,7 +115,6 @@ function setupBilibiliCommands(client) {
             return;
         }
 
-        // !sysinfo
         if (content === `${PREFIX}sysinfo`) {
             const ytdlpOk = await checkYtDlp();
             const ffmpegOk = await checkFFmpeg();
@@ -155,7 +149,7 @@ async function handleBilibiliPlay(message, url) {
     }
 
     if (!isValidUrl(url)) {
-        return message.reply('❌ 請提供有效的影片網址\n支援：Bilibili、YouTube、Twitter 等\n範例：`!bili https://www.bilibili.com/video/BVxxxxxxxxx`');
+        return message.reply('❌ 請提供有效的影片網址\n✅ 支援：YouTube、Twitter、SoundCloud 等\n⚠️ Bilibili 可能因地區限制無法播放\n範例：`!bili https://www.youtube.com/watch?v=xxxxx`');
     }
 
     let connection = getVoiceConnection(guildId);
@@ -188,9 +182,10 @@ async function handleBilibiliPlay(message, url) {
         
         await playBilibiliLoop(guildId, connection, videoInfo);
 
+        const platform = getPlatformName(url);
         const embed = new EmbedBuilder()
-            .setColor(0x00A1D6)
-            .setTitle('📺 開始播放')
+            .setColor(platform === 'Bilibili' ? 0x00A1D6 : 0xFF0000)
+            .setTitle(`📺 開始播放 (${platform})`)
             .setDescription(`[${videoInfo.title}](${url})`)
             .addFields(
                 { name: '作者', value: videoInfo.author || '未知', inline: true },
@@ -205,7 +200,18 @@ async function handleBilibiliPlay(message, url) {
 
     } catch (error) {
         console.error('播放音頻時發生錯誤：', error);
-        await loadingMsg.edit('❌ 播放失敗：' + error.message);
+        
+        let errorMsg = '❌ 播放失敗：' + error.message;
+        
+        // 針對 Bilibili 提供額外說明
+        if (url.includes('bilibili.com')) {
+            errorMsg += '\n\n💡 **Bilibili 播放提示：**\n';
+            errorMsg += '• Bilibili 有嚴格的反爬蟲機制\n';
+            errorMsg += '• 建議使用 YouTube、SoundCloud 等其他平台\n';
+            errorMsg += '• 或嘗試使用 Bilibili 的公開分享連結';
+        }
+        
+        await loadingMsg.edit(errorMsg);
     }
 }
 
@@ -216,7 +222,6 @@ async function playBilibiliLoop(guildId, connection, videoInfo) {
         try {
             console.log(`🔁 播放: ${videoInfo.title}`);
             
-            // 構建 yt-dlp 參數
             const ytdlpArgs = [
                 '-f', 'bestaudio/best',
                 '-o', '-',
@@ -228,17 +233,25 @@ async function playBilibiliLoop(guildId, connection, videoInfo) {
                 '--audio-quality', '0',
             ];
 
-            // 如果是 Bilibili，添加必要的 headers
+            // 針對不同平台的特殊處理
             if (videoInfo.url.includes('bilibili.com')) {
-                ytdlpArgs.push('--add-header', `User-Agent:${BILIBILI_HEADERS['User-Agent']}`);
-                ytdlpArgs.push('--add-header', `Referer:${BILIBILI_HEADERS['Referer']}`);
+                ytdlpArgs.push(
+                    '--user-agent', BILIBILI_HEADERS['User-Agent'],
+                    '--referer', BILIBILI_HEADERS['Referer'],
+                    '--no-check-certificate',
+                    '--extractor-args', 'bilibili:getcomments=false',
+                    '--extractor-args', 'bilibili:getdanmaku=false',
+                    '--sleep-requests', '1'
+                );
+            } else if (videoInfo.url.includes('youtube.com') || videoInfo.url.includes('youtu.be')) {
                 ytdlpArgs.push('--no-check-certificate');
             }
 
-            // Heroku 環境的額外參數
             if (isHeroku) {
-                ytdlpArgs.push('--prefer-free-formats');
-                ytdlpArgs.push('--socket-timeout', '30');
+                ytdlpArgs.push(
+                    '--prefer-free-formats',
+                    '--socket-timeout', '30'
+                );
             }
 
             ytdlpArgs.push(videoInfo.url);
@@ -319,13 +332,21 @@ async function getVideoInfo(url) {
             '--dump-json',
             '--no-playlist',
             '--no-warnings',
+            '--skip-download',
         ];
 
-        // 如果是 Bilibili，添加 headers
+        // 針對 Bilibili 的特殊處理
         if (url.includes('bilibili.com')) {
-            ytdlpArgs.push('--add-header', `User-Agent:${BILIBILI_HEADERS['User-Agent']}`);
-            ytdlpArgs.push('--add-header', `Referer:${BILIBILI_HEADERS['Referer']}`);
-            ytdlpArgs.push('--no-check-certificate');
+            ytdlpArgs.push(
+                '--user-agent', BILIBILI_HEADERS['User-Agent'],
+                '--referer', BILIBILI_HEADERS['Referer'],
+                '--no-check-certificate',
+                '--extractor-args', 'bilibili:getcomments=false',
+                '--extractor-args', 'bilibili:getdanmaku=false',
+                '--sleep-requests', '1',
+                '--sleep-interval', '1',
+                '--max-sleep-interval', '3'
+            );
         }
 
         ytdlpArgs.push(url);
@@ -347,11 +368,12 @@ async function getVideoInfo(url) {
             if (code !== 0) {
                 console.error('yt-dlp 錯誤輸出:', errorData);
                 
-                // 提供更友善的錯誤訊息
                 if (errorData.includes('412')) {
-                    reject(new Error('Bilibili 拒絕訪問，可能需要登入或使用代理'));
+                    reject(new Error('Bilibili 反爬蟲限制，請使用其他平台（YouTube、SoundCloud 等）'));
                 } else if (errorData.includes('403')) {
                     reject(new Error('影片無法訪問，可能有地區限制'));
+                } else if (errorData.includes('404')) {
+                    reject(new Error('找不到影片'));
                 } else {
                     reject(new Error('無法獲取影片資訊'));
                 }
@@ -399,6 +421,15 @@ function isValidUrl(url) {
     } catch {
         return false;
     }
+}
+
+function getPlatformName(url) {
+    if (url.includes('bilibili.com')) return 'Bilibili';
+    if (url.includes('youtube.com') || url.includes('youtu.be')) return 'YouTube';
+    if (url.includes('soundcloud.com')) return 'SoundCloud';
+    if (url.includes('twitter.com') || url.includes('x.com')) return 'Twitter/X';
+    if (url.includes('twitch.tv')) return 'Twitch';
+    return '未知平台';
 }
 
 function formatDuration(seconds) {
