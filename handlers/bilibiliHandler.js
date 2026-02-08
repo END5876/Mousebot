@@ -146,8 +146,8 @@ function setupBilibiliCommands(client) {
 
       const content = message.content;
 
-      if (content.startsWith(`${PREFIX}bili `)) {
-          const url = content.slice(`${PREFIX}bili `.length).trim();
+      if (content.startsWith(`${PREFIX}play `)) {
+          const url = content.slice(`${PREFIX}play `.length).trim();
           await handleBilibiliPlay(message, url);
           return;
       }
@@ -346,7 +346,7 @@ async function handleBilibiliPlay(message, url) {
   }
 
   if (!isValidUrl(url)) {
-      return message.reply('❌ 請提供有效的影片網址\n✅ 支援：YouTube、Bilibili、Twitter、SoundCloud 等\n範例：`!bili https://www.bilibili.com/video/BVxxxxx`');
+      return message.reply('❌ 請提供有效的影片網址');
   }
 
   let connection = getVoiceConnection(guildId);
