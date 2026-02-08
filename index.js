@@ -3,7 +3,6 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const { customResponses } = require('./config/settings');
 
 // 導入所有處理器
-const { setupMusicCommands } = require('./handlers/musicHandler');
 const { setupVoiceCommands } = require('./handlers/voiceHandler');
 const { setupBasicCommands } = require('./handlers/commandHandler');
 const { setupCustomResponses } = require('./handlers/responseHandler');
@@ -37,7 +36,6 @@ client.once('clientReady', () => {
 });
 
 // 註冊所有指令處理器
-setupMusicCommands(client);
 setupVoiceCommands(client);
 setupBasicCommands(client);
 setupCustomResponses(client);
