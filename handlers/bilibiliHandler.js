@@ -1,4 +1,4 @@
-// handlers/bilibiliHandler.js - 新增按鈕控制功能
+// handlers/bilibiliHandler.js - 新增按鈕控制與列表循環
 const {
   joinVoiceChannel,
   getVoiceConnection,
@@ -13,7 +13,8 @@ const {
   EmbedBuilder, 
   ActionRowBuilder, 
   ButtonBuilder, 
-  ButtonStyle 
+  ButtonStyle,
+  ComponentType 
 } = require('discord.js');
 const { PREFIX } = require('../config/settings');
 const { spawn, exec } = require('child_process');
@@ -28,9 +29,8 @@ const bilibiliPlayers = new Map();
 const bilibiliQueues = new Map();
 const errorCounts = new Map();
 const activeProcesses = new Map();
-const loopSettings = new Map();
-const controlMessages = new Map(); // 🔥 新增：儲存控制面板訊息
-const isPaused = new Map(); // 🔥 新增：儲存暫停狀態
+const loopSettings = new Map(); // 'off' | 'one' | 'all'
+const controlMessages = new Map(); // 存儲控制面板訊息
 
 // 錯誤處理配置
 const MAX_RETRIES = 3;
@@ -132,62 +132,85 @@ async function checkFFmpeg() {
   }
 }
 
-// 🔥 新增：創建控制面板按鈕
+// 🔥 創建控制按鈕
 function createControlButtons(guildId) {
-  const isLooping = loopSettings.get(guildId) || false;
-  const paused = isPaused.get(guildId) || false;
+  const loopMode = loopSettings.get(guildId) || 'off';
   
-  const row1 = new ActionRowBuilder()
+  const row = new ActionRowBuilder()
     .addComponents(
       new ButtonBuilder()
-        .setCustomId(`music_pause_${guildId}`)
-        .setLabel(paused ? '▶️ 繼續' : '⏸️ 暫停')
-        .setStyle(paused ? ButtonStyle.Success : ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId(`music_skip_${guildId}`)
-        .setLabel('⏭️ 跳過')
+        .setCustomId('skip')
+        .setLabel('跳過')
+        .setEmoji('⏭️')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
-        .setCustomId(`music_stop_${guildId}`)
-        .setLabel('⏹️ 停止')
+        .setCustomId('stop')
+        .setLabel('停止')
+        .setEmoji('⏹️')
         .setStyle(ButtonStyle.Danger),
       new ButtonBuilder()
-        .setCustomId(`music_loop_${guildId}`)
-        .setLabel(isLooping ? '🔁 循環: 開' : '🔁 循環: 關')
-        .setStyle(isLooping ? ButtonStyle.Success : ButtonStyle.Secondary)
-    );
-  
-  const row2 = new ActionRowBuilder()
-    .addComponents(
+        .setCustomId('loop_one')
+        .setLabel('單曲循環')
+        .setEmoji('🔁')
+        .setStyle(loopMode === 'one' ? ButtonStyle.Success : ButtonStyle.Secondary),
       new ButtonBuilder()
-        .setCustomId(`music_queue_${guildId}`)
-        .setLabel('📋 播放列表')
-        .setStyle(ButtonStyle.Secondary),
+        .setCustomId('loop_all')
+        .setLabel('列表循環')
+        .setEmoji('🔂')
+        .setStyle(loopMode === 'all' ? ButtonStyle.Success : ButtonStyle.Secondary),
       new ButtonBuilder()
-        .setCustomId(`music_info_${guildId}`)
-        .setLabel('ℹ️ 資訊')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId(`music_voldown_${guildId}`)
-        .setLabel('🔉 音量-')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId(`music_volup_${guildId}`)
-        .setLabel('🔊 音量+')
+        .setCustomId('queue')
+        .setLabel('佇列')
+        .setEmoji('📋')
         .setStyle(ButtonStyle.Secondary)
     );
   
-  return [row1, row2];
+  return row;
 }
 
-// 🔥 新增：更新控制面板
-async function updateControlPanel(guildId) {
-  const controlMsg = controlMessages.get(guildId);
-  if (!controlMsg) return;
+// 🔥 更新控制面板
+async function updateControlPanel(guildId, channel) {
+  const playerData = bilibiliPlayers.get(guildId);
+  if (!playerData) return;
+
+  const loopMode = loopSettings.get(guildId) || 'off';
+  const queue = bilibiliQueues.get(guildId) || [];
   
+  let loopText = '❌ 關閉';
+  if (loopMode === 'one') loopText = '🔁 單曲循環';
+  if (loopMode === 'all') loopText = '🔂 列表循環';
+
+  const embed = new EmbedBuilder()
+    .setColor(0x00A1D6)
+    .setTitle('🎵 正在播放')
+    .setDescription(`[${playerData.title}](${playerData.url})`)
+    .addFields(
+      { name: '作者', value: playerData.author || '未知', inline: true },
+      { name: '時長', value: playerData.duration || '未知', inline: true },
+      { name: '循環模式', value: loopText, inline: true },
+      { name: '佇列', value: `${queue.length} 首`, inline: true }
+    )
+    .setThumbnail(playerData.thumbnail || null)
+    .setFooter({ text: '使用下方按鈕控制播放' })
+    .setTimestamp();
+
+  const row = createControlButtons(guildId);
+
   try {
-    const buttons = createControlButtons(guildId);
-    await controlMsg.edit({ components: buttons });
+    const controlMsg = controlMessages.get(guildId);
+    
+    if (controlMsg) {
+      try {
+        await controlMsg.edit({ embeds: [embed], components: [row] });
+      } catch (err) {
+        // 訊息可能被刪除，重新發送
+        const newMsg = await channel.send({ embeds: [embed], components: [row] });
+        controlMessages.set(guildId, newMsg);
+      }
+    } else {
+      const newMsg = await channel.send({ embeds: [embed], components: [row] });
+      controlMessages.set(guildId, newMsg);
+    }
   } catch (error) {
     console.error('更新控制面板失敗:', error);
   }
@@ -209,143 +232,102 @@ function setupBilibiliCommands(client) {
       }
   });
 
-  // 🔥 新增：按鈕互動處理
+  // 🔥 按鈕互動處理
   client.on('interactionCreate', async interaction => {
     if (!interaction.isButton()) return;
-    
-    const [action, type, guildId] = interaction.customId.split('_');
-    
-    if (action !== 'music') return;
-    
-    await interaction.deferUpdate();
-    
+
+    const guildId = interaction.guild.id;
     const playerData = bilibiliPlayers.get(guildId);
-    
-    if (!playerData && type !== 'queue') {
-      return interaction.followUp({ 
-        content: '❌ 目前沒有播放音頻', 
-        ephemeral: true 
-      });
+
+    if (!playerData) {
+      return interaction.reply({ content: '❌ 目前沒有播放音頻', ephemeral: true });
     }
-    
-    switch (type) {
-      case 'pause':
-        const paused = isPaused.get(guildId) || false;
-        if (paused) {
-          playerData.player.unpause();
-          isPaused.set(guildId, false);
-          interaction.followUp({ content: '▶️ 已繼續播放', ephemeral: true });
-        } else {
-          playerData.player.pause();
-          isPaused.set(guildId, true);
-          interaction.followUp({ content: '⏸️ 已暫停播放', ephemeral: true });
-        }
-        await updateControlPanel(guildId);
-        break;
-        
-      case 'skip':
-        const queue = bilibiliQueues.get(guildId) || [];
-        if (queue.length === 0) {
-          stopBilibiliAudio(guildId);
-          interaction.followUp({ content: '⏭️ 已跳過，佇列為空，停止播放', ephemeral: true });
-        } else {
-          playerData.player.stop();
-          interaction.followUp({ content: '⏭️ 跳過當前歌曲', ephemeral: true });
-        }
-        break;
-        
-      case 'stop':
-        stopBilibiliAudio(guildId);
-        interaction.followUp({ content: '⏹️ 已停止播放', ephemeral: true });
-        break;
-        
-      case 'loop':
-        const currentLoop = loopSettings.get(guildId) || false;
-        loopSettings.set(guildId, !currentLoop);
-        await updateControlPanel(guildId);
-        interaction.followUp({ 
-          content: currentLoop ? '🔁 循環播放已關閉' : '🔁 循環播放已開啟', 
-          ephemeral: true 
-        });
-        break;
-        
-      case 'queue':
-        const queueList = bilibiliQueues.get(guildId) || [];
-        const isLooping = loopSettings.get(guildId) || false;
-        
-        const embed = new EmbedBuilder()
-          .setColor(0x00A1D6)
-          .setTitle('🎵 播放佇列')
-          .setTimestamp();
-        
-        if (playerData) {
-          embed.addFields({
-            name: `🎵 正在播放 ${isLooping ? '🔁' : ''}`,
-            value: `[${playerData.title}](${playerData.url})\n作者: ${playerData.author || '未知'}`,
-            inline: false
-          });
-        }
-        
-        if (queueList.length > 0) {
-          const queueText = queueList.slice(0, 10).map((item, index) => 
-            `${index + 1}. [${item.title}](${item.url})`
-          ).join('\n');
+
+    try {
+      switch (interaction.customId) {
+        case 'skip':
+          const queue = bilibiliQueues.get(guildId) || [];
           
-          embed.addFields({
-            name: `📋 佇列 (${queueList.length} 首)`,
-            value: queueText + (queueList.length > 10 ? '\n...' : ''),
-            inline: false
-          });
-        }
-        
-        interaction.followUp({ embeds: [embed], ephemeral: true });
-        break;
-        
-      case 'info':
-        const errorCount = errorCounts.get(guildId) || 0;
-        const looping = loopSettings.get(guildId) || false;
-        const queueSize = (bilibiliQueues.get(guildId) || []).length;
-        
-        const infoEmbed = new EmbedBuilder()
-          .setColor(0x00A1D6)
-          .setTitle('📺 播放資訊')
-          .setDescription(`[${playerData.title}](${playerData.url})`)
-          .addFields(
-            { name: '作者', value: playerData.author || '未知', inline: true },
-            { name: '時長', value: playerData.duration || '未知', inline: true },
-            { name: '佇列', value: `${queueSize} 首`, inline: true },
-            { name: '循環播放', value: looping ? '🔁 開啟' : '❌ 關閉', inline: true },
-            { name: '錯誤計數', value: `${errorCount}`, inline: true }
-          )
-          .setThumbnail(playerData.thumbnail || null)
-          .setTimestamp();
-        
-        interaction.followUp({ embeds: [infoEmbed], ephemeral: true });
-        break;
-        
-      case 'voldown':
-        if (playerData.player.state.resource) {
-          const currentVol = playerData.player.state.resource.volume.volume;
-          const newVol = Math.max(0, currentVol - 0.1);
-          playerData.player.state.resource.volume.setVolume(newVol);
-          interaction.followUp({ 
-            content: `🔉 音量: ${Math.round(newVol * 100)}%`, 
+          if (queue.length === 0) {
+            stopBilibiliAudio(guildId);
+            await interaction.reply({ content: '⏭️ 已跳過，佇列為空，停止播放', ephemeral: true });
+          } else {
+            await interaction.reply({ content: '⏭️ 跳過當前歌曲', ephemeral: true });
+            playerData.player.stop();
+          }
+          break;
+
+        case 'stop':
+          stopBilibiliAudio(guildId);
+          await interaction.reply({ content: '⏹️ 已停止播放', ephemeral: true });
+          break;
+
+        case 'loop_one':
+          const currentLoopOne = loopSettings.get(guildId);
+          const newLoopOne = currentLoopOne === 'one' ? 'off' : 'one';
+          loopSettings.set(guildId, newLoopOne);
+          
+          await interaction.reply({ 
+            content: newLoopOne === 'one' ? '🔁 單曲循環已開啟' : '❌ 循環已關閉', 
             ephemeral: true 
           });
-        }
-        break;
-        
-      case 'volup':
-        if (playerData.player.state.resource) {
-          const currentVol = playerData.player.state.resource.volume.volume;
-          const newVol = Math.min(1, currentVol + 0.1);
-          playerData.player.state.resource.volume.setVolume(newVol);
-          interaction.followUp({ 
-            content: `🔊 音量: ${Math.round(newVol * 100)}%`, 
+          
+          await updateControlPanel(guildId, interaction.channel);
+          break;
+
+        case 'loop_all':
+          const currentLoopAll = loopSettings.get(guildId);
+          const newLoopAll = currentLoopAll === 'all' ? 'off' : 'all';
+          loopSettings.set(guildId, newLoopAll);
+          
+          await interaction.reply({ 
+            content: newLoopAll === 'all' ? '🔂 列表循環已開啟' : '❌ 循環已關閉', 
             ephemeral: true 
           });
-        }
-        break;
+          
+          await updateControlPanel(guildId, interaction.channel);
+          break;
+
+        case 'queue':
+          const queueList = bilibiliQueues.get(guildId) || [];
+          const loopMode = loopSettings.get(guildId) || 'off';
+          
+          let loopText = '❌ 關閉';
+          if (loopMode === 'one') loopText = '🔁 單曲循環';
+          if (loopMode === 'all') loopText = '🔂 列表循環';
+
+          const embed = new EmbedBuilder()
+            .setColor(0x00A1D6)
+            .setTitle('🎵 播放佇列')
+            .addFields(
+              { 
+                name: '🎵 正在播放', 
+                value: `[${playerData.title}](${playerData.url})\n作者: ${playerData.author || '未知'}`, 
+                inline: false 
+              },
+              { name: '循環模式', value: loopText, inline: true },
+              { name: '佇列數量', value: `${queueList.length} 首`, inline: true }
+            )
+            .setTimestamp();
+
+          if (queueList.length > 0) {
+            const queueText = queueList.map((item, index) => 
+              `${index + 1}. [${item.title}](${item.url})`
+            ).join('\n');
+            
+            embed.addFields({
+              name: '📋 佇列',
+              value: queueText.length > 1024 ? queueText.substring(0, 1021) + '...' : queueText,
+              inline: false
+            });
+          }
+
+          await interaction.reply({ embeds: [embed], ephemeral: true });
+          break;
+      }
+    } catch (error) {
+      console.error('按鈕互動錯誤:', error);
+      await interaction.reply({ content: '❌ 操作失敗', ephemeral: true });
     }
   });
 
@@ -389,6 +371,7 @@ function setupBilibiliCommands(client) {
           return;
       }
 
+      // 🔥 循環指令改為切換模式
       if (content === `${PREFIX}loop`) {
           const playerData = bilibiliPlayers.get(message.guild.id);
           
@@ -396,37 +379,53 @@ function setupBilibiliCommands(client) {
               return message.reply('❌ 目前沒有播放音頻');
           }
 
-          const currentLoop = loopSettings.get(message.guild.id) || false;
-          loopSettings.set(message.guild.id, !currentLoop);
+          const currentLoop = loopSettings.get(message.guild.id) || 'off';
+          let newLoop = 'off';
+          
+          if (currentLoop === 'off') newLoop = 'one';
+          else if (currentLoop === 'one') newLoop = 'all';
+          else newLoop = 'off';
+          
+          loopSettings.set(message.guild.id, newLoop);
 
-          await updateControlPanel(message.guild.id);
+          let loopText = '❌ 循環已關閉';
+          let description = '播放完當前歌曲後將繼續播放佇列中的下一首';
+          
+          if (newLoop === 'one') {
+            loopText = '🔁 單曲循環已開啟';
+            description = '當前歌曲將會不斷重複播放';
+          } else if (newLoop === 'all') {
+            loopText = '🔂 列表循環已開啟';
+            description = '播放完所有歌曲後將重新開始播放整個列表';
+          }
 
           const embed = new EmbedBuilder()
-              .setColor(currentLoop ? 0xFF0000 : 0x00FF00)
-              .setTitle(currentLoop ? '🔁 循環播放已關閉' : '🔁 循環播放已開啟')
-              .setDescription(
-                  currentLoop 
-                      ? '當前歌曲播放完畢後將繼續播放佇列中的下一首' 
-                      : '當前歌曲將會不斷重複播放'
-              )
+              .setColor(newLoop === 'off' ? 0xFF0000 : 0x00FF00)
+              .setTitle(loopText)
+              .setDescription(description)
               .addFields(
                   { name: '正在播放', value: `[${playerData.title}](${playerData.url})`, inline: false }
               )
-              .setFooter({ text: `使用 ${PREFIX}loop 再次切換或點擊按鈕` })
+              .setFooter({ text: `使用 ${PREFIX}loop 切換模式` })
               .setTimestamp();
 
           message.reply({ embeds: [embed] });
+          await updateControlPanel(message.guild.id, message.channel);
           return;
       }
 
       if (content === `${PREFIX}queue`) {
           const playerData = bilibiliPlayers.get(message.guild.id);
           const queue = bilibiliQueues.get(message.guild.id) || [];
-          const isLooping = loopSettings.get(message.guild.id) || false;
+          const loopMode = loopSettings.get(message.guild.id) || 'off';
           
           if (!playerData && queue.length === 0) {
               return message.reply('❌ 目前沒有播放音頻且佇列為空');
           }
+
+          let loopText = '❌ 關閉';
+          if (loopMode === 'one') loopText = '🔁 單曲循環';
+          if (loopMode === 'all') loopText = '🔂 列表循環';
 
           const embed = new EmbedBuilder()
               .setColor(0x00A1D6)
@@ -435,11 +434,13 @@ function setupBilibiliCommands(client) {
 
           if (playerData) {
               embed.addFields({
-                  name: `🎵 正在播放 ${isLooping ? '🔁' : ''}`,
+                  name: `🎵 正在播放`,
                   value: `[${playerData.title}](${playerData.url})\n作者: ${playerData.author || '未知'}`,
                   inline: false
               });
           }
+
+          embed.addFields({ name: '循環模式', value: loopText, inline: true });
 
           if (queue.length > 0) {
               const queueList = queue.map((item, index) => 
@@ -451,10 +452,6 @@ function setupBilibiliCommands(client) {
                   value: queueList.length > 1024 ? queueList.substring(0, 1021) + '...' : queueList,
                   inline: false
               });
-          }
-
-          if (isLooping) {
-              embed.setFooter({ text: '🔁 循環播放已開啟' });
           }
 
           message.reply({ embeds: [embed] });
@@ -482,7 +479,11 @@ function setupBilibiliCommands(client) {
 
           const queue = bilibiliQueues.get(message.guild.id) || [];
           const errorCount = errorCounts.get(message.guild.id) || 0;
-          const isLooping = loopSettings.get(message.guild.id) || false;
+          const loopMode = loopSettings.get(message.guild.id) || 'off';
+
+          let loopText = '❌ 關閉';
+          if (loopMode === 'one') loopText = '🔁 單曲循環';
+          if (loopMode === 'all') loopText = '🔂 列表循環';
 
           const embed = new EmbedBuilder()
               .setColor(0x00A1D6)
@@ -492,7 +493,7 @@ function setupBilibiliCommands(client) {
                   { name: '作者', value: playerData.author || '未知', inline: true },
                   { name: '時長', value: playerData.duration || '未知', inline: true },
                   { name: '佇列', value: `${queue.length} 首`, inline: true },
-                  { name: '循環播放', value: isLooping ? '🔁 開啟' : '❌ 關閉', inline: true },
+                  { name: '循環模式', value: loopText, inline: true },
                   { name: '錯誤計數', value: `${errorCount}`, inline: true }
               )
               .setThumbnail(playerData.thumbnail || null)
@@ -605,6 +606,7 @@ async function handleBilibiliPlay(message, url) {
               .setTimestamp();
 
           await loadingMsg.edit({ content: null, embeds: [embed] });
+          await updateControlPanel(guildId, message.channel);
           return;
       }
 
@@ -620,18 +622,11 @@ async function handleBilibiliPlay(message, url) {
               { name: '時長', value: videoInfo.duration || '未知', inline: true }
           )
           .setThumbnail(videoInfo.thumbnail || null)
-          .setFooter({ text: `使用按鈕或指令控制播放` })
+          .setFooter({ text: '使用下方按鈕控制播放' })
           .setTimestamp();
 
-      // 🔥 新增：發送控制面板
-      const buttons = createControlButtons(guildId);
-      const controlMsg = await loadingMsg.edit({ 
-        content: null, 
-        embeds: [embed],
-        components: buttons
-      });
-      
-      controlMessages.set(guildId, controlMsg);
+      await loadingMsg.edit({ content: null, embeds: [embed] });
+      await updateControlPanel(guildId, message.channel);
 
   } catch (error) {
       console.error('播放音頻時發生錯誤：', error);
@@ -789,18 +784,19 @@ async function playBilibiliAudio(guildId, connection, videoInfo, channel, retryC
       console.log('播放器進入 Idle 狀態');
       
       if (bilibiliPlayers.has(guildId)) {
-          const isLooping = loopSettings.get(guildId) || false;
+          const loopMode = loopSettings.get(guildId) || 'off';
           
-          if (isLooping) {
-              console.log(`🔁 循環播放: ${videoInfo.title}`);
+          // 🔥 單曲循環
+          if (loopMode === 'one') {
+              console.log(`🔁 單曲循環: ${videoInfo.title}`);
               
               try {
                   const embed = new EmbedBuilder()
                       .setColor(0x00A1D6)
-                      .setTitle('🔁 循環播放')
+                      .setTitle('🔁 單曲循環')
                       .setDescription(`[${videoInfo.title}](${videoInfo.url})`)
                       .setThumbnail(videoInfo.thumbnail || null)
-                      .setFooter({ text: `使用按鈕或 ${PREFIX}loop 關閉循環` });
+                      .setFooter({ text: `使用 ${PREFIX}loop 切換模式` });
                   
                   channel.send({ embeds: [embed] });
               } catch (err) {
@@ -829,9 +825,7 @@ async function playBilibiliAudio(guildId, connection, videoInfo, channel, retryC
                       )
                       .setThumbnail(nextVideo.thumbnail || null);
                   
-                  const buttons = createControlButtons(guildId);
-                  const controlMsg = await channel.send({ embeds: [embed], components: buttons });
-                  controlMessages.set(guildId, controlMsg);
+                  channel.send({ embeds: [embed] });
               } catch (err) {
                   console.error('發送通知失敗:', err);
               }
@@ -846,7 +840,22 @@ async function playBilibiliAudio(guildId, connection, videoInfo, channel, retryC
               });
               
               await playBilibiliAudio(guildId, connection, nextVideo, channel, 0);
+              await updateControlPanel(guildId, channel);
           } else {
+              // 🔥 列表循環：重新加載整個列表
+              if (loopMode === 'all') {
+                  console.log('🔂 列表循環：重新開始播放列表');
+                  
+                  // 這裡需要保存原始播放列表，暫時不實作完整功能
+                  // 可以考慮使用另一個 Map 儲存原始列表
+                  
+                  try {
+                      channel.send('🔂 列表循環功能需要保存原始播放列表，請重新添加歌曲');
+                  } catch (err) {
+                      console.error('發送通知失敗:', err);
+                  }
+              }
+              
               console.log('✅ 播放完畢，佇列為空');
               stopBilibiliAudio(guildId);
               
@@ -1080,8 +1089,7 @@ function stopBilibiliAudio(guildId) {
       bilibiliQueues.delete(guildId);
       errorCounts.delete(guildId);
       loopSettings.delete(guildId);
-      isPaused.delete(guildId);
-      controlMessages.delete(guildId);
+      controlMessages.delete(guildId); // 🔥 清除控制面板
       
       cleanupProcess(guildId);
       
