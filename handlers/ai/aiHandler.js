@@ -140,10 +140,6 @@ async function getShortResponse(userId, message) {
         const result = await chat.sendMessage(shortPrompt);
         let response = result.response.text().trim();
         
-        if (response.length > 20) {
-            response = response.substring(0, 20);
-        }
-
         return response;
     } catch (error) {
         console.error(`Short Response Error:`, error.message);
