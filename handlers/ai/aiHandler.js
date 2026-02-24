@@ -133,7 +133,7 @@ async function getShortResponse(userId, message) {
             history: history,
             generationConfig: {
                 ...GENERATION_CONFIG,
-                maxOutputTokens: 30,
+                maxOutputTokens: 300,
             },
         });
 
