@@ -26,7 +26,7 @@ client.once('clientReady', () => {
     console.log(`📊 已加入 ${client.guilds.cache.size} 個伺服器`);
     console.log(`🎯 已載入 ${Object.keys(customResponses.exact).length} 個完全匹配回應`);
     console.log(`🔍 已載入 ${Object.keys(customResponses.contains).length} 個包含匹配回應`);
-    console.log(`🤖 AI 功能已啟用 (Gemini API)`); // 新增
+    console.log(`🤖 AI 功能已啟用 (Gemini API)`);
     
     // 設定 Bot 狀態
     client.user.setPresence({
@@ -50,6 +50,12 @@ client.on('error', error => {
 
 process.on('unhandledRejection', error => {
     console.error('❌ 未處理的 Promise 拒絕：', error);
+});
+
+// 捕捉未處理的同步例外，防止 Bot 崩潰
+process.on('uncaughtException', error => {
+    console.error('❌ 未捕捉的例外：', error);
+    // 不呼叫 process.exit()，讓 Bot 繼續運行
 });
 
 // 登入
