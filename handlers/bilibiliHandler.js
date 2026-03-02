@@ -216,6 +216,40 @@ async function updateControlPanel(guildId, channel) {
   }
 }
 
+// 🔥 新增：處理 VoiceConnection 錯誤（521 等）
+async function handleVoiceConnectionError(guildId, connection, videoInfo, channel) {
+  try {
+    console.warn(`⚠️ 嘗試恢復語音連線 (Guild: ${guildId})...`);
+    await Promise.race([
+      entersState(connection, VoiceConnectionStatus.Ready, 10_000),
+      entersState(connection, VoiceConnectionStatus.Signalling, 10_000),
+      entersState(connection, VoiceConnectionStatus.Connecting, 10_000),
+    ]);
+    console.log('✅ VoiceConnection 已恢復');
+
+    // 恢復後重新播放
+    if (bilibiliPlayers.has(guildId)) {
+      await playBilibiliAudio(guildId, connection, videoInfo, channel, 0);
+    }
+  } catch (err) {
+    console.error('❌ VoiceConnection 無法恢復，停止播放:', err.message);
+
+    try {
+      channel.send('❌ 語音連線中斷（Cloudflare 521），請重新使用指令播放');
+    } catch (e) {
+      console.error('發送通知失敗:', e);
+    }
+
+    stopBilibiliAudio(guildId);
+
+    try {
+      connection.destroy();
+    } catch (e) {
+      console.error('銷毀連線失敗:', e);
+    }
+  }
+}
+
 function setupBilibiliCommands(client) {
   BILIBILI_COOKIES_FILE = prepareBilibiliCookies();
   
@@ -327,7 +361,9 @@ function setupBilibiliCommands(client) {
       }
     } catch (error) {
       console.error('按鈕互動錯誤:', error);
-      await interaction.reply({ content: '❌ 操作失敗', ephemeral: true });
+      try {
+        await interaction.reply({ content: '❌ 操作失敗', ephemeral: true });
+      } catch (e) {}
     }
   });
 
@@ -576,6 +612,37 @@ async function handleBilibiliPlay(message, url) {
           });
 
           await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+
+          // 🔥 新增：監聽語音連線斷線，自動重連
+          connection.on(VoiceConnectionStatus.Disconnected, async () => {
+            try {
+              console.warn(`⚠️ 語音連線斷開，嘗試重連 (Guild: ${guildId})...`);
+              await Promise.race([
+                entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+                entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+              ]);
+              console.log(`✅ 語音連線重連中 (Guild: ${guildId})`);
+            } catch (error) {
+              console.error(`❌ 語音連線重連失敗，銷毀連線 (Guild: ${guildId}):`, error.message);
+              try {
+                connection.destroy();
+              } catch (e) {}
+              stopBilibiliAudio(guildId);
+              try {
+                message.channel.send('❌ 語音連線已斷開，請重新使用指令播放');
+              } catch (e) {}
+            }
+          });
+
+          // 🔥 新增：捕捉連線層級錯誤（含 521）
+          connection.on('error', (error) => {
+            console.error(`❌ VoiceConnection 錯誤 (Guild: ${guildId}):`, error.message);
+            if (error.message && error.message.includes('521')) {
+              console.warn('⚠️ 偵測到 Cloudflare 521 錯誤');
+            }
+            // 錯誤由 Disconnected 事件處理，此處僅記錄，防止崩潰
+          });
+
       } catch (error) {
           console.error('加入語音頻道時發生錯誤：', error);
           return message.reply('❌ 加入語音頻道時發生錯誤');
@@ -651,6 +718,17 @@ async function handleBilibiliPlay(message, url) {
 
 async function playBilibiliAudio(guildId, connection, videoInfo, channel, retryCount = 0) {
   const player = createAudioPlayer();
+
+  // 🔥 新增：捕捉 VoiceConnection 錯誤，防止 Unhandled error 崩潰
+  if (!connection.listenerCount('error')) {
+    connection.on('error', (error) => {
+      console.error(`❌ VoiceConnection 錯誤 (Guild: ${guildId}):`, error.message);
+      if (error.message && error.message.includes('521')) {
+        console.warn('⚠️ 偵測到 Cloudflare 521，嘗試恢復連線...');
+        handleVoiceConnectionError(guildId, connection, videoInfo, channel);
+      }
+    });
+  }
   
   const playNext = async () => {
       cleanupProcess(guildId);
@@ -845,9 +923,6 @@ async function playBilibiliAudio(guildId, connection, videoInfo, channel, retryC
               // 🔥 列表循環：重新加載整個列表
               if (loopMode === 'all') {
                   console.log('🔂 列表循環：重新開始播放列表');
-                  
-                  // 這裡需要保存原始播放列表，暫時不實作完整功能
-                  // 可以考慮使用另一個 Map 儲存原始列表
                   
                   try {
                       channel.send('🔂 列表循環功能需要保存原始播放列表，請重新添加歌曲');
