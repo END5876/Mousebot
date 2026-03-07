@@ -3,7 +3,7 @@ const { PREFIX } = require('../../config/settings');
 const { GENERATION_CONFIG } = require('../../config/aiSettings');
 const { selectMode, getModeName } = require('./modeSelector');
 const developerMode = require('./modes/developerMode');
-const guguMode = require('./modes/gugugagaMode'); // 🆕 新增
+const guguMode = require('./modes/gugugagaMode'); 
 
 // 導入所有模式
 const lossMode = require('./modes/lossMode');
@@ -15,6 +15,7 @@ const loverMode = require('./modes/loverMode');
 // --- 設定區域 ---
 const MODEL_NAME = "gemini-2.5-flash-lite"; 
 const RANDOM_REPLY_CHANCE = 0.15; // 15% 機率自動回應
+const MAX_IMAGE_SIZE_MB = 7; // 圖片大小上限（MB）
 
 // 初始化 API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -84,7 +85,36 @@ function clearUserHistory(userId) {
 }
 
 /**
- * 🆕 每次都重新選擇模式（不記住）
+ * 🆕 從 Discord 附件下載圖片並轉成 Base64
+ */
+async function fetchImageAsBase64(attachment) {
+    const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
+    if (attachment.size > sizeLimit) {
+        console.warn(`[Image] 圖片過大，跳過：${attachment.name} (${(attachment.size / 1024 / 1024).toFixed(2)} MB)`);
+        return null;
+    }
+
+    // 只允許支援的格式
+    const supportedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'];
+    const mimeType = attachment.contentType?.split(';')[0] || 'image/jpeg';
+    if (!supportedTypes.includes(mimeType)) {
+        console.warn(`[Image] 不支援的格式，跳過：${mimeType}`);
+        return null;
+    }
+
+    try {
+        const response = await fetch(attachment.url);
+        const buffer = await response.arrayBuffer();
+        const base64 = Buffer.from(buffer).toString('base64');
+        return { base64, mimeType };
+    } catch (err) {
+        console.error(`[Image] 下載圖片失敗：`, err.message);
+        return null;
+    }
+}
+
+/**
+ * 每次都重新選擇模式（不記住）
  */
 function getUserMode(userId, message) {
     const mode = selectMode(userId, message);
@@ -94,7 +124,13 @@ function getUserMode(userId, message) {
 
 // --- 核心邏輯 ---
 
-async function getGeminiResponse(userId, prompt) {
+/**
+ * 🆕 支援圖片的 Gemini 回應函數
+ * @param {string} userId
+ * @param {string} prompt - 文字內容
+ * @param {Array}  imageParts - [{ base64, mimeType }, ...] 可為空陣列
+ */
+async function getGeminiResponse(userId, prompt, imageParts = []) {
     try {
         const mode = getUserMode(userId, prompt);
         const model = getModel(mode);
@@ -105,10 +141,36 @@ async function getGeminiResponse(userId, prompt) {
             generationConfig: GENERATION_CONFIG,
         });
 
-        const result = await chat.sendMessage(prompt);
+        // 🆕 組合訊息：文字 + 圖片
+        const messageParts = [];
+
+        // 先放圖片（Gemini 建議圖片放前面）
+        for (const img of imageParts) {
+            messageParts.push({
+                inlineData: {
+                    mimeType: img.mimeType,
+                    data: img.base64,
+                }
+            });
+        }
+
+        // 再放文字
+        if (prompt) {
+            messageParts.push({ text: prompt });
+        } else if (imageParts.length > 0) {
+            // 沒有文字但有圖片，給預設提示
+            messageParts.push({ text: '請描述這張圖片' });
+        }
+
+        const result = await chat.sendMessage(messageParts);
         const response = result.response.text();
 
-        updateUserHistory(userId, 'user', prompt);
+        // 歷史記錄只存文字部分
+        const historyText = imageParts.length > 0
+            ? `[傳送了 ${imageParts.length} 張圖片] ${prompt || ''}`
+            : prompt;
+
+        updateUserHistory(userId, 'user', historyText);
         updateUserHistory(userId, 'model', response);
 
         return response;
@@ -152,15 +214,19 @@ async function getShortResponse(userId, message) {
 function setupAICommands(client) {
   client.on('messageCreate', async message => {
       if (message.author.bot) return;
-      if (!message.content || message.content.trim() === '') return;
 
-      const content = message.content.trim();
+      // 🆕 允許純圖片訊息（移除舊的 content 空值檢查）
+      const hasAttachment = message.attachments.size > 0;
+      const content = message.content?.trim() || '';
+
+      // 如果既沒有文字也沒有圖片，直接跳過
+      if (!content && !hasAttachment) return;
+
       const userId = message.author.id;
       
       // 清除記憶指令
       const isClearCommand = content === `${PREFIX}reset` || content === `${PREFIX}clearai`;
       if (isClearCommand) {
-          // 🆕 隨機選擇一個模式來顯示清除訊息
           const mode = selectMode(userId, content);
           const modeModule = MODE_MAP[mode];
           const clearMsg = modeModule.getClearMemoryMessage();
@@ -175,18 +241,28 @@ function setupAICommands(client) {
           // === Mention 回應邏輯 ===
           let question = content.replace(/<@!?\d+>/g, '').trim();
           
-          if (!question) return;
+          // 🆕 有圖片時即使沒文字也繼續處理
+          if (!question && !hasAttachment) return;
           if (!process.env.GEMINI_API_KEY) return message.channel.send('❌ 未設定 API Key');
 
           let thinkingMsg = null;
           try {
-              const mode = getUserMode(userId, question);
+              const mode = getUserMode(userId, question || '圖片');
               const modeModule = MODE_MAP[mode];
               const thinkingText = modeModule.getThinkingMessage();
               
               thinkingMsg = await message.channel.send(thinkingText);
+
+              // 🆕 處理圖片附件
+              const imageParts = [];
+              if (hasAttachment) {
+                  for (const [, attachment] of message.attachments) {
+                      const imgData = await fetchImageAsBase64(attachment);
+                      if (imgData) imageParts.push(imgData);
+                  }
+              }
               
-              const answer = await getGeminiResponse(userId, question);
+              const answer = await getGeminiResponse(userId, question, imageParts);
               if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
 
               if (answer.length <= 2000) {
@@ -200,44 +276,52 @@ function setupAICommands(client) {
           } catch (error) {
               if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
               
-              // 🆕 隨機選擇一個模式來顯示錯誤訊息
-              const mode = selectMode(userId, question);
+              const mode = selectMode(userId, question || '圖片');
               const modeModule = MODE_MAP[mode];
               const errorMsg = modeModule.getErrorMessage(error);
               
               message.channel.send(errorMsg);
           }
       } else {
-          // === 隨機回應邏輯 ===
-          if (!process.env.GEMINI_API_KEY) return;
-            // 檢查是否包含網址
-            const urlPattern = /(https?:\/\/[^\s]+)|(www\.[^\s]+)/gi;
-            const hasUrl = urlPattern.test(content);
-            
-            // 檢查是否為純圖片訊息（有附件但沒有文字內容，或文字內容很短）
-            const hasAttachment = message.attachments.size > 0;
-            const isPureImage = hasAttachment && (!content || content.length < 10);
+            // === 隨機回應邏輯 ===
+            if (!process.env.GEMINI_API_KEY) return;
 
-            // 檢查是否為 !gugu 指令
-            const isGuguCommand = content.startsWith('!gugu');
-            
-            // 如果包含網址或純圖片，跳過隨機回應
-            if (hasUrl || isPureImage || isGuguCommand) {
+            // 移除所有 mention（使用者/身分組/頻道）後的文字
+            const cleanedContent = content
+                .replace(/<@!?\d+>/g, '')   // user mention
+                .replace(/<@&\d+>/g, '')    // role mention
+                .replace(/<#\d+>/g, '')     // channel mention
+                .trim();
+
+            // 如果只剩 mention（無實際文字），直接跳過
+            if (!cleanedContent) {
                 return;
             }
-          
-          const randomValue = Math.random();
-          if (randomValue < RANDOM_REPLY_CHANCE) {
-              try {
-                  const shortReply = await getShortResponse(userId, content);
-                  if (shortReply) {
-                      await message.channel.send(shortReply);
-                  }
-              } catch (error) {
-                  console.error('Random reply error:', error.message);
-              }
-          }
-      }
+
+            // 檢查是否包含網址（用清洗後文字判斷）
+            const urlPattern = /(https?:\/\/[^\s]+)|(www\.[^\s]+)/gi;
+            const hasUrl = urlPattern.test(cleanedContent);
+
+            // 檢查是否為 !gugu 指令
+            const isGuguCommand = cleanedContent.startsWith('!gugu');
+
+            // 網址或 gugu 指令跳過
+            if (hasUrl || isGuguCommand) {
+                return;
+            }
+
+            const randomValue = Math.random();
+            if (randomValue < RANDOM_REPLY_CHANCE) {
+                try {
+                    const shortReply = await getShortResponse(userId, cleanedContent);
+                    if (shortReply) {
+                        await message.channel.send(shortReply);
+                    }
+                } catch (error) {
+                    console.error('Random reply error:', error.message);
+                }
+            }
+        }
   });
 }
 
