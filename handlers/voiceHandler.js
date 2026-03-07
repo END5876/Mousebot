@@ -1,252 +1,259 @@
 const {
-joinVoiceChannel,
-getVoiceConnection,
-VoiceConnectionStatus,
-entersState,
-createAudioPlayer,
-createAudioResource,
-AudioPlayerStatus,
-StreamType
+  joinVoiceChannel,
+  getVoiceConnection,
+  VoiceConnectionStatus,
+  entersState,
+  createAudioPlayer,
+  createAudioResource,
+  AudioPlayerStatus,
+  StreamType
 } = require('@discordjs/voice');
 const { EmbedBuilder } = require('discord.js');
 const { PREFIX } = require('../config/settings');
 const { Readable } = require('stream');
-const fs = require('fs');
-const path = require('path');
 
 // 創建靜音音頻流
 function createSilenceStream() {
-const silence = Buffer.alloc(3840, 0); // 48kHz, 16-bit, mono, 20ms of silence
-let index = 0;
+  const silence = Buffer.alloc(3840, 0);
+  let index = 0;
 
-return new Readable({
+  return new Readable({
     read() {
-        if (index < 100) { // 播放 2 秒的靜音 (100 * 20ms)
-            this.push(silence);
-            index++;
-        } else {
-            index = 0; // 重置計數器，無限循環
-            this.push(silence);
-        }
+      if (index < 100) {
+        this.push(silence);
+        index++;
+      } else {
+        index = 0;
+        this.push(silence);
+      }
     }
-});
+  });
 }
 
-// 全局變量存儲播放器和定時器
 const silencePlayers = new Map();
-const silenceTimers = new Map();
+const autoJoinEnabled = new Map(); // guildId -> boolean
+let autoJoinCheckInterval = null;
+
+/**
+ * 檢查並自動加入指定語音頻道
+ */
+async function checkAndAutoJoin(client) {
+  const targetChannelId = process.env.AUTO_JOIN_CHANNEL_ID;
+  if (!targetChannelId) return;
+
+  for (const [guildId, enabled] of autoJoinEnabled.entries()) {
+    if (!enabled) continue;
+
+    try {
+      // ✅ 用 fetch 確保 guild 資料完整
+      const guild = await client.guilds.fetch(guildId);
+      if (!guild) continue;
+
+      // ✅ 直接 fetch 指定頻道，避免 cache 未載入問題
+      const targetChannel = await guild.channels.fetch(targetChannelId).catch(() => null);
+      if (!targetChannel || targetChannel.type !== 2) continue; // type 2 = GuildVoice
+
+      const existingConnection = getVoiceConnection(guildId);
+
+      // 若已在目標頻道，跳過
+      if (existingConnection && existingConnection.joinConfig.channelId === targetChannelId) {
+        continue;
+      }
+
+      // 若在其他頻道，先斷開
+      if (existingConnection) {
+        existingConnection.destroy();
+      }
+
+      console.log(`🔊 [AutoJoin] 自動加入頻道: ${targetChannel.name} (Guild: ${guild.name})`);
+
+      const connection = joinVoiceChannel({
+        channelId: targetChannel.id,
+        guildId: guild.id,
+        adapterCreator: guild.voiceAdapterCreator,
+        selfDeaf: false,
+        selfMute: false,
+      });
+
+      connection.on(VoiceConnectionStatus.Ready, () => {
+        console.log(`✅ [AutoJoin] 已加入: ${targetChannel.name}`);
+        startSilencePlayer(guildId, connection);
+      });
+
+      connection.on(VoiceConnectionStatus.Disconnected, async () => {
+        try {
+          await Promise.race([
+            entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+            entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+          ]);
+        } catch {
+          console.warn(`⚠️ [AutoJoin] 連線中斷，將於下次檢查時重新加入`);
+          connection.destroy();
+        }
+      });
+
+    } catch (err) {
+      console.error(`❌ [AutoJoin] 錯誤 (Guild: ${guildId}):`, err.message);
+    }
+  }
+}
+
+/**
+ * 啟動靜音播放器（保持連線用）
+ */
+function startSilencePlayer(guildId, connection) {
+  if (silencePlayers.has(guildId)) return;
+
+  const player = createAudioPlayer();
+  const resource = createAudioResource(createSilenceStream(), {
+    inputType: StreamType.Raw,
+  });
+
+  player.play(resource);
+  connection.subscribe(player);
+  silencePlayers.set(guildId, player);
+
+  player.on(AudioPlayerStatus.Idle, () => {
+    const newResource = createAudioResource(createSilenceStream(), {
+      inputType: StreamType.Raw,
+    });
+    player.play(newResource);
+  });
+}
 
 function setupVoiceCommands(client) {
-client.on('messageCreate', async message => {
+
+  // ✅ 改用 clientReady（discord.js v14 正確事件名稱）
+  client.once('clientReady', async () => {
+    const targetChannelId = process.env.AUTO_JOIN_CHANNEL_ID;
+
+    if (!targetChannelId) {
+      console.warn('⚠️ [AutoJoin] 未設定 AUTO_JOIN_CHANNEL_ID，跳過自動加入');
+      return;
+    }
+
+    console.log(`🚀 [AutoJoin] Bot 啟動，預設開啟自動加入，目標頻道 ID: ${targetChannelId}`);
+
+    // 對所有伺服器預設開啟
+    for (const [guildId] of client.guilds.cache) {
+      autoJoinEnabled.set(guildId, true);
+    }
+
+    // 啟動定期檢查（每 10 秒）
+    if (!autoJoinCheckInterval) {
+      autoJoinCheckInterval = setInterval(() => checkAndAutoJoin(client), 10_000);
+    }
+
+    // 立即執行一次
+    await checkAndAutoJoin(client);
+  });
+
+  client.on('messageCreate', async message => {
     if (message.author.bot) return;
 
-    const content = message.content;
+    const content = message.content.trim();
+    const guildId = message.guild?.id;
 
+    // ─────────────────────────────────────────
+    // !autojoin on / off / status
+    // ─────────────────────────────────────────
+    if (content === `${PREFIX}autojoin on`) {
+      const targetChannelId = process.env.AUTO_JOIN_CHANNEL_ID;
+
+      if (!targetChannelId) {
+        return message.reply('❌ 未設定 `AUTO_JOIN_CHANNEL_ID` 環境變數');
+      }
+
+      autoJoinEnabled.set(guildId, true);
+
+      if (!autoJoinCheckInterval) {
+        autoJoinCheckInterval = setInterval(() => checkAndAutoJoin(client), 10_000);
+      }
+
+      await checkAndAutoJoin(client);
+      return message.reply(`✅ 自動加入已**開啟**，目標頻道 ID: \`${targetChannelId}\``);
+    }
+
+    if (content === `${PREFIX}autojoin off`) {
+      autoJoinEnabled.set(guildId, false);
+
+      const anyEnabled = [...autoJoinEnabled.values()].some(v => v);
+      if (!anyEnabled && autoJoinCheckInterval) {
+        clearInterval(autoJoinCheckInterval);
+        autoJoinCheckInterval = null;
+      }
+
+      return message.reply('🔕 自動加入已**關閉**');
+    }
+
+    if (content === `${PREFIX}autojoin status`) {
+      const enabled = autoJoinEnabled.get(guildId) ?? false;
+      const targetChannelId = process.env.AUTO_JOIN_CHANNEL_ID;
+      return message.reply(
+        `📊 自動加入狀態：**${enabled ? '開啟 ✅' : '關閉 ❌'}**\n` +
+        `目標頻道 ID：\`${targetChannelId || '未設定'}\``
+      );
+    }
+
+    // ─────────────────────────────────────────
     // !join
+    // ─────────────────────────────────────────
     if (content === `${PREFIX}join`) {
-        if (!message.member.voice.channel) {
-            return message.reply('你要我去哪?');
-        }
+      if (!message.member.voice.channel) {
+        return message.reply('你要我去哪?');
+      }
 
-        const channel = message.member.voice.channel;
+      const channel = message.member.voice.channel;
 
-        try {
-            const connection = joinVoiceChannel({
-                channelId: channel.id,
-                guildId: channel.guild.id,
-                adapterCreator: channel.guild.voiceAdapterCreator,
-                selfDeaf: false,
-                selfMute: false,
-            });
+      try {
+        const connection = joinVoiceChannel({
+          channelId: channel.id,
+          guildId: channel.guild.id,
+          adapterCreator: channel.guild.voiceAdapterCreator,
+          selfDeaf: false,
+          selfMute: false,
+        });
 
-            connection.on(VoiceConnectionStatus.Ready, () => {
-                console.log('✅ 語音連接已就緒');
-            });
+        connection.on(VoiceConnectionStatus.Ready, () => {
+          console.log('✅ 語音連接已就緒');
+        });
 
-            connection.on(VoiceConnectionStatus.Disconnected, async () => {
-                try {
-                    await Promise.race([
-                        entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-                        entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
-                    ]);
-                } catch (error) {
-                    connection.destroy();
-                    console.log('❌ 語音連接已斷開');
-                    // 清理所有播放器
-                    stopSilenceAudio(message.guild.id);
-                }
-            });
+        connection.on(VoiceConnectionStatus.Disconnected, async () => {
+          try {
+            await Promise.race([
+              entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+              entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+            ]);
+          } catch {
+            connection.destroy();
+          }
+        });
 
-            await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
-            console.log(`✅ 已加入語音頻道：${channel.name} (${channel.guild.name})`);
-
-            message.reply(`✅ 已加入語音頻道：**${channel.name}**`);
-
-        } catch (error) {
-            console.error('加入語音頻道時發生錯誤：', error);
-            message.reply('❌ 加入語音頻道時發生錯誤');
-        }
+        await message.reply(`✅ 已加入 **${channel.name}**`);
+      } catch (err) {
+        console.error('加入語音頻道失敗:', err);
+        await message.reply('❌ 無法加入語音頻道');
+      }
     }
 
+    // ─────────────────────────────────────────
     // !leave
+    // ─────────────────────────────────────────
     if (content === `${PREFIX}leave`) {
-        const connection = getVoiceConnection(message.guild.id);
+      const connection = getVoiceConnection(guildId);
+      if (!connection) {
+        return message.reply('我沒有在任何語音頻道');
+      }
 
-        if (!connection) {
-            return message.reply('你要我離開哪?');
-        }
+      if (silencePlayers.has(guildId)) {
+        silencePlayers.get(guildId).stop();
+        silencePlayers.delete(guildId);
+      }
 
-        connection.destroy();
-        
-        // 停止所有音效
-       stopSilenceAudio(message.guild.id);
-       const { stopBilibiliAudio } = require('./bilibiliHandler');
-       stopBilibiliAudio(message.guild.id);
-        
-        console.log(`👋 已離開語音頻道 (${message.guild.name})`);
-        message.reply('👋 已離開語音頻道');
+      connection.destroy();
+      await message.reply('👋 已離開語音頻道');
     }
-
-    // !voice
-    if (content === `${PREFIX}voice`) {
-        const connection = getVoiceConnection(message.guild.id);
-        
-        if (!connection) {
-            return message.reply('📢 Bot 目前不在任何語音頻道中');
-        }
-
-        const channel = message.guild.channels.cache.get(connection.joinConfig.channelId);
-        const isSilencePlaying = silencePlayers.has(message.guild.id);
-        
-        const embed = new EmbedBuilder()
-            .setColor(0x00FF00)
-            .setTitle('🎤 語音頻道狀態')
-            .addFields(
-                { name: '頻道名稱', value: channel?.name || '未知', inline: true },
-                { name: '連接狀態', value: connection.state.status, inline: true },
-                { name: '頻道成員', value: `${channel?.members.size || 0} 人`, inline: true },
-                { name: '防踢狀態', value: isSilencePlaying ? '🔇 靜音播放中' : '⏸️ 未啟用', inline: true }
-            )
-            .setTimestamp();
-
-        message.reply({ embeds: [embed] });
-    }
-
-    // !silence - 開始播放靜音音頻
-    if (content === `${PREFIX}silence`) {
-        const connection = getVoiceConnection(message.guild.id);
-        
-        if (!connection) {
-            return message.reply('❌ Bot 必須先加入語音頻道才能播放靜音音頻');
-        }
-
-        if (silencePlayers.has(message.guild.id)) {
-            return message.reply('🔇 靜音音頻已經在播放中');
-        }
-
-        startSilenceAudio(message.guild.id, connection);
-        message.reply('🔇 已開始播放靜音音頻，防止被踢出頻道');
-    }
-
-    // !stopsilence - 停止播放靜音音頻
-    if (content === `${PREFIX}stopsilence`) {
-        if (!silencePlayers.has(message.guild.id)) {
-            return message.reply('❌ 目前沒有播放靜音音頻');
-        }
-
-        stopSilenceAudio(message.guild.id);
-        message.reply('⏹️ 已停止播放靜音音頻');
-    }
-
-    // !autosilence - 自動靜音模式（5分鐘後自動開始播放靜音）
-    if (content === `${PREFIX}autosilence`) {
-        const connection = getVoiceConnection(message.guild.id);
-        
-        if (!connection) {
-            return message.reply('❌ Bot 必須先加入語音頻道');
-        }
-
-        // 清除現有定時器
-        if (silenceTimers.has(message.guild.id)) {
-            clearTimeout(silenceTimers.get(message.guild.id));
-        }
-
-        // 設置 5 分鐘後自動開始靜音
-        const timer = setTimeout(() => {
-            if (getVoiceConnection(message.guild.id) && !silencePlayers.has(message.guild.id)) {
-                startSilenceAudio(message.guild.id, getVoiceConnection(message.guild.id));
-                console.log(`🔇 自動開始播放靜音音頻 (${message.guild.name})`);
-            }
-            silenceTimers.delete(message.guild.id);
-        }, 5 * 60 * 1000); // 5 分鐘
-
-        silenceTimers.set(message.guild.id, timer);
-        message.reply('⏰ 已設置自動靜音模式，5分鐘後將自動開始播放靜音音頻');
-    }
-});
+  });
 }
 
-// 開始播放靜音音頻
-function startSilenceAudio(guildId, connection) {
-try {
-    const player = createAudioPlayer();
-    const silenceStream = createSilenceStream();
-    const resource = createAudioResource(silenceStream, {
-        inputType: StreamType.Raw,
-        inlineVolume: true
-    });
-
-    // 設置音量為最低
-    resource.volume.setVolume(0.01);
-
-    player.play(resource);
-    connection.subscribe(player);
-
-    // 當音頻結束時重新播放
-    player.on(AudioPlayerStatus.Idle, () => {
-        if (silencePlayers.has(guildId)) {
-            const newSilenceStream = createSilenceStream();
-            const newResource = createAudioResource(newSilenceStream, {
-                inputType: StreamType.Raw,
-                inlineVolume: true
-            });
-            newResource.volume.setVolume(0.01);
-            player.play(newResource);
-        }
-    });
-
-    player.on('error', (error) => {
-        console.error('靜音播放器錯誤：', error);
-        stopSilenceAudio(guildId);
-    });
-
-    silencePlayers.set(guildId, player);
-    console.log(`🔇 開始播放靜音音頻 (Guild: ${guildId})`);
-
-} catch (error) {
-    console.error('創建靜音播放器時發生錯誤：', error);
-}
-}
-
-// 停止播放靜音音頻
-function stopSilenceAudio(guildId) {
-const player = silencePlayers.get(guildId);
-if (player) {
-    player.stop();
-    silencePlayers.delete(guildId);
-    console.log(`⏹️ 停止播放靜音音頻 (Guild: ${guildId})`);
-}
-
-// 清除自動靜音定時器
-const timer = silenceTimers.get(guildId);
-if (timer) {
-    clearTimeout(timer);
-    silenceTimers.delete(guildId);
-}
-}
-
-module.exports = { 
-  setupVoiceCommands, 
-  startSilenceAudio, 
-  stopSilenceAudio
-};
+module.exports = { setupVoiceCommands };
