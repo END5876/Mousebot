@@ -1,28 +1,16 @@
+// handlers/autoJoinHandler.js
 const {
   joinVoiceChannel,
   getVoiceConnection,
   VoiceConnectionStatus,
   entersState,
-  AudioPlayerStatus,
-  StreamType
 } = require('@discordjs/voice');
-const { Readable } = require('stream');
 const { PREFIX } = require('../config/settings');
 
 // ─── 狀態管理 ───────────────────────────────────────────
-let autoJoinEnabled = true; // 預設啟動時開啟
+let autoJoinEnabled = true;
 let checkInterval = null;
-const CHECK_INTERVAL_MS = 10_000; // 每 10 秒檢查一次
-
-// ─── 靜音流（保持連線用）────────────────────────────────
-function createSilenceStream() {
-  const silence = Buffer.alloc(3840, 0);
-  return new Readable({
-    read() {
-      this.push(silence);
-    }
-  });
-}
+const CHECK_INTERVAL_MS = 10_000;
 
 // ─── 加入目標語音頻道 ────────────────────────────────────
 async function joinTargetChannel(client) {
@@ -33,7 +21,6 @@ async function joinTargetChannel(client) {
   }
 
   try {
-    // 從所有 Guild 中尋找目標頻道
     const channel = await client.channels.fetch(channelId).catch(() => null);
     if (!channel || !channel.isVoiceBased()) {
       console.warn(`⚠️ 找不到語音頻道: ${channelId}`);
@@ -42,13 +29,11 @@ async function joinTargetChannel(client) {
 
     const guildId = channel.guild.id;
     const existingConnection = getVoiceConnection(guildId);
+    const botMember = channel.guild.members.me;
 
     // 已在目標頻道，不重複加入
-    if (existingConnection) {
-      const botMember = channel.guild.members.me;
-      if (botMember?.voice?.channelId === channelId) {
-        return; // 已在正確頻道
-      }
+    if (existingConnection && botMember?.voice?.channelId === channelId) {
+      return;
     }
 
     console.log(`🔊 自動加入語音頻道: ${channel.name} (${channelId})`);
@@ -62,24 +47,27 @@ async function joinTargetChannel(client) {
       channelId: channel.id,
       guildId: channel.guild.id,
       adapterCreator: channel.guild.voiceAdapterCreator,
-      selfDeaf: false,
-      selfMute: false,
+      selfDeaf: true,  // 不顯示綠圈、不聽語音
+      selfMute: true,  // 不顯示綠圈、不發送語音
     });
 
     // 等待連線就緒
     await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
     console.log(`✅ 已加入語音頻道: ${channel.name}`);
 
-    // 連線中斷時，若自動加入仍開啟則重連
+    // 連線中斷時自動重連
     connection.on(VoiceConnectionStatus.Disconnected, async () => {
       if (!autoJoinEnabled) return;
       try {
+        // 嘗試等待重新連線中
         await Promise.race([
           entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
           entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
         ]);
       } catch {
+        // 真的斷了，5 秒後重新加入
         console.warn('⚠️ 自動加入：連線中斷，5 秒後嘗試重連...');
+        connection.destroy();
         setTimeout(() => {
           if (autoJoinEnabled) joinTargetChannel(client);
         }, 5_000);
@@ -94,6 +82,7 @@ async function joinTargetChannel(client) {
 // ─── 定期檢查是否在目標頻道 ─────────────────────────────
 function startAutoJoinCheck(client) {
   if (checkInterval) return; // 避免重複啟動
+
   checkInterval = setInterval(async () => {
     if (!autoJoinEnabled) return;
 
@@ -129,7 +118,7 @@ function stopAutoJoinCheck() {
 
 // ─── 指令處理 ────────────────────────────────────────────
 function setupAutoJoinCommands(client) {
-  // Bot 就緒後立即啟動自動加入
+
   client.once('clientReady', async () => {
     console.log('🚀 Bot 就緒，啟動自動加入功能...');
     startAutoJoinCheck(client);
@@ -150,7 +139,7 @@ function setupAutoJoinCommands(client) {
         await joinTargetChannel(client);
         return message.reply('✅ 自動加入已**開啟**，Bot 將自動待在語音頻道');
       } else {
-        stopAutoJoinCheck(client);
+        stopAutoJoinCheck();
         return message.reply('🛑 自動加入已**關閉**');
       }
     }
