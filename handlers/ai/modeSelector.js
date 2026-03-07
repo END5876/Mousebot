@@ -1,5 +1,4 @@
-const { LOVER_MODE_USER_ID } = require('../../config/aiSettings');
-const { DEVELOPER_MODE_USER_ID } = require('../../config/aiSettings');
+const { LOVER_MODE_USER_IDS, DEVELOPER_MODE_USER_IDS } = require('../../config/aiSettings')
 
 /**
  * 根據用戶 ID 和訊息內容選擇適當的模式
@@ -7,15 +6,9 @@ const { DEVELOPER_MODE_USER_ID } = require('../../config/aiSettings');
  * @param {string} message - 用戶訊息內容
  * @returns {string} - 模式名稱 ('loss' | 'mambaMentor' | 'mygo' | 'inmu' | 'lover')
  */
-function selectMode(userId, message) {
-    // 特定用戶永遠使用戀人模式
-    if (userId === DEVELOPER_MODE_USER_ID) {
-        return 'developer';
-    }
-
-    if (userId === LOVER_MODE_USER_ID) {
-        return 'lover';
-    }
+function selectMode(userId, content) {
+    if (LOVER_MODE_USER_IDS.includes(userId)) return 'lover';
+    if (DEVELOPER_MODE_USER_IDS.includes(userId)) return 'developer';
 
     // 其他用戶使用加權隨機
     const rand = Math.random(); // 0.0000 ~ 0.9999
