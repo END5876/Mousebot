@@ -3,8 +3,6 @@ const {
   getVoiceConnection,
   VoiceConnectionStatus,
   entersState,
-  createAudioPlayer,
-  createAudioResource,
   AudioPlayerStatus,
   StreamType
 } = require('@discordjs/voice');
@@ -71,14 +69,6 @@ async function joinTargetChannel(client) {
     // 等待連線就緒
     await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
     console.log(`✅ 已加入語音頻道: ${channel.name}`);
-
-    // 播放靜音流以維持連線
-    const player = createAudioPlayer();
-    const resource = createAudioResource(createSilenceStream(), {
-      inputType: StreamType.Raw,
-    });
-    player.play(resource);
-    connection.subscribe(player);
 
     // 連線中斷時，若自動加入仍開啟則重連
     connection.on(VoiceConnectionStatus.Disconnected, async () => {
