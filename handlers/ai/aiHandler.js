@@ -193,8 +193,8 @@ async function getShortResponse(userId, message, imageParts = []) {  // 新增 i
         const history = getUserHistory(userId);
         
         const shortPrompt = imageParts.length > 0 && !message
-            ? `請用20個字以內簡短回應這張圖片（不要使用標點符號結尾）`                          // 純圖片時的提示
-            : `請用20個字以內簡短回應這句話（不要使用標點符號結尾）：「${message}」`;
+            ? `請用大約20個字簡短回應這張圖片（不要使用標點符號結尾）`                          // 純圖片時的提示
+            : `請用大約20個字簡短回應這句話（不要使用標點符號結尾）：「${message}」`;
         
         const chat = model.startChat({
             history: history,
