@@ -85,7 +85,7 @@ function clearUserHistory(userId) {
 }
 
 /**
- * 🆕 從 Discord 附件下載圖片並轉成 Base64
+ * 從 Discord 附件下載圖片並轉成 Base64
  */
 async function fetchImageAsBase64(attachment) {
     const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
@@ -125,7 +125,7 @@ function getUserMode(userId, message) {
 // --- 核心邏輯 ---
 
 /**
- * 🆕 支援圖片的 Gemini 回應函數
+ * 支援圖片的 Gemini 回應函數
  * @param {string} userId
  * @param {string} prompt - 文字內容
  * @param {Array}  imageParts - [{ base64, mimeType }, ...] 可為空陣列
@@ -141,7 +141,7 @@ async function getGeminiResponse(userId, prompt, imageParts = []) {
             generationConfig: GENERATION_CONFIG,
         });
 
-        // 🆕 組合訊息：文字 + 圖片
+        // 組合訊息：文字 + 圖片
         const messageParts = [];
 
         // 先放圖片（Gemini 建議圖片放前面）
@@ -159,7 +159,7 @@ async function getGeminiResponse(userId, prompt, imageParts = []) {
             messageParts.push({ text: prompt });
         } else if (imageParts.length > 0) {
             // 沒有文字但有圖片，給預設提示
-            messageParts.push({ text: '請描述這張圖片' });
+            messageParts.push({ text: '請吐槽這張圖片' });
         }
 
         const result = await chat.sendMessage(messageParts);
@@ -182,14 +182,19 @@ async function getGeminiResponse(userId, prompt, imageParts = []) {
 
 /**
  * 短回應生成函數（隨機回應用）
+ * @param {string} userId
+ * @param {string} message
+ * @param {Array}  imageParts - [{ base64, mimeType }, ...] 可為空陣列
  */
-async function getShortResponse(userId, message) {
+async function getShortResponse(userId, message, imageParts = []) {  // 新增 imageParts 參數
     try {
         const mode = getUserMode(userId, message);
         const model = getModel(mode);
         const history = getUserHistory(userId);
         
-        const shortPrompt = `請用20個字以內簡短回應這句話（不要使用標點符號結尾）：「${message}」`;
+        const shortPrompt = imageParts.length > 0 && !message
+            ? `請用20個字以內簡短回應這張圖片（不要使用標點符號結尾）`                          // 純圖片時的提示
+            : `請用20個字以內簡短回應這句話（不要使用標點符號結尾）：「${message}」`;
         
         const chat = model.startChat({
             history: history,
@@ -199,7 +204,21 @@ async function getShortResponse(userId, message) {
             },
         });
 
-        const result = await chat.sendMessage(shortPrompt);
+        // 組合圖片 + 文字
+        const messageParts = [];
+
+        for (const img of imageParts) {
+            messageParts.push({
+                inlineData: {
+                    mimeType: img.mimeType,
+                    data: img.base64,
+                }
+            });
+        }
+
+        messageParts.push({ text: shortPrompt });
+
+        const result = await chat.sendMessage(messageParts);  // 傳 messageParts
         let response = result.response.text().trim();
         
         return response;
@@ -215,7 +234,7 @@ function setupAICommands(client) {
   client.on('messageCreate', async message => {
       if (message.author.bot) return;
 
-      // 🆕 允許純圖片訊息（移除舊的 content 空值檢查）
+      // 允許純圖片訊息
       const hasAttachment = message.attachments.size > 0;
       const content = message.content?.trim() || '';
 
@@ -241,7 +260,7 @@ function setupAICommands(client) {
           // === Mention 回應邏輯 ===
           let question = content.replace(/<@!?\d+>/g, '').trim();
           
-          // 🆕 有圖片時即使沒文字也繼續處理
+          // 有圖片時即使沒文字也繼續處理
           if (!question && !hasAttachment) return;
           if (!process.env.GEMINI_API_KEY) return message.channel.send('❌ 未設定 API Key');
 
@@ -253,7 +272,7 @@ function setupAICommands(client) {
               
               thinkingMsg = await message.channel.send(thinkingText);
 
-              // 🆕 處理圖片附件
+              // 處理圖片附件
               const imageParts = [];
               if (hasAttachment) {
                   for (const [, attachment] of message.attachments) {
@@ -293,8 +312,8 @@ function setupAICommands(client) {
                 .replace(/<#\d+>/g, '')     // channel mention
                 .trim();
 
-            // 如果只剩 mention（無實際文字），直接跳過
-            if (!cleanedContent) {
+            // 清洗後為空，但有圖片時繼續往下走
+            if (!cleanedContent && !hasAttachment) {
                 return;
             }
 
@@ -313,7 +332,16 @@ function setupAICommands(client) {
             const randomValue = Math.random();
             if (randomValue < RANDOM_REPLY_CHANCE) {
                 try {
-                    const shortReply = await getShortResponse(userId, cleanedContent);
+                    // 處理圖片附件
+                    const imageParts = [];
+                    if (hasAttachment) {
+                        for (const [, attachment] of message.attachments) {
+                            const imgData = await fetchImageAsBase64(attachment);
+                            if (imgData) imageParts.push(imgData);
+                        }
+                    }
+
+                    const shortReply = await getShortResponse(userId, cleanedContent, imageParts);  // ✅ 傳入圖片
                     if (shortReply) {
                         await message.channel.send(shortReply);
                     }
