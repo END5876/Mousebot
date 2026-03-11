@@ -193,10 +193,8 @@ async function getShortResponse(userId, message, imageParts = []) {  // 新增 i
         const history = getUserHistory(userId);
         
         const shortPrompt = imageParts.length > 0 && !message
-            ? `請用大約30個字回應或吐槽這張圖片，若圖片有明確事件或資訊則用大約30~200個字回應或吐槽這張圖片`                          // 純圖片時的提示
-            : `請判斷以下訊息的重要性，並依照以下規則回應（不要使用標點符號結尾）：
-             - 若是閒聊、無意義、單純感嘆詞 → 用大約30字簡短回應
-             - 若有明確事件、問題、或資訊 → 用50~300字回應或吐槽訊息：「${message}」`;
+            ? `請用大約10~300個字回應或吐槽這張圖片`                          // 純圖片時的提示
+            : `請用大約10~300字回應或吐槽訊息：「${message}」`;
         
         const chat = model.startChat({
             history: history,

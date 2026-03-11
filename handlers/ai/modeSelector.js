@@ -13,14 +13,12 @@ function selectMode(userId, content) {
     // 其他用戶使用加權隨機
     const rand = Math.random(); // 0.0000 ~ 0.9999
     
-    if (rand < 0.10) {
-        return 'inmu';         // 10% 淫夢模式
-    } else if (rand < 0.30) {
-        return 'mambaMentor';  // 20% 牢大模式
-    } else if (rand < 0.50) {
-        return 'mygo';         // 20% MyGO 模式
+    if (rand < 0.05) {
+        return 'inmu';         // 5% 淫夢模式
+    } else if (rand < 0.10) {
+        return 'mambaMentor';  // 5% 牢大模式
     } else {
-        return 'loss';         // 50% 損友模式（預設）
+        return 'loss';         // 90% 損友模式（預設）
     }
 }
 /**
