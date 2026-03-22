@@ -10,6 +10,8 @@ function selectMode(userId, content) {
     if (LOVER_MODE_USER_IDS.includes(userId)) return 'lover';
     if (DEVELOPER_MODE_USER_IDS.includes(userId)) return 'developer';
 
+    return 'loss';   
+    /*
     // 其他用戶使用加權隨機
     const rand = Math.random(); // 0.0000 ~ 0.9999
     
@@ -18,8 +20,8 @@ function selectMode(userId, content) {
     } else if (rand < 0.10) {
         return 'mambaMentor';  // 5% 牢大模式
     } else {
-        return 'loss';         // 90% 損友模式（預設）
-    }
+              // 90% 損友模式（預設）
+    }*/
 }
 /**
  * 獲取模式的顯示名稱（用於日誌）
