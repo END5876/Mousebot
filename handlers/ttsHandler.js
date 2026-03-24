@@ -9,6 +9,7 @@ const { PREFIX } = require('../config/settings');
 const { execSync, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 
 // ── TTS 播放器 Map（每個 Guild 一個）────────────────────
 const ttsPlayers = new Map();
@@ -19,40 +20,36 @@ const ttsQueues = new Map();
 // ── 字數上限常數 ─────────────────────────────────────────
 const TTS_MAX_LENGTH = 200;
 
-// ── 語音設定 ─────────────────────────────────────────────
+// ── GPT-SoVITS 設定 ──────────────────────────────────────
+const SOVITS_HOST = 'end5876.tplinkdns.com';
+const SOVITS_PORT = 9880;
+const SOVITS_TIMEOUT_MS = 10000; // 10 秒沒回應就 fallback
+const SOVITS_REF_AUDIO = 'D:/Apps/GPT-SoVITS-v2pro-20250604/manbo cut/output.wav_0004226240_0004431040.wav';
+const SOVITS_PROMPT_TEXT = '主播的筆帶，和主播手機的大小完全吻合，於是主播就把手機藏在筆帶裡';
+const SOVITS_PROMPT_LANG = 'zh';
+const SOVITS_TEXT_LANG = 'zh';
+
+// ── 語音設定（edge-tts fallback 用）─────────────────────
 const VOICE_MAP = {
-  zh: 'zh-TW-YunJheNeural',   // 中文（含繁體、簡體）
-  en: 'zh-TW-YunJheNeural',   // 英文（同樣用中文語音念）
-  ja: 'ja-JP-KeitaNeural',    // 日文
+  zh: 'zh-TW-YunJheNeural',
+  en: 'zh-TW-YunJheNeural',
+  ja: 'ja-JP-KeitaNeural',
 };
-const DEFAULT_VOICE = 'zh-TW-YunJheNeural'; // fallback
+const DEFAULT_VOICE = 'zh-TW-YunJheNeural';
 
 // ── 語言自動偵測 ─────────────────────────────────────────
-/**
- * 偵測文字的主要語言
- * 優先順序：日文 > 中文 > 英文 > 預設(中文)
- *
- * 判斷邏輯：
- *  - 含有平假名 / 片假名 → 日文
- *  - 含有 CJK 漢字（但無日文假名）→ 中文
- *  - 只有 ASCII 英數字 → 英文
- *  - 其他 → 預設中文語音
- */
 function detectLanguage(text) {
-  const hasHiragana  = /[\u3040-\u309F]/.test(text); // 平假名
-  const hasKatakana  = /[\u30A0-\u30FF]/.test(text); // 片假名
-  const hasCJK       = /[\u4E00-\u9FFF]/.test(text); // 中日韓漢字
+  const hasHiragana  = /[\u3040-\u309F]/.test(text);
+  const hasKatakana  = /[\u30A0-\u30FF]/.test(text);
+  const hasCJK       = /[\u4E00-\u9FFF]/.test(text);
   const hasLatinOnly = /^[A-Za-z0-9\s.,!?'"()\-:;@#$%&*+=/\\[\]{}|<>~`^_]+$/.test(text.trim());
 
-  if (hasHiragana || hasKatakana) return 'ja'; // 有假名 → 日文
-  if (hasCJK)                     return 'zh'; // 有漢字（無假名）→ 中文
-  if (hasLatinOnly)               return 'en'; // 純英數 → 英文
-  return 'zh';                                 // 其他 → 預設中文
+  if (hasHiragana || hasKatakana) return 'ja';
+  if (hasCJK)                     return 'zh';
+  if (hasLatinOnly)               return 'en';
+  return 'zh';
 }
 
-/**
- * 根據文字自動選擇語音
- */
 function resolveVoice(text) {
   const lang = detectLanguage(text);
   return VOICE_MAP[lang] ?? DEFAULT_VOICE;
@@ -70,12 +67,56 @@ function checkEdgeTTS() {
   }
 }
 
-// ── 產生 TTS 音訊檔案（使用 edge-tts）───────────────────
-function generateTTS(text, filename, voice) {
+// ── GPT-SoVITS 生成 TTS ──────────────────────────────────
+function generateSoVITS(text, filename) {
+  return new Promise((resolve, reject) => {
+    const params = new URLSearchParams({
+      text:           text,
+      text_lang:      SOVITS_TEXT_LANG,
+      ref_audio_path: SOVITS_REF_AUDIO,
+      prompt_lang:    SOVITS_PROMPT_LANG,
+      prompt_text:    SOVITS_PROMPT_TEXT,
+      media_type:     'wav',
+    });
+
+    const options = {
+      hostname: SOVITS_HOST,
+      port:     SOVITS_PORT,
+      path:     `/tts?${params.toString()}`,
+      method:   'GET',
+      timeout:  SOVITS_TIMEOUT_MS,
+    };
+
+    const req = http.request(options, (res) => {
+      if (res.statusCode !== 200) {
+        reject(new Error(`SoVITS HTTP ${res.statusCode}`));
+        res.resume();
+        return;
+      }
+
+      const fileStream = fs.createWriteStream(filename);
+      res.pipe(fileStream);
+
+      fileStream.on('finish', () => resolve());
+      fileStream.on('error', reject);
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('SoVITS 連線逾時'));
+    });
+
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+// ── edge-tts 生成 TTS ────────────────────────────────────
+function generateEdgeTTS(text, filename, voice) {
   return new Promise((resolve, reject) => {
     const proc = spawn('edge-tts', [
       '--voice', voice,
-      '--text', text,
+      '--text',  text,
       '--write-media', filename
     ]);
 
@@ -86,6 +127,30 @@ function generateTTS(text, filename, voice) {
 
     proc.on('error', reject);
   });
+}
+
+// ── 統一 TTS 生成（SoVITS 優先，失敗 fallback edge-tts）─
+async function generateTTS(text, filename) {
+  // 先嘗試 GPT-SoVITS
+  try {
+    const sovitsFile = filename.replace(/\.\w+$/, '_sovits.wav');
+    await generateSoVITS(text, sovitsFile);
+    console.log(`✅ [SoVITS] 生成成功: ${text.slice(0, 20)}...`);
+    return { file: sovitsFile, engine: 'sovits' };
+  } catch (err) {
+    console.warn(`⚠️ [SoVITS] 失敗 (${err.message})，切換至 edge-tts`);
+  }
+
+  // Fallback: edge-tts
+  if (!hasEdgeTTS) {
+    throw new Error('SoVITS 不可用且 edge-tts 未安裝');
+  }
+
+  const voice = resolveVoice(text);
+  const edgeFile = filename.replace(/\.\w+$/, '_edge.mp3');
+  await generateEdgeTTS(text, edgeFile, voice);
+  console.log(`✅ [edge-tts] 生成成功: ${text.slice(0, 20)}...`);
+  return { file: edgeFile, engine: 'edge', voice };
 }
 
 // ── 安全刪除暫存檔 ───────────────────────────────────────
@@ -139,43 +204,39 @@ async function processQueue(guildId) {
 
 // ── 播放 TTS（加入 Queue）────────────────────────────────
 async function playTTS(guildId, text) {
-  if (!hasEdgeTTS) return { success: false, reason: 'no_edge_tts' };
-
   const connection = getVoiceConnection(guildId);
   if (!connection) return { success: false, reason: 'no_connection' };
-
-  // 自動偵測語言並選擇語音
-  const voice = resolveVoice(text);
-  const detectedLang = detectLanguage(text);
-
-  const filename = path.join(__dirname, `../temp/tts_${guildId}_${Date.now()}.mp3`);
 
   const tempDir = path.join(__dirname, '../temp');
   if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
+  // 暫存檔基底名稱（副檔名由 generateTTS 決定）
+  const baseFile = path.join(tempDir, `tts_${guildId}_${Date.now()}.tmp`);
+
+  let result;
   try {
-    await generateTTS(text, filename, voice);
+    result = await generateTTS(text, baseFile);
   } catch (err) {
-    console.error('❌ TTS 生成失敗:', err.message);
-    safeUnlink(filename);
+    console.error('❌ TTS 全部失敗:', err.message);
     return { success: false, reason: 'tts_failed' };
   }
 
   if (!ttsQueues.has(guildId)) ttsQueues.set(guildId, []);
 
-  const queue = ttsQueues.get(guildId);
+  const queue    = ttsQueues.get(guildId);
   const isPlaying = ttsPlayers.has(guildId);
 
-  queue.push({ text, voice, filename });
+  queue.push({ text, filename: result.file, engine: result.engine });
 
   if (!isPlaying) processQueue(guildId);
 
   return {
-    success: true,
-    queued: queue.length > 1,
-    position: queue.length,
-    detectedLang,
-    voice
+    success:      true,
+    queued:       queue.length > 1,
+    position:     queue.length,
+    engine:       result.engine,
+    detectedLang: detectLanguage(text),
+    voice:        result.voice ?? null,
   };
 }
 
@@ -201,11 +262,13 @@ function setupTTSCommands(client) {
   hasEdgeTTS = checkEdgeTTS();
 
   if (!hasEdgeTTS) {
-    console.warn('⚠️ edge-tts 未安裝，TTS 功能將無法使用');
+    console.warn('⚠️ edge-tts 未安裝，TTS fallback 將無法使用');
     console.warn('   請執行: pip install edge-tts');
   } else {
-    console.log('✅ edge-tts 已就緒');
+    console.log('✅ edge-tts 已就緒（作為 fallback）');
   }
+
+  console.log(`🎙️ GPT-SoVITS 目標: http://${SOVITS_HOST}:${SOVITS_PORT}`);
 
   client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
@@ -213,16 +276,6 @@ function setupTTSCommands(client) {
     const content = message.content;
     const guildId = message.guild?.id;
     if (!guildId) return;
-
-    // ── edge-tts 未安裝攔截 ──────────────────────────────
-    const isTTSCommand = (
-      content.startsWith(`${PREFIX}tts `) ||
-      content === `${PREFIX}ttstop`
-    );
-
-    if (isTTSCommand && !hasEdgeTTS) {
-      return message.reply('❌ TTS 功能未啟用，請聯絡管理員安裝 `edge-tts`\n```\npip install edge-tts\n```');
-    }
 
     // ── !tts <文字> ──────────────────────────────────────
     if (content.startsWith(`${PREFIX}tts `)) {
@@ -248,20 +301,20 @@ function setupTTSCommands(client) {
       if (!result.success) {
         await message.reactions.removeAll().catch(() => {});
         if (result.reason === 'tts_failed') {
-          return message.reply('❌ TTS 生成失敗，請確認 edge-tts 已安裝');
+          return message.reply('❌ TTS 生成失敗（SoVITS 離線且 edge-tts 不可用）');
         }
         return;
       }
 
-      // 顯示偵測到的語言與使用的語音
-      const langLabel = { zh: '中文 🇹🇼', en: '英文 🇺🇸', ja: '日文 🇯🇵' };
-      const langInfo = langLabel[result.detectedLang] ?? '未知';
-
-      /*if (result.queued) {
-        await message.reply(`📋 已加入排隊（第 ${result.position} 位）｜偵測語言：${langInfo}｜語音：\`${result.voice}\``);
+      // 顯示使用的引擎
+      /*
+      const engineLabel = result.engine === 'sovits' ? '🎙️ 曼波' : '🤖 edge-tts';
+      if (result.queued) {
+        await message.reply(`📋 已加入排隊（第 ${result.position} 位）｜${engineLabel}`);
       } else {
-        await message.reply(`🔊 播放中｜偵測語言：${langInfo}｜語音：\`${result.voice}\``);
-      }*/
+        await message.reply(`🔊 播放中｜${engineLabel}`);
+      }
+      */
     }
 
     // ── !ttstop ──────────────────────────────────────────
