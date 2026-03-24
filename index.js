@@ -10,6 +10,7 @@ const { setupAICommands } = require('./handlers/ai/aiHandler');
 const { setupGuguGenerator } = require('./handlers/ai/gugugagaGenerator');
 const { setupBilibiliCommands } = require('./handlers/bilibiliHandler');
 const { setupAutoJoinCommands } = require('./handlers/autoJoinHandler');
+const { setupTTSCommands } = require('./handlers/ttsHandler');
 
 // 創建客戶端
 const client = new Client({
@@ -44,6 +45,7 @@ setupAICommands(client);
 setupGuguGenerator(client);
 setupBilibiliCommands(client);
 setupAutoJoinCommands(client);
+setupTTSCommands(client);
 
 // 錯誤處理
 client.on('error', error => {
