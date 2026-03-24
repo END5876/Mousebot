@@ -10,6 +10,7 @@ const { execSync, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const dns = require('dns').promises; // ← 新增
 
 // ── TTS 播放器 Map（每個 Guild 一個）────────────────────
 const ttsPlayers = new Map();
@@ -23,11 +24,37 @@ const TTS_MAX_LENGTH = 200;
 // ── GPT-SoVITS 設定 ──────────────────────────────────────
 const SOVITS_HOST = 'end5876.tplinkdns.com';
 const SOVITS_PORT = 9880;
-const SOVITS_TIMEOUT_MS = 10000; // 10 秒沒回應就 fallback
+const SOVITS_TIMEOUT_MS = 10000;
 const SOVITS_REF_AUDIO = 'D:/Apps/GPT-SoVITS-v2pro-20250604/manbo cut/output.wav_0004226240_0004431040.wav';
 const SOVITS_PROMPT_TEXT = '主播的筆帶，和主播手機的大小完全吻合，於是主播就把手機藏在筆帶裡';
 const SOVITS_PROMPT_LANG = 'zh';
 const SOVITS_TEXT_LANG = 'zh';
+
+// ── DNS 快取（避免每次都查）─────────────────────────────
+let cachedSoVITSIP = null;
+let cacheExpireAt  = 0;
+const DNS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 分鐘重新解析一次
+
+async function resolveSoVITSHost() {
+  const now = Date.now();
+  if (cachedSoVITSIP && now < cacheExpireAt) {
+    return cachedSoVITSIP;
+  }
+
+  try {
+    // 強制使用 Google DNS 8.8.8.8 解析
+    const resolver = new dns.Resolver();
+    resolver.setServers(['8.8.8.8', '1.1.1.1']);
+    const addresses = await resolver.resolve4(SOVITS_HOST);
+    cachedSoVITSIP = addresses[0];
+    cacheExpireAt  = now + DNS_CACHE_TTL_MS;
+    console.log(`🌐 [DNS] ${SOVITS_HOST} → ${cachedSoVITSIP}`);
+    return cachedSoVITSIP;
+  } catch (err) {
+    console.warn(`⚠️ [DNS] 解析失敗: ${err.message}，使用原始 hostname`);
+    return SOVITS_HOST; // fallback 用原始 hostname
+  }
+}
 
 // ── 語音設定（edge-tts fallback 用）─────────────────────
 const VOICE_MAP = {
@@ -68,7 +95,9 @@ function checkEdgeTTS() {
 }
 
 // ── GPT-SoVITS 生成 TTS ──────────────────────────────────
-function generateSoVITS(text, filename) {
+async function generateSoVITS(text, filename) {
+  const resolvedIP = await resolveSoVITSHost(); // ← 先解析 DNS
+
   return new Promise((resolve, reject) => {
     const params = new URLSearchParams({
       text:           text,
@@ -80,11 +109,14 @@ function generateSoVITS(text, filename) {
     });
 
     const options = {
-      hostname: SOVITS_HOST,
+      hostname: resolvedIP,        // ← 用解析後的 IP
       port:     SOVITS_PORT,
       path:     `/tts?${params.toString()}`,
       method:   'GET',
       timeout:  SOVITS_TIMEOUT_MS,
+      headers: {
+        Host: SOVITS_HOST,         // ← 保留原始 Host header
+      },
     };
 
     const req = http.request(options, (res) => {
@@ -131,7 +163,6 @@ function generateEdgeTTS(text, filename, voice) {
 
 // ── 統一 TTS 生成（SoVITS 優先，失敗 fallback edge-tts）─
 async function generateTTS(text, filename) {
-  // 先嘗試 GPT-SoVITS
   try {
     const sovitsFile = filename.replace(/\.\w+$/, '_sovits.wav');
     await generateSoVITS(text, sovitsFile);
@@ -141,7 +172,6 @@ async function generateTTS(text, filename) {
     console.warn(`⚠️ [SoVITS] 失敗 (${err.message})，切換至 edge-tts`);
   }
 
-  // Fallback: edge-tts
   if (!hasEdgeTTS) {
     throw new Error('SoVITS 不可用且 edge-tts 未安裝');
   }
@@ -210,7 +240,6 @@ async function playTTS(guildId, text) {
   const tempDir = path.join(__dirname, '../temp');
   if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-  // 暫存檔基底名稱（副檔名由 generateTTS 決定）
   const baseFile = path.join(tempDir, `tts_${guildId}_${Date.now()}.tmp`);
 
   let result;
@@ -223,7 +252,7 @@ async function playTTS(guildId, text) {
 
   if (!ttsQueues.has(guildId)) ttsQueues.set(guildId, []);
 
-  const queue    = ttsQueues.get(guildId);
+  const queue     = ttsQueues.get(guildId);
   const isPlaying = ttsPlayers.has(guildId);
 
   queue.push({ text, filename: result.file, engine: result.engine });
@@ -270,6 +299,11 @@ function setupTTSCommands(client) {
 
   console.log(`🎙️ GPT-SoVITS 目標: http://${SOVITS_HOST}:${SOVITS_PORT}`);
 
+  // 啟動時預先解析一次 DNS
+  resolveSoVITSHost().then(ip => {
+    console.log(`✅ [DNS] 預解析完成: ${SOVITS_HOST} → ${ip}`);
+  });
+
   client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
@@ -305,16 +339,6 @@ function setupTTSCommands(client) {
         }
         return;
       }
-
-      // 顯示使用的引擎
-      /*
-      const engineLabel = result.engine === 'sovits' ? '🎙️ 曼波' : '🤖 edge-tts';
-      if (result.queued) {
-        await message.reply(`📋 已加入排隊（第 ${result.position} 位）｜${engineLabel}`);
-      } else {
-        await message.reply(`🔊 播放中｜${engineLabel}`);
-      }
-      */
     }
 
     // ── !ttstop ──────────────────────────────────────────
