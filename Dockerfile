@@ -1,16 +1,17 @@
 FROM node:18-alpine
 
-# 安裝系統依賴
+# 安裝系統依賴（含 opus 編譯所需工具）
 RUN apk add --no-cache \
     python3 \
     py3-pip \
-    ffmpeg
-
-# 安裝 yt-dlp
-RUN pip3 install --break-system-packages yt-dlp
+    ffmpeg \
+    opus-dev \
+    make \
+    g++ \
+    libc6-compat
 
 # 安裝 Python 套件
-RUN pip3 install --break-system-packages edge-tts
+RUN pip3 install --break-system-packages yt-dlp edge-tts
 
 # 驗證安裝
 RUN yt-dlp --version && ffmpeg -version
