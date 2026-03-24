@@ -10,7 +10,7 @@ const { execSync, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
-const dns = require('dns').promises; // ← 新增
+const dns = require('dns').promises;
 
 // ── TTS 播放器 Map（每個 Guild 一個）────────────────────
 const ttsPlayers = new Map();
@@ -21,14 +21,14 @@ const ttsQueues = new Map();
 // ── 字數上限常數 ─────────────────────────────────────────
 const TTS_MAX_LENGTH = 200;
 
-// ── GPT-SoVITS 設定 ──────────────────────────────────────
-const SOVITS_HOST = 'end5876.tplinkdns.com';
-const SOVITS_PORT = 9880;
-const SOVITS_TIMEOUT_MS = 10000;
-const SOVITS_REF_AUDIO = 'D:/Apps/GPT-SoVITS-v2pro-20250604/manbo cut/output.wav_0004226240_0004431040.wav';
-const SOVITS_PROMPT_TEXT = '主播的筆帶，和主播手機的大小完全吻合，於是主播就把手機藏在筆帶裡';
-const SOVITS_PROMPT_LANG = 'zh';
-const SOVITS_TEXT_LANG = 'zh';
+// ── GPT-SoVITS 設定（從 .env 讀取）─────────────────────
+const SOVITS_HOST        = process.env.SOVITS_HOST        || 'localhost';
+const SOVITS_PORT        = parseInt(process.env.SOVITS_PORT) || 9880;
+const SOVITS_TIMEOUT_MS  = 10000;
+const SOVITS_REF_AUDIO   = process.env.SOVITS_REF_AUDIO   || '';
+const SOVITS_PROMPT_TEXT = process.env.SOVITS_PROMPT_TEXT || '';
+const SOVITS_PROMPT_LANG = process.env.SOVITS_PROMPT_LANG || 'zh';
+const SOVITS_TEXT_LANG   = process.env.SOVITS_TEXT_LANG   || 'zh';
 
 // ── DNS 快取（避免每次都查）─────────────────────────────
 let cachedSoVITSIP = null;
@@ -42,7 +42,6 @@ async function resolveSoVITSHost() {
   }
 
   try {
-    // 強制使用 Google DNS 8.8.8.8 解析
     const resolver = new dns.Resolver();
     resolver.setServers(['8.8.8.8', '1.1.1.1']);
     const addresses = await resolver.resolve4(SOVITS_HOST);
@@ -52,7 +51,7 @@ async function resolveSoVITSHost() {
     return cachedSoVITSIP;
   } catch (err) {
     console.warn(`⚠️ [DNS] 解析失敗: ${err.message}，使用原始 hostname`);
-    return SOVITS_HOST; // fallback 用原始 hostname
+    return SOVITS_HOST;
   }
 }
 
@@ -96,7 +95,7 @@ function checkEdgeTTS() {
 
 // ── GPT-SoVITS 生成 TTS ──────────────────────────────────
 async function generateSoVITS(text, filename) {
-  const resolvedIP = await resolveSoVITSHost(); // ← 先解析 DNS
+  const resolvedIP = await resolveSoVITSHost();
 
   return new Promise((resolve, reject) => {
     const params = new URLSearchParams({
@@ -109,13 +108,13 @@ async function generateSoVITS(text, filename) {
     });
 
     const options = {
-      hostname: resolvedIP,        // ← 用解析後的 IP
+      hostname: resolvedIP,
       port:     SOVITS_PORT,
       path:     `/tts?${params.toString()}`,
       method:   'GET',
       timeout:  SOVITS_TIMEOUT_MS,
       headers: {
-        Host: SOVITS_HOST,         // ← 保留原始 Host header
+        Host: SOVITS_HOST,
       },
     };
 
@@ -299,7 +298,6 @@ function setupTTSCommands(client) {
 
   console.log(`🎙️ GPT-SoVITS 目標: http://${SOVITS_HOST}:${SOVITS_PORT}`);
 
-  // 啟動時預先解析一次 DNS
   resolveSoVITSHost().then(ip => {
     console.log(`✅ [DNS] 預解析完成: ${SOVITS_HOST} → ${ip}`);
   });
