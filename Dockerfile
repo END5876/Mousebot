@@ -9,6 +9,9 @@ RUN apk add --no-cache \
 # 安裝 yt-dlp
 RUN pip3 install --break-system-packages yt-dlp
 
+# 安裝 Python 套件
+RUN pip3 install --break-system-packages edge-tts
+
 # 驗證安裝
 RUN yt-dlp --version && ffmpeg -version
 
