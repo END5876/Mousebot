@@ -112,32 +112,59 @@ async function generateSoVITS(text, filename) {
       port:     SOVITS_PORT,
       path:     `/tts?${params.toString()}`,
       method:   'GET',
-      timeout:  SOVITS_TIMEOUT_MS,
       headers: {
         Host: SOVITS_HOST,
       },
     };
 
+    let settled = false;
+    function done(err) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(connectTimer);
+      clearTimeout(receiveTimer);
+      if (err) reject(err);
+      else resolve();
+    }
+
+    // ── ① TCP 連線 timeout：2 秒 ──────────────────────────
+    // 只偵測「TCP 握手有沒有成功」，Server 忙著推理不影響此計時
+    const connectTimer = setTimeout(() => {
+      req.destroy(new Error('SoVITS 連線逾時（Port 無回應，Server 可能關機）'));
+    }, 2000);
+
+    // ── ② 音訊接收 timeout：30 秒（TCP 連上後才啟動）────────
+    let receiveTimer = null;
+
     const req = http.request(options, (res) => {
       if (res.statusCode !== 200) {
-        reject(new Error(`SoVITS HTTP ${res.statusCode}`));
+        done(new Error(`SoVITS HTTP ${res.statusCode}`));
         res.resume();
         return;
       }
 
+      // 收到 HTTP response → 開始接收音訊，給 30 秒完成傳輸
+      receiveTimer = setTimeout(() => {
+        req.destroy(new Error('SoVITS 音訊接收逾時（處理超過 30 秒）'));
+      }, 30000);
+
       const fileStream = fs.createWriteStream(filename);
       res.pipe(fileStream);
 
-      fileStream.on('finish', () => resolve());
-      fileStream.on('error', reject);
+      fileStream.on('finish', () => done(null));
+      fileStream.on('error',  (err) => done(err));
     });
 
-    req.on('timeout', () => {
-      req.destroy();
-      reject(new Error('SoVITS 連線逾時'));
+    // ── TCP 連線建立成功時觸發 ─────────────────────────────
+    // 此時才取消 connectTimer，代表 Server 確實有在監聽
+    req.on('socket', (socket) => {
+      socket.on('connect', () => {
+        clearTimeout(connectTimer);
+        console.log('🔌 [SoVITS] TCP 連線成功，等待推理完成...');
+      });
     });
 
-    req.on('error', reject);
+    req.on('error', (err) => done(err));
     req.end();
   });
 }
