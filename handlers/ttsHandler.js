@@ -33,7 +33,7 @@ const SOVITS_TEXT_LANG   = process.env.SOVITS_TEXT_LANG   || 'zh';
 // ── DNS 快取（避免每次都查）─────────────────────────────
 let cachedSoVITSIP = null;
 let cacheExpireAt  = 0;
-const DNS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 分鐘重新解析一次
+const DNS_CACHE_TTL_MS = 5 * 60 * 1000;
 
 async function resolveSoVITSHost() {
   const now = Date.now();
@@ -309,12 +309,12 @@ function setupTTSCommands(client) {
     const guildId = message.guild?.id;
     if (!guildId) return;
 
-    // ── !tts <文字> ──────────────────────────────────────
-    if (content.startsWith(`${PREFIX}tts `)) {
-      const text = content.slice(`${PREFIX}tts `.length).trim();
+    // ── !m <文字> ─────────────────────────────────────── 
+    if (content.startsWith(`${PREFIX}m `)) {
+      const text = content.slice(`${PREFIX}m `.length).trim();
 
       if (!text) {
-        return message.reply(`❌ 請輸入要說的文字！\n用法：\`${PREFIX}tts 你好\``);
+        return message.reply(`❌ 請輸入要說的文字！\n用法：\`${PREFIX}m 你好\``);
       }
 
       if (text.length > TTS_MAX_LENGTH) {
@@ -339,8 +339,8 @@ function setupTTSCommands(client) {
       }
     }
 
-    // ── !ttstop ──────────────────────────────────────────
-    if (content === `${PREFIX}ttstop`) {
+    // ── !mstop ──────────────────────────────────────────
+    if (content === `${PREFIX}mstop`) {
       const stopped = stopTTS(guildId);
       if (stopped) {
         return message.reply('⏹️ 已停止 TTS 播放並清空排隊');
