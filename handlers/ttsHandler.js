@@ -19,7 +19,7 @@ const ttsPlayers = new Map();
 const ttsQueues = new Map();
 
 // ── 字數上限常數 ─────────────────────────────────────────
-const TTS_MAX_LENGTH = 200;
+const TTS_MAX_LENGTH = 1000;
 
 // ── GPT-SoVITS 設定（從 .env 讀取）─────────────────────
 const SOVITS_HOST        = process.env.SOVITS_HOST        || 'localhost';
