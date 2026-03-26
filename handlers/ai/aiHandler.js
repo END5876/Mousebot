@@ -23,10 +23,10 @@ const TTS_MAX_LENGTH = 1000; // TTS 字數上限（與 ttsHandler 保持一致�
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // --- AI 回覆 TTS 開關（每個 Guild 獨立）---
-const aiTTSEnabled = new Map(); // guildId -> boolean，預設 false
+const aiTTSEnabled = new Map(); // guildId -> boolean，預設 True
 
 function isAITTSEnabled(guildId) {
-    return aiTTSEnabled.get(guildId) ?? false;
+    return aiTTSEnabled.get(guildId) ?? true;
 }
 
 // 模式映射表
