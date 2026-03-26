@@ -378,4 +378,4 @@ function setupTTSCommands(client) {
   });
 }
 
-module.exports = { setupTTSCommands };
+module.exports = { setupTTSCommands, playTTS, stopTTS };
