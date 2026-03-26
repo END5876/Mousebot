@@ -22,6 +22,13 @@ const TTS_MAX_LENGTH = 1000; // TTS 字數上限（與 ttsHandler 保持一致�
 // 初始化 API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+// --- AI 回覆 TTS 開關（每個 Guild 獨立）---
+const aiTTSEnabled = new Map(); // guildId -> boolean，預設 false
+
+function isAITTSEnabled(guildId) {
+    return aiTTSEnabled.get(guildId) ?? false;
+}
+
 // 模式映射表
 const MODE_MAP = {
     loss: lossMode,
@@ -96,7 +103,6 @@ async function fetchImageAsBase64(attachment) {
         return null;
     }
 
-    // 只允許支援的格式
     const supportedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'];
     const mimeType = attachment.contentType?.split(';')[0] || 'image/jpeg';
     if (!supportedTypes.includes(mimeType)) {
@@ -125,10 +131,23 @@ function getUserMode(userId, message) {
 }
 
 /**
- * 🔊 觸發 TTS 朗讀（統一處理，靜默失敗）
+ * 🔊 觸發 TTS 朗讀
+ * 僅在 AI TTS 開關開啟，且觸發者位於語音頻道時才朗讀
  */
-async function speakWithTTS(guildId, text) {
+async function speakWithTTS(message, text) {
+    const guildId = message.guild?.id;
     if (!guildId) return;
+
+    // ✅ 檢查 AI TTS 開關
+    if (!isAITTSEnabled(guildId)) return;
+
+    // ✅ 檢查觸發者是否在語音頻道
+    const voiceChannel = message.member?.voice?.channel;
+    if (!voiceChannel) {
+        console.log(`🔇 [TTS] 使用者不在語音頻道，跳過朗讀`);
+        return;
+    }
+
     const ttsText = text.length > TTS_MAX_LENGTH ? text.slice(0, TTS_MAX_LENGTH) : text;
     try {
         const result = await playTTS(guildId, ttsText);
@@ -146,9 +165,6 @@ async function speakWithTTS(guildId, text) {
 
 /**
  * 支援圖片的 Gemini 回應函數
- * @param {string} userId
- * @param {string} prompt - 文字內容
- * @param {Array}  imageParts - [{ base64, mimeType }, ...] 可為空陣列
  */
 async function getGeminiResponse(userId, prompt, imageParts = []) {
     try {
@@ -161,10 +177,8 @@ async function getGeminiResponse(userId, prompt, imageParts = []) {
             generationConfig: GENERATION_CONFIG,
         });
 
-        // 組合訊息：文字 + 圖片
         const messageParts = [];
 
-        // 先放圖片（Gemini 建議圖片放前面）
         for (const img of imageParts) {
             messageParts.push({
                 inlineData: {
@@ -174,18 +188,15 @@ async function getGeminiResponse(userId, prompt, imageParts = []) {
             });
         }
 
-        // 再放文字
         if (prompt) {
             messageParts.push({ text: prompt });
         } else if (imageParts.length > 0) {
-            // 沒有文字但有圖片，給預設提示
             messageParts.push({ text: '請吐槽這張圖片' });
         }
 
         const result = await chat.sendMessage(messageParts);
         const response = result.response.text();
 
-        // 歷史記錄只存文字部分
         const historyText = imageParts.length > 0
             ? `[傳送了 ${imageParts.length} 張圖片] ${prompt || ''}`
             : prompt;
@@ -202,9 +213,6 @@ async function getGeminiResponse(userId, prompt, imageParts = []) {
 
 /**
  * 短回應生成函數（隨機回應用）
- * @param {string} userId
- * @param {string} message
- * @param {Array}  imageParts - [{ base64, mimeType }, ...] 可為空陣列
  */
 async function getShortResponse(userId, message, imageParts = []) {
     try {
@@ -224,7 +232,6 @@ async function getShortResponse(userId, message, imageParts = []) {
             },
         });
 
-        // 組合圖片 + 文字
         const messageParts = [];
 
         for (const img of imageParts) {
@@ -254,15 +261,22 @@ function setupAICommands(client) {
   client.on('messageCreate', async message => {
       if (message.author.bot) return;
 
-      // 允許純圖片訊息
       const hasAttachment = message.attachments.size > 0;
       const content = message.content?.trim() || '';
 
-      // 如果既沒有文字也沒有圖片，直接跳過
       if (!content && !hasAttachment) return;
 
       const userId = message.author.id;
-      
+      const guildId = message.guild?.id;
+
+      // ── !aitts ── AI 回覆朗讀開關 ──────────────────────
+      if (content === `${PREFIX}aitts` && guildId) {
+          const current = isAITTSEnabled(guildId);
+          aiTTSEnabled.set(guildId, !current);
+          const status = !current ? '🔊 已開啟' : '🔇 已關閉';
+          return message.channel.send(`${status} AI 回覆朗讀功能`);
+      }
+
       // 清除記憶指令
       const isClearCommand = content === `${PREFIX}reset` || content === `${PREFIX}clearai`;
       if (isClearCommand) {
@@ -280,7 +294,6 @@ function setupAICommands(client) {
           // === Mention 回應邏輯 ===
           let question = content.replace(/<@!?\d+>/g, '').trim();
           
-          // 有圖片時即使沒文字也繼續處理
           if (!question && !hasAttachment) return;
           if (!process.env.GEMINI_API_KEY) return message.channel.send('❌ 未設定 API Key');
 
@@ -292,7 +305,6 @@ function setupAICommands(client) {
               
               thinkingMsg = await message.channel.send(thinkingText);
 
-              // 處理圖片附件
               const imageParts = [];
               if (hasAttachment) {
                   for (const [, attachment] of message.attachments) {
@@ -313,8 +325,8 @@ function setupAICommands(client) {
                   }
               }
 
-              // 🔊 TTS 朗讀 AI 回答
-              await speakWithTTS(message.guild?.id, answer);
+              // 🔊 TTS：開關開啟且觸發者在語音頻道才朗讀
+              await speakWithTTS(message, answer);
 
           } catch (error) {
               if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
@@ -329,34 +341,24 @@ function setupAICommands(client) {
             // === 隨機回應邏輯 ===
             if (!process.env.GEMINI_API_KEY) return;
 
-            // 移除所有 mention（使用者/身分組/頻道）後的文字
             const cleanedContent = content
-                .replace(/<@!?\d+>/g, '')   // user mention
-                .replace(/<@&\d+>/g, '')    // role mention
-                .replace(/<#\d+>/g, '')     // channel mention
+                .replace(/<@!?\d+>/g, '')
+                .replace(/<@&\d+>/g, '')
+                .replace(/<#\d+>/g, '')
                 .trim();
 
-            // 清洗後為空，但有圖片時繼續往下走
-            if (!cleanedContent && !hasAttachment) {
-                return;
-            }
+            if (!cleanedContent && !hasAttachment) return;
 
-            // 檢查是否包含網址（用清洗後文字判斷）
             const urlPattern = /(https?:\/\/[^\s]+)|(www\.[^\s]+)/gi;
             const hasUrl = urlPattern.test(cleanedContent);
-
-            // 檢查是否為 !gugu 指令
             const isGuguCommand = cleanedContent.startsWith('!gugu');
+            const isTTSCommand  = cleanedContent.startsWith(`${PREFIX}m `);
 
-            // 網址或 gugu 指令跳過
-            if (hasUrl || isGuguCommand) {
-                return;
-            }
+            if (hasUrl || isGuguCommand || isTTSCommand) return;
 
             const randomValue = Math.random();
             if (randomValue < RANDOM_REPLY_CHANCE) {
                 try {
-                    // 處理圖片附件
                     const imageParts = [];
                     if (hasAttachment) {
                         for (const [, attachment] of message.attachments) {
@@ -369,8 +371,8 @@ function setupAICommands(client) {
                     if (shortReply) {
                         await message.channel.send(shortReply);
 
-                        // 🔊 TTS 朗讀隨機回應
-                        await speakWithTTS(message.guild?.id, shortReply);
+                        // 🔊 TTS：開關開啟且觸發者在語音頻道才朗讀
+                        await speakWithTTS(message, shortReply);
                     }
                 } catch (error) {
                     console.error('Random reply error:', error.message);
