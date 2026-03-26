@@ -4,6 +4,7 @@ const { GENERATION_CONFIG } = require('../../config/aiSettings');
 const { selectMode, getModeName } = require('./modeSelector');
 const developerMode = require('./modes/developerMode');
 const guguMode = require('./modes/gugugagaMode'); 
+const { playTTS } = require('../ttsHandler'); // 🔊 連動 TTS
 
 // 導入所有模式
 const lossMode = require('./modes/lossMode');
@@ -16,6 +17,7 @@ const loverMode = require('./modes/loverMode');
 const MODEL_NAME = "gemini-2.5-flash-lite"; 
 const RANDOM_REPLY_CHANCE = 0.15; // 15% 機率自動回應
 const MAX_IMAGE_SIZE_MB = 7; // 圖片大小上限（MB）
+const TTS_MAX_LENGTH = 1000; // TTS 字數上限（與 ttsHandler 保持一致）
 
 // 初始化 API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -122,6 +124,24 @@ function getUserMode(userId, message) {
     return mode;
 }
 
+/**
+ * 🔊 觸發 TTS 朗讀（統一處理，靜默失敗）
+ */
+async function speakWithTTS(guildId, text) {
+    if (!guildId) return;
+    const ttsText = text.length > TTS_MAX_LENGTH ? text.slice(0, TTS_MAX_LENGTH) : text;
+    try {
+        const result = await playTTS(guildId, ttsText);
+        if (!result.success) {
+            console.warn(`⚠️ [TTS] 朗讀失敗 (reason: ${result.reason})`);
+        } else {
+            console.log(`🔊 [TTS] 朗讀中 (engine: ${result.engine}, queued: ${result.queued})`);
+        }
+    } catch (err) {
+        console.error('❌ [TTS] 呼叫 playTTS 發生錯誤:', err.message);
+    }
+}
+
 // --- 核心邏輯 ---
 
 /**
@@ -186,14 +206,14 @@ async function getGeminiResponse(userId, prompt, imageParts = []) {
  * @param {string} message
  * @param {Array}  imageParts - [{ base64, mimeType }, ...] 可為空陣列
  */
-async function getShortResponse(userId, message, imageParts = []) {  // 新增 imageParts 參數
+async function getShortResponse(userId, message, imageParts = []) {
     try {
         const mode = getUserMode(userId, message);
         const model = getModel(mode);
         const history = getUserHistory(userId);
         
         const shortPrompt = imageParts.length > 0 && !message
-            ? `請用大約10~200個字回應或吐槽這張圖片`                          // 純圖片時的提示
+            ? `請用大約10~200個字回應或吐槽這張圖片`
             : `請用大約10~200字回應或吐槽訊息：「${message}」`;
         
         const chat = model.startChat({
@@ -218,7 +238,7 @@ async function getShortResponse(userId, message, imageParts = []) {  // 新增 i
 
         messageParts.push({ text: shortPrompt });
 
-        const result = await chat.sendMessage(messageParts);  // 傳 messageParts
+        const result = await chat.sendMessage(messageParts);
         let response = result.response.text().trim();
         
         return response;
@@ -292,6 +312,10 @@ function setupAICommands(client) {
                       await message.channel.send(chunks[i]);
                   }
               }
+
+              // 🔊 TTS 朗讀 AI 回答
+              await speakWithTTS(message.guild?.id, answer);
+
           } catch (error) {
               if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
               
@@ -341,9 +365,12 @@ function setupAICommands(client) {
                         }
                     }
 
-                    const shortReply = await getShortResponse(userId, cleanedContent, imageParts);  // ✅ 傳入圖片
+                    const shortReply = await getShortResponse(userId, cleanedContent, imageParts);
                     if (shortReply) {
                         await message.channel.send(shortReply);
+
+                        // 🔊 TTS 朗讀隨機回應
+                        await speakWithTTS(message.guild?.id, shortReply);
                     }
                 } catch (error) {
                     console.error('Random reply error:', error.message);
