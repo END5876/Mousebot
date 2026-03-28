@@ -57,11 +57,11 @@ async function resolveSoVITSHost() {
 
 // ── 語音設定（edge-tts fallback 用）─────────────────────
 const VOICE_MAP = {
-  zh: 'zh-TW-YunJheNeural',
-  en: 'zh-TW-YunJheNeural',
+  zh: 'zh-CN-shaanxi-XiaoniNeural',
+  en: 'zh-CN-shaanxi-XiaoniNeural',
   ja: 'ja-JP-KeitaNeural',
 };
-const DEFAULT_VOICE = 'zh-TW-YunJheNeural';
+const DEFAULT_VOICE = 'zh-CN-shaanxi-XiaoniNeural';
 
 // ── 語言自動偵測 ─────────────────────────────────────────
 function detectLanguage(text) {
