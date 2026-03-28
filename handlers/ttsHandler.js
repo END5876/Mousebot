@@ -437,10 +437,7 @@ function setupTTSCommands(client) {
         activeModels.set(guildId, key);
 
         await msg.edit(
-          `✅ 已切換至 **${model.name}**！\n` +
-          `> GPT: \`${model.gpt_weights}\`\n` +
-          `> SoVITS: \`${model.sovits_weights}\`\n` +
-          `> 參考音檔: \`${model.ref_audio || '(無)'}\``
+          `✅ 已切換至 **${model.name}**！\n`
         );
       } catch (err) {
         console.error('❌ 切換模型失敗:', err.message);
