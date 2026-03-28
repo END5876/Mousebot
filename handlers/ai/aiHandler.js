@@ -295,6 +295,7 @@ function setupAICommands(client) {
           let question = content.replace(/<@!?\d+>/g, '').trim();
           
           if (!question && !hasAttachment) return;
+          if (question.startsWith(`${PREFIX}m`)) return; // 攔截 TTS 相關指令
           if (!process.env.GEMINI_API_KEY) return message.channel.send('❌ 未設定 API Key');
 
           let thinkingMsg = null;
@@ -352,7 +353,7 @@ function setupAICommands(client) {
             const urlPattern = /(https?:\/\/[^\s]+)|(www\.[^\s]+)/gi;
             const hasUrl = urlPattern.test(cleanedContent);
             const isGuguCommand = cleanedContent.startsWith('!gugu');
-            const isTTSCommand  = cleanedContent.startsWith(`${PREFIX}m `);
+            const isTTSCommand  = cleanedContent.startsWith(`${PREFIX}m`);
 
             if (hasUrl || isGuguCommand || isTTSCommand) return;
 
