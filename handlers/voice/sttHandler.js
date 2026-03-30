@@ -14,16 +14,16 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // ====== 設定 ======
-const SILENCE_TIMEOUT_MS = 2000;
+const GROQ_SILENCE_TIMEOUT_MS = 800;    // ✅ Groq 靜音等待縮短（原 2000ms）
+const VOSK_SILENCE_TIMEOUT_MS = 1200;   // ✅ Vosk 靜音等待縮短（原 2000ms）
+const VOSK_MAX_DURATION_MS = 2000;      // ✅ Vosk 最長錄音時間（強制截斷）
 const WAKE_SOUND_PATH = path.join(__dirname, '/sttwakeupvoice.wav');
 const AWAKE_TIMEOUT_MS = 15000;
 
 const VOSK_SERVER_URL = process.env.VOSK_SERVER_URL || 'http://127.0.0.1:5050';
 
 const WAKE_WORDS = [
-  // 寶寶 系列
   '宝宝', '寶寶', '抱抱', '宝包', '寶包',
-  // 機器鳥 系列
   '機器鳥', '机器鸟',
   '機器牛', '机器牛',
   '機器妞', '机器妞',
@@ -35,6 +35,12 @@ const WAKE_WORDS = [
 
 const CONF_THRESHOLD = 0.6;
 const AVG_CONF_THRESHOLD = 0.5;
+
+// ✅ 並發控制
+const VOSK_MAX_CONCURRENT = 4;   // 同時最多 4 個 Vosk 辨識
+const GROQ_MAX_CONCURRENT = 3;   // 同時最多 3 個 Groq 辨識
+let voskConcurrent = 0;
+let groqConcurrent = 0;
 
 const guildStates = new Map();
 
@@ -194,19 +200,26 @@ async function startSTTListening(connection, guild, textChannel, onTranscribed) 
 }
 
 /**
- * 待機模式：錄音 → 降採樣 → 送 Python Vosk → 信心分數過濾 → 檢查喚醒詞
+ * 待機模式：錄音最多 VOSK_MAX_DURATION_MS → 降採樣 → Vosk → 喚醒詞偵測
  */
 function handleLocalWakeDetection(connection, guild, textChannel, userId, onTranscribed) {
   const guildId = guild.id;
   const state = guildStates.get(guildId);
   if (!state) return;
 
+  // ✅ Vosk 並發限制
+  if (voskConcurrent >= VOSK_MAX_CONCURRENT) {
+    console.log(`[STT] ⚠️ Vosk 並發已滿（${voskConcurrent}），跳過用戶 ${userId}`);
+    return;
+  }
+
   state.activeStreams.add(userId);
+  voskConcurrent++;
 
   const opusStream = connection.receiver.subscribe(userId, {
     end: {
       behavior: EndBehaviorType.AfterSilence,
-      duration: SILENCE_TIMEOUT_MS,
+      duration: VOSK_SILENCE_TIMEOUT_MS,  // ✅ 縮短靜音等待
     },
   });
 
@@ -220,6 +233,7 @@ function handleLocalWakeDetection(connection, guild, textChannel, userId, onTran
 
   const pcmChunks = [];
   const passThrough = new PassThrough();
+  let forceStopped = false;
 
   passThrough.on('data', (chunk) => {
     pcmChunks.push(chunk);
@@ -227,11 +241,27 @@ function handleLocalWakeDetection(connection, guild, textChannel, userId, onTran
 
   opusStream.pipe(opusDecoder).pipe(passThrough);
 
+  // ✅ 強制截斷：超過 VOSK_MAX_DURATION_MS 就停止錄音
+  const forceStopTimer = setTimeout(() => {
+    if (!forceStopped) {
+      forceStopped = true;
+      console.log(`[STT] ✂️ Vosk 強制截斷（用戶：${userId}，超過 ${VOSK_MAX_DURATION_MS}ms）`);
+      opusStream.destroy();
+      passThrough.end();
+    }
+  }, VOSK_MAX_DURATION_MS);
+
   opusStream.on('end', () => {
-    passThrough.end();
+    if (!forceStopped) {
+      clearTimeout(forceStopTimer);
+      passThrough.end();
+    }
   });
 
   passThrough.on('end', async () => {
+    clearTimeout(forceStopTimer);
+    voskConcurrent--;
+
     const currentState = guildStates.get(guildId);
     if (currentState) currentState.activeStreams.delete(userId);
 
@@ -292,6 +322,8 @@ function handleLocalWakeDetection(connection, guild, textChannel, userId, onTran
   });
 
   opusDecoder.on('error', (err) => {
+    clearTimeout(forceStopTimer);
+    voskConcurrent--;
     const currentState = guildStates.get(guildId);
     if (currentState) currentState.activeStreams.delete(userId);
     console.error(`[STT] ❌ Opus 解碼錯誤：${err.message}`);
@@ -299,14 +331,21 @@ function handleLocalWakeDetection(connection, guild, textChannel, userId, onTran
 }
 
 /**
- * 已喚醒模式：錄音送 Groq API 轉錄
+ * 已喚醒模式：錄音送 Groq API 轉錄（靜音等待縮短）
  */
 function handleGroqTranscription(connection, guild, textChannel, userId, onTranscribed) {
   const guildId = guild.id;
   const state = guildStates.get(guildId);
   if (!state) return;
 
+  // ✅ Groq 並發限制
+  if (groqConcurrent >= GROQ_MAX_CONCURRENT) {
+    console.log(`[STT] ⚠️ Groq 並發已滿（${groqConcurrent}），跳過用戶 ${userId}`);
+    return;
+  }
+
   state.activeStreams.add(userId);
+  groqConcurrent++;
 
   const tempDir = path.join(__dirname, '../../temp');
   if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
@@ -323,7 +362,7 @@ function handleGroqTranscription(connection, guild, textChannel, userId, onTrans
   const opusStream = connection.receiver.subscribe(userId, {
     end: {
       behavior: EndBehaviorType.AfterSilence,
-      duration: SILENCE_TIMEOUT_MS,
+      duration: GROQ_SILENCE_TIMEOUT_MS,  // ✅ 縮短靜音等待
     },
   });
 
@@ -351,6 +390,7 @@ function handleGroqTranscription(connection, guild, textChannel, userId, onTrans
     .audioCodec('pcm_s16le')
     .format('wav')
     .on('error', (err) => {
+      groqConcurrent--;
       const currentState = guildStates.get(guildId);
       if (currentState) currentState.activeStreams.delete(userId);
 
@@ -360,6 +400,7 @@ function handleGroqTranscription(connection, guild, textChannel, userId, onTrans
       cleanup(outputPath);
     })
     .on('end', async () => {
+      groqConcurrent--;
       const currentState = guildStates.get(guildId);
       if (currentState) currentState.activeStreams.delete(userId);
 
