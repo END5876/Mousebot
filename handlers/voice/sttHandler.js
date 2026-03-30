@@ -33,8 +33,8 @@ const WAKE_WORDS = [
   '機器鈕', '机器钮',
 ];
 
-const CONF_THRESHOLD = 0.6;
-const AVG_CONF_THRESHOLD = 0.5;
+const CONF_THRESHOLD = 0.3;
+const AVG_CONF_THRESHOLD = 0.3;
 
 // ✅ 並發控制
 const VOSK_MAX_CONCURRENT = 4;   // 同時最多 4 個 Vosk 辨識
