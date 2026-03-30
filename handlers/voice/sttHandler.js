@@ -18,25 +18,17 @@ const SILENCE_TIMEOUT_MS = 2000;
 const WAKE_SOUND_PATH = path.join(__dirname, '/sttwakeupvoice.wav');
 const AWAKE_TIMEOUT_MS = 15000;
 
-// Vosk Python 伺服器位址
 const VOSK_SERVER_URL = process.env.VOSK_SERVER_URL || 'http://127.0.0.1:5050';
 
-// 喚醒詞（Vosk 小模型可能辨識不精準，多加變體）
 const WAKE_WORDS = ['宝宝', '寶寶', '抱抱', '宝包', '寶包'];
 
-// 🆕 信心分數設定
-const CONF_THRESHOLD = 0.6;       // 單字最低信心分數
-const AVG_CONF_THRESHOLD = 0.5;   // 整句平均最低信心分數
+const CONF_THRESHOLD = 0.6;
+const AVG_CONF_THRESHOLD = 0.5;
 
 const guildStates = new Map();
 
 // ====== Vosk 伺服器通訊 ======
 
-/**
- * 將 PCM buffer 送到 Python Vosk 伺服器辨識
- * @param {Buffer} pcmBuffer - 16kHz mono s16le PCM
- * @returns {Promise<{text: string, words: Array, avg_conf: number}>}
- */
 async function recognizeWithVosk(pcmBuffer) {
   return new Promise((resolve, reject) => {
     const form = new FormData();
@@ -64,8 +56,8 @@ async function recognizeWithVosk(pcmBuffer) {
             const json = JSON.parse(data);
             resolve({
               text: json.text || '',
-              words: json.words || [],       // 🆕
-              avg_conf: json.avg_conf ?? 0,  // 🆕
+              words: json.words || [],
+              avg_conf: json.avg_conf ?? 0,
             });
           } catch (e) {
             reject(new Error(`Vosk 回應解析失敗：${data}`));
@@ -84,12 +76,6 @@ async function recognizeWithVosk(pcmBuffer) {
   });
 }
 
-/**
- * 🆕 過濾低信心分數的詞，回傳過濾後的文字
- * @param {Array} words - Vosk words 陣列
- * @param {number} threshold - 單字信心分數門檻
- * @returns {{ filtered: string, dropped: string[] }}
- */
 function filterByConfidence(words, threshold = CONF_THRESHOLD) {
   const passed = [];
   const dropped = [];
@@ -103,15 +89,9 @@ function filterByConfidence(words, threshold = CONF_THRESHOLD) {
     }
   }
 
-  return {
-    filtered: passed.join(''),
-    dropped,
-  };
+  return { filtered: passed.join(''), dropped };
 }
 
-/**
- * 檢查 Vosk 伺服器是否正常
- */
 async function checkVoskHealth() {
   return new Promise((resolve) => {
     const url = new URL(`${VOSK_SERVER_URL}/health`);
@@ -177,18 +157,15 @@ async function startSTTListening(connection, guild, textChannel, onTranscribed) 
 
   console.log(`[STT] Vosk 伺服器連線正常 ✅`);
 
-  guildStates.set(guildId, {
-    listening: true,
-    activeUserId: null,
-    connection,
-    awakeTimer: null,
-  });
-
-  console.log(`[STT] 開始監聽 Guild: ${guild.name}（Vosk Python 微服務）`);
-
-  connection.receiver.speaking.on('start', (userId) => {
+  const speakingHandler = (userId) => {
     const state = guildStates.get(guildId);
     if (!state?.listening) return;
+
+    // ✅ 防止同一 userId 重複訂閱
+    if (state.activeStreams.has(userId)) {
+      console.log(`[STT] 用戶 ${userId} 已在錄音中，跳過`);
+      return;
+    }
 
     if (state.activeUserId && state.activeUserId !== userId) return;
 
@@ -197,7 +174,23 @@ async function startSTTListening(connection, guild, textChannel, onTranscribed) 
     } else if (state.activeUserId === userId) {
       handleGroqTranscription(connection, guild, textChannel, userId, onTranscribed);
     }
+  };
+
+  guildStates.set(guildId, {
+    listening: true,
+    activeUserId: null,
+    activeStreams: new Set(), // ✅ 追蹤正在錄音的 userId
+    connection,
+    awakeTimer: null,
+    speakingHandler,
   });
+
+  // ✅ 提高 receiver 的 listener 上限（15人場景）
+  connection.receiver.speaking.setMaxListeners(30);
+
+  console.log(`[STT] 開始監聽 Guild: ${guild.name}（Vosk Python 微服務）`);
+
+  connection.receiver.speaking.on('start', speakingHandler);
 }
 
 /**
@@ -205,8 +198,12 @@ async function startSTTListening(connection, guild, textChannel, onTranscribed) 
  */
 function handleLocalWakeDetection(connection, guild, textChannel, userId, onTranscribed) {
   const guildId = guild.id;
+  const state = guildStates.get(guildId);
+  if (!state) return;
 
-  console.log(`[STT] [Vosk] 監聽用戶 ${userId} 的喚醒詞...`);
+  // ✅ 加鎖：標記此 userId 正在錄音
+  state.activeStreams.add(userId);
+  console.log(`[STT] [Vosk] 監聽用戶 ${userId} 的喚醒詞... (activeStreams: ${state.activeStreams.size})`);
 
   const opusStream = connection.receiver.subscribe(userId, {
     end: {
@@ -214,6 +211,9 @@ function handleLocalWakeDetection(connection, guild, textChannel, userId, onTran
       duration: SILENCE_TIMEOUT_MS,
     },
   });
+
+  // ✅ 提高單一 stream 的 listener 上限
+  opusStream.setMaxListeners(20);
 
   const opusDecoder = new prism.opus.Decoder({
     rate: 48000,
@@ -235,6 +235,11 @@ function handleLocalWakeDetection(connection, guild, textChannel, userId, onTran
   });
 
   passThrough.on('end', async () => {
+    // ✅ 解鎖：錄音結束，釋放此 userId
+    const currentState = guildStates.get(guildId);
+    if (currentState) currentState.activeStreams.delete(userId);
+    console.log(`[STT] [Vosk] 用戶 ${userId} 錄音結束，釋放鎖`);
+
     const fullBuffer = Buffer.concat(pcmChunks);
 
     if (fullBuffer.length < 1000) {
@@ -245,7 +250,6 @@ function handleLocalWakeDetection(connection, guild, textChannel, userId, onTran
     const monoBuffer = downsampleTo16kMono(fullBuffer, 48000, 2);
 
     try {
-      // 🆕 解構取得 words 和 avg_conf
       const { text: rawText, words, avg_conf } = await recognizeWithVosk(monoBuffer);
 
       if (!rawText) {
@@ -253,13 +257,11 @@ function handleLocalWakeDetection(connection, guild, textChannel, userId, onTran
         return;
       }
 
-      // 🆕 平均信心分數檢查
       if (avg_conf < AVG_CONF_THRESHOLD) {
         console.log(`[STT] [Vosk] 用戶 ${userId} 平均信心分數過低（${avg_conf.toFixed(2)} < ${AVG_CONF_THRESHOLD}），忽略`);
         return;
       }
 
-      // 🆕 過濾低信心單字
       const { filtered: recognizedText, dropped } = filterByConfidence(words);
 
       if (dropped.length > 0) {
@@ -273,7 +275,6 @@ function handleLocalWakeDetection(connection, guild, textChannel, userId, onTran
         return;
       }
 
-      // 檢查喚醒詞（同時比對原始和過濾後）
       const wakeDetected =
         WAKE_WORDS.some((word) => recognizedText.includes(word)) ||
         WAKE_WORDS.some((word) => rawText.includes(word));
@@ -312,6 +313,9 @@ function handleLocalWakeDetection(connection, guild, textChannel, userId, onTran
   });
 
   opusDecoder.on('error', (err) => {
+    // ✅ 解碼錯誤時也要釋放鎖
+    const currentState = guildStates.get(guildId);
+    if (currentState) currentState.activeStreams.delete(userId);
     console.error(`[STT] Opus 解碼錯誤：${err.message}`);
   });
 }
@@ -321,13 +325,17 @@ function handleLocalWakeDetection(connection, guild, textChannel, userId, onTran
  */
 function handleGroqTranscription(connection, guild, textChannel, userId, onTranscribed) {
   const guildId = guild.id;
-  const tempDir = path.join(__dirname, '../../temp');
+  const state = guildStates.get(guildId);
+  if (!state) return;
 
+  // ✅ 加鎖
+  state.activeStreams.add(userId);
+
+  const tempDir = path.join(__dirname, '../../temp');
   if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
   const outputPath = path.join(tempDir, `stt_${guildId}_${userId}_${Date.now()}.wav`);
 
-  const state = guildStates.get(guildId);
   if (state?.awakeTimer) {
     clearTimeout(state.awakeTimer);
     state.awakeTimer = null;
@@ -341,6 +349,9 @@ function handleGroqTranscription(connection, guild, textChannel, userId, onTrans
       duration: SILENCE_TIMEOUT_MS,
     },
   });
+
+  // ✅ 提高單一 stream 的 listener 上限
+  opusStream.setMaxListeners(20);
 
   const opusDecoder = new prism.opus.Decoder({
     rate: 48000,
@@ -364,12 +375,20 @@ function handleGroqTranscription(connection, guild, textChannel, userId, onTrans
     .audioCodec('pcm_s16le')
     .format('wav')
     .on('error', (err) => {
+      // ✅ 解鎖
+      const currentState = guildStates.get(guildId);
+      if (currentState) currentState.activeStreams.delete(userId);
+
       if (!err.message.includes('SIGKILL') && !err.message.includes('ffmpeg was killed')) {
         console.error(`[STT] ffmpeg 錯誤：${err.message}`);
       }
       cleanup(outputPath);
     })
     .on('end', async () => {
+      // ✅ 解鎖
+      const currentState = guildStates.get(guildId);
+      if (currentState) currentState.activeStreams.delete(userId);
+
       console.log(`[STT] ffmpeg 轉換完成，共收到 ${receivedBytes} bytes`);
       await processAudioWithGroq(outputPath, guild, textChannel, userId, onTranscribed);
     })
@@ -380,6 +399,9 @@ function handleGroqTranscription(connection, guild, textChannel, userId, onTrans
   });
 
   opusDecoder.on('error', (err) => {
+    // ✅ 解鎖
+    const currentState = guildStates.get(guildId);
+    if (currentState) currentState.activeStreams.delete(userId);
     console.error(`[STT] Opus 解碼錯誤：${err.message}`);
   });
 }
@@ -486,7 +508,15 @@ function downsampleTo16kMono(buffer, inputRate, inputChannels) {
 
 function stopSTTListening(guildId) {
   const state = guildStates.get(guildId);
-  if (state?.awakeTimer) clearTimeout(state.awakeTimer);
+  if (!state) return;
+
+  if (state.speakingHandler && state.connection) {
+    state.connection.receiver.speaking.off('start', state.speakingHandler);
+    console.log(`[STT] 已移除 speaking 監聽器 (Guild: ${guildId})`);
+  }
+
+  if (state.awakeTimer) clearTimeout(state.awakeTimer);
+
   guildStates.delete(guildId);
   console.log(`[STT] 停止監聽 Guild: ${guildId}`);
 }
