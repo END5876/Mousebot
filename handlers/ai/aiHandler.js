@@ -400,4 +400,4 @@ function splitMessage(text, maxLength = 1900) {
     return chunks;
 }
 
-module.exports = { setupAICommands };
+module.exports = { setupAICommands, getGeminiResponse };
