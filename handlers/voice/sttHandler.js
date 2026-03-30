@@ -14,16 +14,16 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // ====== 設定 ======
-const GROQ_SILENCE_TIMEOUT_MS = 800;    // ✅ Groq 靜音等待縮短（原 2000ms）
-const VOSK_SILENCE_TIMEOUT_MS = 1200;   // ✅ Vosk 靜音等待縮短（原 2000ms）
-const VOSK_MAX_DURATION_MS = 2000;      // ✅ Vosk 最長錄音時間（強制截斷）
+const GROQ_SILENCE_TIMEOUT_MS = 800;    //  Groq 靜音等待
+const VOSK_SILENCE_TIMEOUT_MS = 800;   //  Vosk 靜音等待
+const VOSK_MAX_DURATION_MS = 1000;      //  Vosk 最長錄音時間
 const WAKE_SOUND_PATH = path.join(__dirname, '/sttwakeupvoice.wav');
-const AWAKE_TIMEOUT_MS = 15000;
+const AWAKE_TIMEOUT_MS = 5000;
 
 const VOSK_SERVER_URL = process.env.VOSK_SERVER_URL || 'http://127.0.0.1:5050';
 
 const WAKE_WORDS = [
-  '宝宝', '寶寶', '抱抱', '宝包', '寶包',
+  '宝宝', '寶寶', '抱抱', '宝包', '寶包', '包包', '寶貝', '儀器', '仪器', '豆包',
   '機器鳥', '机器鸟',
   '機器牛', '机器牛',
   '機器妞', '机器妞',
