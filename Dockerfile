@@ -1,4 +1,4 @@
-FROM node:18-slim
+FROM node:22-slim
 
 # 安裝系統依賴
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -37,9 +37,6 @@ RUN mkdir -p /app/models && \
     wget -q https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip -O /tmp/vosk-model.zip && \
     unzip -q /tmp/vosk-model.zip -d /app/models && \
     rm /tmp/vosk-model.zip
-
-# 移除編譯工具（省空間）
-RUN apt-get purge -y make g++ && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 # 直接在 Dockerfile 內生成 supervisord.conf
 RUN mkdir -p /etc/supervisor/conf.d && printf '\
@@ -80,7 +77,12 @@ environment=VOSK_SERVER_URL="http://127.0.0.1:5050"\n\
 
 # 複製 package 檔案並安裝
 COPY package*.json ./
-RUN npm ci --only=production
+
+# make/g++ 留著給 npm ci 編譯原生模組用，裝完再移除
+RUN npm ci --omit=dev
+
+# 移除編譯工具（省空間）
+RUN apt-get purge -y make g++ && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 # 複製專案檔案
 COPY . .
