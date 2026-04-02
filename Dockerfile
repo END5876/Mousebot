@@ -23,11 +23,12 @@ ENV PATH="/opt/oww-env/bin:$PATH"
 COPY oww-server/requirements.txt /tmp/oww-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/oww-requirements.txt
 
-# ── 驗證安裝 ────────────────────────────────────────────
+# ── 驗證安裝 + 預先下載 OWW 內建資源模型 ────────────────
 RUN python3 -c "import openwakeword; print('OWW OK')" && \
     python3 -c "import flask; print('Flask OK')" && \
     python3 -c "import websockets; print('Websockets OK')" && \
-    ffmpeg -version | head -1
+    ffmpeg -version | head -1 && \
+    python3 -c "from openwakeword.utils import download_models; download_models(); print('OWW models OK')"
 
 # ── 工作目錄 ────────────────────────────────────────────
 WORKDIR /app
