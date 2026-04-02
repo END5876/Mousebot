@@ -19,6 +19,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python3 -m venv /opt/oww-env
 ENV PATH="/opt/oww-env/bin:$PATH"
 
+RUN pip install --no-cache-dir -r /tmp/oww-requirements.txt && \
+    pip install --no-cache-dir edge-tts yt-dlp
+
 # ── 安裝 OWW 相關 Python 套件 ───────────────────────────
 COPY oww-server/requirements.txt /tmp/oww-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/oww-requirements.txt
