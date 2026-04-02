@@ -1,0 +1,16 @@
+# OWW 核心
+openwakeword==0.6.0
+
+# Web server
+flask==3.1.0
+websockets==13.1
+
+# 數值運算
+numpy==1.26.4
+
+# ONNX 推理引擎（OWW 依賴）
+onnxruntime==1.20.1
+
+# 音訊處理（OWW 依賴）
+librosa==0.10.2
+soundfile==0.12.1
