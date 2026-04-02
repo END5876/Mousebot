@@ -447,7 +447,7 @@ function setupTTSCommands(client) {
     }
 
     // ── !m <文字> → TTS ───────────────────────────────────
-    if (content.startsWith(`${PREFIX}ms `)) {
+    if (content.startsWith(`${PREFIX}m `)) {
       const text = content.slice(`${PREFIX}m `.length).trim();
       if (!text) return message.reply(`❌ 用法：\`${PREFIX}m 你好\``);
       if (text.length > TTS_MAX_LENGTH) {
