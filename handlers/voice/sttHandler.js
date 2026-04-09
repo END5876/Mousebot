@@ -230,7 +230,18 @@ function subscribeUser(guildId, userId, member) {
 
     if (now < state.cooldownUntil) return;
 
-    sendPCMToOWW(state, chunk);
+    // 發言者鎖定機制：防止多人同時發言導致 PCM 交錯
+    if (!state.currentSpeaker || state.currentSpeaker === userId) {
+      state.currentSpeaker = userId;
+      
+      if (state.speakerTimeout) clearTimeout(state.speakerTimeout);
+      // 如果該使用者 500ms 沒發出聲音，就釋放麥克風鎖定
+      state.speakerTimeout = setTimeout(() => {
+        if (state.active) state.currentSpeaker = null;
+      }, 500);
+
+      sendPCMToOWW(state, chunk);
+    }
   });
 
   pcmStream.on('error', (err) => {
@@ -285,10 +296,15 @@ async function handleWakeup(guildId, userId, member) {
   const { connection, textChannel, onWakeup } = state;
 
   for (const rs of state.receivers.values()) rs.recordChunks = [];
+  
+  // 清空待發送的舊音訊，避免冷卻結束後發送導致重複喚醒
+  state.pendingChunks = [];
+  
   state.isRecording = true;
 
   playWakeupSound(connection).catch(() => {});
-  textChannel.send(`🐦 **氣鳥** 已喚醒，請說出您的指令...`).catch(() => {});
+  const wakeupName = member?.displayName || '使用者';
+  textChannel.send(`🎙️ "**${wakeupName}**" 說吧，我在聽`).catch(() => {});
 
   // 等待錄製結束
   await new Promise((resolve) => {
@@ -370,8 +386,9 @@ async function handleWakeup(guildId, userId, member) {
   }
 
   const speakerMember = state.guild.members.cache.get(bestUserId);
+  const finalName = speakerMember?.displayName || '使用者';
   await textChannel.send(
-    `🎙️ **${speakerMember?.displayName || '使用者'}**：${text}`
+    `🗣️ "**${finalName}**" ：${text}`
   ).catch(() => {});
 
   try {
@@ -401,6 +418,8 @@ function startSTTListening(connection, guild, textChannel, onWakeup) {
     owwWs:         null,
     owwReady:      false,
     pendingChunks: [],
+    currentSpeaker: null,  // 當前鎖定的發言者
+    speakerTimeout: null,  // 釋放鎖定的計時器
   };
   guildStates.set(guild.id, state);
 
@@ -431,6 +450,7 @@ function stopSTTListening(guildId) {
 
   state.active = false;
   if (state.recordTimer) clearTimeout(state.recordTimer);
+  if (state.speakerTimeout) clearTimeout(state.speakerTimeout); // 清除發言者鎖定計時器
 
   if (state.owwWs) {
     try { state.owwWs.close(); } catch {}
