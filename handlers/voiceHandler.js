@@ -156,7 +156,7 @@ function setupVoiceCommands(client) {
         async (userId, member, text, channel) => {
           try {
             const aiReply = await getGeminiResponse(userId, text);
-            await channel.send(`🤖 **氣鳥**：${aiReply}`);
+            await channel.send(`🤖 **機器鳥**：${aiReply}`);
 
             const result = await playTTS(message.guild.id, aiReply);
             if (!result.success) {

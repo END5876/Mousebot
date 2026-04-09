@@ -125,11 +125,11 @@ async function resolveSoVITSHost() {
 
 // ── edge-tts fallback 語音設定 ────────────────────────────
 const VOICE_MAP = {
-  zh: 'zh-CN-shaanxi-XiaoniNeural',
-  en: 'zh-CN-shaanxi-XiaoniNeural',
+  zh: 'zh-TW-YunJheNeural',
+  en: 'zh-TW-YunJheNeural',
   ja: 'ja-JP-KeitaNeural',
 };
-const DEFAULT_VOICE = 'zh-CN-shaanxi-XiaoniNeural';
+const DEFAULT_VOICE = 'zh-TW-YunJheNeural';
 
 function detectLanguage(text) {
   if (/[\u3040-\u309F\u30A0-\u30FF]/.test(text)) return 'ja';
@@ -257,7 +257,8 @@ async function generateSoVITS(text, filename, guildId) {
 function generateEdgeTTS(text, filename, voice) {
   return new Promise((resolve, reject) => {
     const proc = spawn('edge-tts', [
-      '--voice', voice, '--text', text, '--write-media', filename
+      '--voice', voice, '--text', text, '--write-media', filename,
+      '--rate', '+10%'
     ]);
     proc.on('close', (code) => {
       if (code === 0) resolve();
