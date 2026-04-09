@@ -56,7 +56,7 @@ stdout_logfile=/dev/stdout\n\
 stdout_logfile_maxbytes=0\n\
 stderr_logfile=/dev/stderr\n\
 stderr_logfile_maxbytes=0\n\
-environment=OWW_MODEL_PATH="/app/oww-server/models/ji_qi_niao.onnx",OWW_THRESHOLD="0.1",OWW_PORT="5051",OWW_WS_PORT="5052"\n\
+environment=OWW_MODEL_PATH="/app/oww-server/models/hey_ji_qi_niao.onnx",OWW_PORT="5051",OWW_WS_PORT="5052",OWW_PROB_THRESHOLD="0.9",OWW_MIN_CONSECUTIVE="2",OWW_COOLDOWN_SEC="1.2"\n\
 \n\
 [program:node-bot]\n\
 command=node /app/index.js\n\
