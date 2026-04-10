@@ -155,11 +155,9 @@ function setupVoiceCommands(client) {
         sttTextChannel,
         async (userId, member, text, channel) => {
           try {
-            // 1. AI 思考
             const aiReply = await getGeminiResponse(userId, text);
-            await channel.send(`🤖 **氣鳥**：${aiReply}`);
+            await channel.send(`🤖 **機器鳥**：${aiReply}`);
 
-            // 2. TTS 發聲 (假設 playTTS 會等待播放完畢才 resolve)
             const result = await playTTS(message.guild.id, aiReply);
             if (!result.success) {
               console.warn(`[STT] TTS 失敗：${result.reason}`);
@@ -167,9 +165,6 @@ function setupVoiceCommands(client) {
           } catch (err) {
             console.error('[STT Callback] 錯誤：', err.message);
             await channel.send(`❌ 處理語音指令時發生錯誤`);
-          } finally {
-            // 3. 【關鍵】：無論成功或失敗，最後一定要解除鎖定！
-            releaseSTTLock(message.guild.id);
           }
         }
       );
