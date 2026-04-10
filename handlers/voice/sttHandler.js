@@ -7,15 +7,15 @@ const WebSocket = require('ws');
 const Groq  = require('groq-sdk');
 
 // ── 設定 ────────────────────────────────────────────────
-const OWW_WS_URL         = process.env.OWW_WS_URL            || 'ws://localhost:5052';
-const OWW_THRESHOLD      = parseFloat(process.env.OWW_THRESHOLD) || 0.05;
+const OWW_WS_URL         = process.env.OWW_WS_URL;
+const OWW_THRESHOLD      = parseFloat(process.env.OWW_THRESHOLD);
 
 const WAKEUP_VOICE_PATH  = path.join(__dirname, 'sttwakeupvoice.wav');
 const TEMP_DIR           = path.join(__dirname, '../../temp');
 
-const RECORD_DURATION_MS = parseInt(process.env.STT_RECORD_MS)       || 5000;
-const WAKEUP_COOLDOWN_MS = parseInt(process.env.STT_COOLDOWN_MS)     || 8000;
-const RMS_THRESHOLD      = parseFloat(process.env.STT_RMS_THRESHOLD) || 200;
+const RECORD_DURATION_MS = parseInt(process.env.STT_RECORD_MS);
+const WAKEUP_COOLDOWN_MS = parseInt(process.env.STT_COOLDOWN_MS);
+const RMS_THRESHOLD      = parseFloat(process.env.STT_RMS_THRESHOLD);
 
 // ── Groq 客戶端 ─────────────────────────────────────────
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -102,50 +102,37 @@ function createOWWConnection(guildId) {
     state.owwReady = true;
   });
 
-  ws.on('message', (data) => {
+    ws.on('message', (data) => {
     if (!state.active) return;
 
     let msg;
     try { msg = JSON.parse(data.toString()); }
     catch { return; }
 
-    if (msg.event === 'reset_ok') {
-      console.log('[STT] ✅ OWW reset 確認');
-      return;
-    }
+    if (msg.event === 'detected') {
+      const triggerUserId = msg.userId;
 
-    if (msg.detected) {
-      const now = Date.now();
-      if (now < state.cooldownUntil || state.isRecording) return;
+      // 【關鍵邏輯】：如果系統已經在錄音，或已經鎖定某人，則忽略其他人的喚醒
+      if (state.isRecording || state.lockedUserId) return;
 
-      console.log(`[STT] ✅ 喚醒詞觸發，分數：${msg.score}`);
+      console.log(`[STT] ✅ 喚醒詞觸發，使用者：${triggerUserId}，分數：${msg.score}`);
 
-      // 設定冷卻（Python 端已自動進入靜默，Node 端這裡控制何時解除）
-      state.cooldownUntil = now + WAKEUP_COOLDOWN_MS;
+      // 鎖定該使用者
+      state.lockedUserId = triggerUserId;
+      state.isRecording = true;
 
-      // 找出最近說話的使用者
-      let triggerUserId = null;
-      let triggerMember = null;
-      let latestActivity = 0;
-
-      for (const [uid, rs] of state.receivers.entries()) {
-        if (rs.lastActiveTime > latestActivity) {
-          latestActivity = rs.lastActiveTime;
-          triggerUserId  = uid;
-          triggerMember  = rs.member;
-        }
-      }
-
-      if (!triggerUserId) {
-        const first = state.receivers.entries().next().value;
-        if (first) { triggerUserId = first[0]; triggerMember = first[1].member; }
-      }
+      const receiver = state.receivers.get(triggerUserId);
+      const triggerMember = receiver ? receiver.member : null;
 
       handleWakeup(guildId, triggerUserId, triggerMember).catch((err) => {
         console.error('[STT] handleWakeup 錯誤:', err.message);
+        // 發生錯誤時提早解鎖
+        state.lockedUserId = null;
+        state.isRecording = false;
       });
     }
   });
+
 
   ws.on('close', () => {
     console.warn(`[STT] ⚠️ OWW WebSocket 斷線 (Guild: ${guildId})`);
@@ -170,9 +157,17 @@ function createOWWConnection(guildId) {
 // 即時送出 PCM 到 OWW
 // ══════════════════════════════════════════════════════════
 
-function sendPCMToOWW(state, chunk) {
-  // 冷卻中或錄音中，完全不送 PCM
-  if (state.isRecording || Date.now() < state.cooldownUntil) return;
+function sendPCMToOWW(state, userId, chunk) {
+  if (!state.owwReady || !state.owwWs || state.owwWs.readyState !== WebSocket.OPEN) {
+    return; // 簡化處理，未連線時直接丟棄，避免記憶體堆積
+  }
+
+  const base64Data = chunk.toString('base64');
+  state.owwWs.send(JSON.stringify({
+    event: 'audio',
+    userId: userId,
+    data: base64Data
+  }));
 
   if (!state.owwReady || !state.owwWs || state.owwWs.readyState !== WebSocket.OPEN) {
     state.pendingChunks.push(chunk);
@@ -217,32 +212,31 @@ function subscribeUser(guildId, userId, member) {
   );
   receiverState.stream = pcmStream;
 
-  pcmStream.on('data', (chunk) => {
+    pcmStream.on('data', (chunk) => {
     if (!state.active) return;
+
+    // 【排他鎖】：如果已經鎖定某人，且說話的不是被鎖定的人，直接丟棄音訊 (不錄音也不送喚醒)
+    if (state.lockedUserId && state.lockedUserId !== userId) {
+      return; 
+    }
 
     const now = Date.now();
     receiverState.lastActiveTime = now;
 
     if (state.isRecording) {
-      receiverState.recordChunks.push(chunk);
+      // 只有被鎖定的人的聲音會被錄下來
+      if (state.lockedUserId === userId) {
+        receiverState.recordChunks.push(chunk);
+      }
       return;
     }
 
     if (now < state.cooldownUntil) return;
 
-    // 發言者鎖定機制：防止多人同時發言導致 PCM 交錯
-    if (!state.currentSpeaker || state.currentSpeaker === userId) {
-      state.currentSpeaker = userId;
-      
-      if (state.speakerTimeout) clearTimeout(state.speakerTimeout);
-      // 如果該使用者 500ms 沒發出聲音，就釋放麥克風鎖定
-      state.speakerTimeout = setTimeout(() => {
-        if (state.active) state.currentSpeaker = null;
-      }, 500);
-
-      sendPCMToOWW(state, chunk);
-    }
+    // 傳送給 OWW 時帶上 userId
+    sendPCMToOWW(state, userId, chunk);
   });
+
 
   pcmStream.on('error', (err) => {
     console.error(`[STT] PCM stream 錯誤 [${userId}]:`, err.message);
@@ -275,6 +269,22 @@ function playWakeupSound(connection) {
     }
   });
 }
+
+function releaseSTTLock(guildId) {
+  const state = guildStates.get(guildId);
+  if (state) {
+    state.lockedUserId = null;
+    state.isRecording = false;
+    state.cooldownUntil = Date.now() + 1000; // 給 1 秒的緩衝冷卻
+    console.log(`[STT] 🔓 已解除鎖定，恢復監聽所有人 (Guild: ${guildId})`);
+  }
+}
+
+module.exports = {
+  startSTTListening,
+  stopSTTListening,
+  releaseSTTLock // 匯出這個新函式
+};
 
 // ── Groq 轉文字 ──────────────────────────────────────────
 async function transcribeWithGroq(wavFilePath) {

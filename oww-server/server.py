@@ -9,6 +9,7 @@ import websockets
 import json
 import math
 import time
+import base64
 from pathlib import Path
 from typing import Dict, Any
 
@@ -235,124 +236,58 @@ def detect():
 # =========================================================
 async def ws_handler(websocket, path=None):
     peer = websocket.remote_address
-    print(f"[OWW-WS] 新連線: {peer}")
-
-    remainder_buf = bytearray()
-    silenced = False
-    consecutive_hits = 0
-    last_trigger_ts = 0.0
-
-    # 連線建立時先 reset
-    with model_lock:
-        reset_model_state()
+    print(f"[OWW-WS] 新連線：{peer}")
 
     try:
         async for message in websocket:
-            # -----------------------------
-            # Text command
-            # -----------------------------
+            # 改為接收 JSON 格式
             if isinstance(message, str):
-                cmd = message.strip().lower()
+                try:
+                    data = json.loads(message)
+                    event = data.get("event")
+                    user_id = data.get("userId", "default")
 
-                if cmd == "reset":
-                    with model_lock:
-                        reset_model_state()
-                    remainder_buf.clear()
-                    silenced = False
-                    consecutive_hits = 0
-                    await websocket.send(json.dumps({"event": "reset_ok"}))
-                    print("[OWW-WS] 🔄 reset 完成，恢復偵測")
-                    continue
+                    if event == "reset":
+                        # 這裡可以實作針對單一 user_id 的 reset，或簡單略過
+                        await websocket.send(json.dumps({"event": "reset_ok", "userId": user_id}))
 
-                if cmd == "ping":
-                    await websocket.send(json.dumps({"event": "pong"}))
-                    continue
+                    elif event == "audio":
+                        # 解碼 Base64 音訊
+                        pcm_bytes = base64.b64decode(data.get("data"))
+                        audio_np = np.frombuffer(pcm_bytes, dtype=np.int16)
+                        
+                        total_samples = len(audio_np)
+                        if total_samples < CHUNK_SIZE:
+                            continue
+                            
+                        num_chunks = total_samples // CHUNK_SIZE
+                        max_score = 0.0
+                        detected = False
 
-                await websocket.send(json.dumps({"event": "unknown_command", "command": cmd}))
-                continue
+                        with model_lock:
+                            for i in range(num_chunks):
+                                chunk = audio_np[i * CHUNK_SIZE:(i + 1) * CHUNK_SIZE]
+                                # 【關鍵】：傳入 stream_name=user_id，讓模型隔離 15 人的音訊
+                                prediction = oww_model.predict(chunk, stream_name=user_id)
+                                
+                                for _, score in prediction.items():
+                                    score_val = float(score)
+                                    if score_val > max_score:
+                                        max_score = score_val
+                                    if score_val >= THRESHOLD:
+                                        detected = True
 
-            # -----------------------------
-            # Binary PCM
-            # -----------------------------
-            if silenced:
-                # 靜默期間丟棄音訊，等待 reset
-                continue
-
-            remainder_buf.extend(message)
-            if len(remainder_buf) < CHUNK_BYTES:
-                continue
-
-            usable = (len(remainder_buf) // CHUNK_BYTES) * CHUNK_BYTES
-            pcm = bytes(remainder_buf[:usable])
-            del remainder_buf[:usable]
-
-            audio_np = np.frombuffer(pcm, dtype=np.int16)
-            num_chunks = len(audio_np) // CHUNK_SIZE
-
-            raw_max = float("-inf")
-            prob_max = 0.0
-            detected = False
-
-            with model_lock:
-                for i in range(num_chunks):
-                    chunk = audio_np[i * CHUNK_SIZE:(i + 1) * CHUNK_SIZE]
-                    pred = oww_model.predict(chunk)
-                    raw = float(pred.get(TARGET_NAME, 0.0))
-                    prob = sigmoid(raw)
-
-                    if raw > raw_max:
-                        raw_max = raw
-                    if prob > prob_max:
-                        prob_max = prob
-
-                    if prob > PROB_THRESHOLD:
-                        consecutive_hits += 1
-                    else:
-                        consecutive_hits = 0
-
-                    now = time.time()
-                    cooldown_ok = (now - last_trigger_ts) >= COOLDOWN_SEC
-                    if consecutive_hits >= MIN_CONSECUTIVE and cooldown_ok:
-                        detected = True
-                        last_trigger_ts = now
-                        break
-
-            if raw_max == float("-inf"):
-                raw_max = 0.0
-
-            # 回傳結果（可觀測）
-            payload = {
-                "event": "inference",
-                "detected": detected,
-                "raw_score": round(raw_max, 6),
-                "prob_score": round(prob_max, 6),
-                "threshold_prob": PROB_THRESHOLD,
-                "chunks": num_chunks,
-                "consecutive_hits": consecutive_hits,
-                "silenced": silenced
-            }
-
-            # 降低噪音：沒 debug 時，只在 detected 才送
-            if DEBUG_SCORE or detected:
-                await websocket.send(json.dumps(payload))
-
-            if detected:
-                print(f"[OWW-WS] ✅ 偵測到喚醒詞 raw={raw_max:.4f} prob={prob_max:.4f}")
-                # 進入靜默，等待上游送 reset
-                silenced = True
-                remainder_buf.clear()
-                consecutive_hits = 0
-                with model_lock:
-                    reset_model_state()
-                await websocket.send(json.dumps({"event": "detected_and_silenced"}))
-                print("[OWW-WS] 🔇 已進入靜默期，等待 reset")
-
+                        if detected:
+                            # 觸發時，明確回傳是「誰」觸發的
+                            await websocket.send(json.dumps({
+                                "event": "detected",
+                                "userId": user_id,
+                                "score": round(max_score, 4)
+                            }))
+                except Exception as e:
+                    print(f"[OWW-WS] 處理訊息錯誤: {e}")
     except websockets.exceptions.ConnectionClosed:
-        pass
-    except Exception as e:
-        print(f"[OWW-WS] 錯誤: {e}")
-    finally:
-        print(f"[OWW-WS] 連線關閉: {peer}")
+        print(f"[OWW-WS] 連線關閉：{peer}")
 
 # =========================================================
 # Run
