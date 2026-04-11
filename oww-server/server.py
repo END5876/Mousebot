@@ -1,4 +1,4 @@
-# server.py
+# server.py — Multi-Session OWW Server
 from flask import Flask, request, jsonify
 import numpy as np
 from openwakeword.model import Model
@@ -11,29 +11,27 @@ import math
 import time
 from pathlib import Path
 from typing import Dict, Any
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # =========================================================
-# Config
+# Config — 純環境變數，無預設值
 # =========================================================
 BASE_DIR = Path(__file__).resolve().parent
 
-MODEL_PATH = Path(os.environ.get("OWW_MODEL_PATH", str(BASE_DIR / "models" / "hey_ji_qi_niao.onnx")))
-HTTP_PORT = int(os.environ.get("OWW_PORT", "5051"))
-WS_PORT = int(os.environ.get("OWW_WS_PORT", "5052"))
+MODEL_PATH     = Path(os.environ["OWW_MODEL_PATH"])
+HTTP_PORT      = int(os.environ["OWW_PORT"])
+WS_PORT        = int(os.environ["OWW_WS_PORT"])
+CHUNK_SIZE     = int(os.environ["OWW_CHUNK_SIZE"])
+PROB_THRESHOLD = float(os.environ["OWW_PROB_THRESHOLD"])
+MIN_CONSECUTIVE = int(os.environ["OWW_MIN_CONSECUTIVE"])
+COOLDOWN_SEC   = float(os.environ["OWW_COOLDOWN_SEC"])
+MAX_SESSIONS   = int(os.environ["OWW_MAX_SESSIONS"])
+DEBUG_SCORE    = os.environ["OWW_DEBUG_SCORE"] == "1"
 
 SAMPLE_RATE = 16000
-CHUNK_SIZE = int(os.environ.get("OWW_CHUNK_SIZE", "1280"))  # 80ms @ 16kHz
 CHUNK_BYTES = CHUNK_SIZE * 2  # int16 => 2 bytes/sample
-
-# 你指定的觸發條件
-PROB_THRESHOLD = float(os.environ.get("OWW_PROB_THRESHOLD", "0.9"))  # prob > 0.9 trigger
-
-# 改善穩定度
-MIN_CONSECUTIVE = int(os.environ.get("OWW_MIN_CONSECUTIVE", "2"))
-COOLDOWN_SEC = float(os.environ.get("OWW_COOLDOWN_SEC", "1.2"))
-
-# 是否回傳 debug 資訊
-DEBUG_SCORE = os.environ.get("OWW_DEBUG_SCORE", "1") == "1"
 
 app = Flask(__name__)
 
@@ -41,7 +39,6 @@ app = Flask(__name__)
 # Utilities
 # =========================================================
 def sigmoid(x: float) -> float:
-    # 避免 overflow
     if x >= 0:
         z = math.exp(-x)
         return 1.0 / (1.0 + z)
@@ -52,113 +49,144 @@ def sigmoid(x: float) -> float:
 def check_model_files(model_path: Path):
     if not model_path.exists():
         raise FileNotFoundError(f"[OWW] 找不到模型檔: {model_path}")
-
-    # ONNX external data 常見命名：xxx.onnx.data
     ext_data_path = Path(str(model_path) + ".data")
     if ext_data_path.exists():
         print(f"[OWW] 找到外部權重檔: {ext_data_path}")
     else:
-        # 不一定每個模型都需要 .data，僅提醒
         print(f"[OWW] 提示: 未找到 {ext_data_path.name}（若模型為單檔 ONNX 可忽略）")
 
-def build_response(
-    detected: bool,
-    raw_max: float,
-    prob_max: float,
-    chunks: int,
-    duration_ms: float,
-    consecutive: int = 0,
-    silenced: bool = False,
-    error: str = ""
-) -> Dict[str, Any]:
-    return {
-        "detected": bool(detected),
-        "raw_score": round(float(raw_max), 6),
-        "prob_score": round(float(prob_max), 6),
-        "threshold_prob": PROB_THRESHOLD,
-        "chunks": int(chunks),
-        "duration_ms": round(float(duration_ms), 2),
-        "consecutive_hits": int(consecutive),
-        "silenced": bool(silenced),
-        "error": error
-    }
+# =========================================================
+# Per-Session Model Manager
+# =========================================================
+class OWWSession:
+    """每個使用者一個獨立的 OWW 模型實例，擁有獨立的狀態"""
+
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self.model = Model(
+            wakeword_models=[str(MODEL_PATH)],
+            inference_framework="onnx"
+        )
+        self.model_names = list(self.model.models.keys())
+        self.target_name = self.model_names[0] if self.model_names else ""
+        self.lock = threading.Lock()
+        self.consecutive_hits = 0
+        self.last_trigger_ts = 0.0
+        self.paused = False
+        self.created_at = time.time()
+        self.last_active = time.time()
+
+    def reset(self):
+        with self.lock:
+            self.consecutive_hits = 0
+            try:
+                if hasattr(self.model, 'reset'):
+                    self.model.reset()
+            except Exception as e:
+                print(f"[OWW] ⚠️ Session {self.session_id} reset 失敗: {e}")
+
+    def predict_chunk(self, chunk: np.ndarray):
+        """對單個 chunk 做推理，回傳 (raw, prob)"""
+        with self.lock:
+            prediction = self.model.predict(chunk)
+            raw = float(prediction.get(self.target_name, 0.0))
+            prob = sigmoid(raw)
+            return raw, prob
+
+
+class SessionManager:
+    """管理所有使用者的 OWW Session"""
+
+    def __init__(self, max_sessions: int):
+        self.sessions: Dict[str, OWWSession] = {}
+        self.max_sessions = max_sessions
+        self.global_lock = threading.Lock()
+        self.global_paused = False
+        self.active_wakeup_session: str | None = None
+
+    def get_or_create(self, session_id: str) -> OWWSession:
+        with self.global_lock:
+            if session_id in self.sessions:
+                self.sessions[session_id].last_active = time.time()
+                return self.sessions[session_id]
+
+            if len(self.sessions) >= self.max_sessions:
+                self._evict_oldest()
+
+            session = OWWSession(session_id)
+            self.sessions[session_id] = session
+            print(f"[OWW] 🆕 建立 Session: {session_id} (總數: {len(self.sessions)})")
+            return session
+
+    def remove(self, session_id: str):
+        with self.global_lock:
+            if session_id in self.sessions:
+                del self.sessions[session_id]
+                print(f"[OWW] 🗑️ 移除 Session: {session_id} (剩餘: {len(self.sessions)})")
+
+    def pause_all(self, except_session: str = None):
+        with self.global_lock:
+            self.global_paused = True
+            self.active_wakeup_session = except_session
+            for sid, session in self.sessions.items():
+                session.paused = (sid != except_session)
+            print(f"[OWW] ⏸️ 全域暫停，活躍 Session: {except_session}")
+
+    def resume_all(self):
+        with self.global_lock:
+            self.global_paused = False
+            self.active_wakeup_session = None
+            for session in self.sessions.values():
+                session.paused = False
+                session.reset()
+            print(f"[OWW] ▶️ 全域恢復偵測，已重置所有 Session")
+
+    def reset_session(self, session_id: str):
+        with self.global_lock:
+            if session_id in self.sessions:
+                self.sessions[session_id].reset()
+
+    def _evict_oldest(self):
+        if not self.sessions:
+            return
+        oldest_id = min(self.sessions, key=lambda k: self.sessions[k].last_active)
+        del self.sessions[oldest_id]
+        print(f"[OWW] ♻️ 淘汰最舊 Session: {oldest_id}")
+
+    def get_status(self) -> dict:
+        with self.global_lock:
+            return {
+                "total_sessions": len(self.sessions),
+                "global_paused": self.global_paused,
+                "active_wakeup_session": self.active_wakeup_session,
+                "sessions": {
+                    sid: {
+                        "paused": s.paused,
+                        "last_active_sec": round(time.time() - s.last_active, 1),
+                    }
+                    for sid, s in self.sessions.items()
+                }
+            }
 
 # =========================================================
-# Model bootstrap
+# Bootstrap
 # =========================================================
 print("[OWW] 啟動中...")
 print(f"[OWW] MODEL_PATH={MODEL_PATH}")
-print(f"[OWW] PROB_THRESHOLD={PROB_THRESHOLD}, MIN_CONSECUTIVE={MIN_CONSECUTIVE}, COOLDOWN_SEC={COOLDOWN_SEC}")
+print(f"[OWW] PROB_THRESHOLD={PROB_THRESHOLD}, MIN_CONSECUTIVE={MIN_CONSECUTIVE}")
+print(f"[OWW] MAX_SESSIONS={MAX_SESSIONS}")
 
 check_model_files(MODEL_PATH)
 
-oww_model = Model(
-    wakeword_models=[str(MODEL_PATH)],
-    inference_framework="onnx"
-)
-
-MODEL_NAMES = list(oww_model.models.keys())
-if not MODEL_NAMES:
+_test_model = Model(wakeword_models=[str(MODEL_PATH)], inference_framework="onnx")
+_test_names = list(_test_model.models.keys())
+if not _test_names:
     raise RuntimeError("[OWW] 沒有載入任何模型")
+TARGET_NAME = _test_names[0]
+del _test_model
+print(f"[OWW] 模型驗證完成 ✅ target={TARGET_NAME}")
 
-TARGET_NAME = MODEL_NAMES[0]
-print(f"[OWW] 模型載入完成 ✅ names={MODEL_NAMES}, target={TARGET_NAME}")
-
-# openwakeword 模型通常含狀態，需鎖保護
-model_lock = threading.Lock()
-
-def reset_model_state():
-    """重置 OWW 模型內部滑動視窗狀態與特徵緩衝區"""
-    try:
-        # 正確的重置方式是調用 oww_model.reset()，這會清空特徵提取器與預測緩存
-        if hasattr(oww_model, 'reset'):
-            oww_model.reset()
-        else:
-            # 僅作為極舊版本的 Fallback
-            for name in MODEL_NAMES:
-                if hasattr(oww_model, "prediction_buffer") and name in oww_model.prediction_buffer:
-                    oww_model.prediction_buffer[name] = [0.0] * len(oww_model.prediction_buffer[name])
-    except Exception as e:
-        print(f"[OWW] ⚠️ reset_model_state 失敗（非致命）：{e}")
-
-def infer_chunks(audio_np: np.ndarray):
-    """
-    以 CHUNK_SIZE 分塊推理，回傳：
-    detected, raw_max, prob_max, num_chunks, final_consecutive
-    """
-    num_chunks = len(audio_np) // CHUNK_SIZE
-    raw_max = float("-inf")
-    prob_max = 0.0
-    detected = False
-    consecutive = 0
-
-    with model_lock:
-        for i in range(num_chunks):
-            chunk = audio_np[i * CHUNK_SIZE:(i + 1) * CHUNK_SIZE]
-            prediction = oww_model.predict(chunk)
-
-            raw = float(prediction.get(TARGET_NAME, 0.0))
-            prob = sigmoid(raw)
-
-            if raw > raw_max:
-                raw_max = raw
-            if prob > prob_max:
-                prob_max = prob
-
-            if prob > PROB_THRESHOLD:
-                consecutive += 1
-            else:
-                consecutive = 0
-
-            if consecutive >= MIN_CONSECUTIVE:
-                detected = True
-                # 可提早退出，降低延遲
-                break
-
-    if raw_max == float("-inf"):
-        raw_max = 0.0
-
-    return detected, raw_max, prob_max, num_chunks, consecutive
+session_manager = SessionManager(max_sessions=MAX_SESSIONS)
 
 # =========================================================
 # HTTP Routes
@@ -167,118 +195,104 @@ def infer_chunks(audio_np: np.ndarray):
 def health():
     return jsonify({
         "status": "ok",
-        "model_names": MODEL_NAMES,
         "target_model": TARGET_NAME,
         "sample_rate": SAMPLE_RATE,
         "chunk_size": CHUNK_SIZE,
         "prob_threshold": PROB_THRESHOLD,
         "min_consecutive": MIN_CONSECUTIVE,
-        "cooldown_sec": COOLDOWN_SEC
+        "cooldown_sec": COOLDOWN_SEC,
+        "max_sessions": MAX_SESSIONS,
+        **session_manager.get_status()
     })
 
-@app.route("/reset", methods=["POST"])
-def reset():
-    try:
-        with model_lock:
-            reset_model_state()
-        return jsonify({"ok": True, "message": "model state reset"})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+@app.route("/pause_all", methods=["POST"])
+def pause_all():
+    data = request.get_json(silent=True) or {}
+    except_session = data.get("except_session")
+    session_manager.pause_all(except_session)
+    return jsonify({"ok": True})
 
-@app.route("/detect", methods=["POST"])
-def detect():
-    try:
-        pcm_bytes = request.data
-        if not pcm_bytes:
-            return jsonify(build_response(
-                detected=False, raw_max=0.0, prob_max=0.0, chunks=0, duration_ms=0.0, error="empty body"
-            )), 400
-
-        audio_np = np.frombuffer(pcm_bytes, dtype=np.int16)
-        total_samples = len(audio_np)
-        duration_ms = total_samples / SAMPLE_RATE * 1000.0
-
-        if total_samples < CHUNK_SIZE:
-            return jsonify(build_response(
-                detected=False, raw_max=0.0, prob_max=0.0, chunks=0, duration_ms=duration_ms, error="audio too short"
-            )), 400
-
-        # 補齊到 chunk 邊界
-        remainder = total_samples % CHUNK_SIZE
-        if remainder > 0:
-            pad = np.zeros(CHUNK_SIZE - remainder, dtype=np.int16)
-            audio_np = np.concatenate([audio_np, pad])
-
-        # 單次 HTTP 偵測前，重置一次模型狀態（避免前一次請求殘留）
-        with model_lock:
-            reset_model_state()
-
-        detected, raw_max, prob_max, num_chunks, consecutive = infer_chunks(audio_np)
-
-        resp = build_response(
-            detected=detected,
-            raw_max=raw_max,
-            prob_max=prob_max,
-            chunks=num_chunks,
-            duration_ms=duration_ms,
-            consecutive=consecutive
-        )
-        return jsonify(resp)
-
-    except Exception as e:
-        return jsonify(build_response(
-            detected=False, raw_max=0.0, prob_max=0.0, chunks=0, duration_ms=0.0, error=str(e)
-        )), 500
+@app.route("/resume_all", methods=["POST"])
+def resume_all():
+    session_manager.resume_all()
+    return jsonify({"ok": True})
 
 # =========================================================
-# WebSocket Streaming
+# WebSocket Streaming (Per-User)
 # =========================================================
 async def ws_handler(websocket, path=None):
     peer = websocket.remote_address
-    print(f"[OWW-WS] 新連線: {peer}")
+
+    import urllib.parse
+    parsed = urllib.parse.urlparse(str(websocket.path) if hasattr(websocket, 'path') else '/')
+    params = urllib.parse.parse_qs(parsed.query)
+    session_id = params.get("session_id", [None])[0]
+
+    if not session_id:
+        try:
+            first_msg = await asyncio.wait_for(websocket.recv(), timeout=5.0)
+            if isinstance(first_msg, str):
+                try:
+                    init = json.loads(first_msg)
+                    session_id = init.get("session_id", "").strip()
+                except json.JSONDecodeError:
+                    session_id = first_msg.strip()
+        except asyncio.TimeoutError:
+            await websocket.close(1008, "No session_id provided")
+            return
+
+    if not session_id:
+        await websocket.close(1008, "Empty session_id")
+        return
+
+    print(f"[OWW-WS] 新連線: {peer} session={session_id}")
+
+    session = session_manager.get_or_create(session_id)
+    session.reset()
 
     remainder_buf = bytearray()
-    silenced = False
-    consecutive_hits = 0
-    last_trigger_ts = 0.0
-
-    # 連線建立時先 reset
-    with model_lock:
-        reset_model_state()
 
     try:
         async for message in websocket:
-            # -----------------------------
-            # Text command
-            # -----------------------------
             if isinstance(message, str):
                 cmd = message.strip().lower()
 
                 if cmd == "reset":
-                    with model_lock:
-                        reset_model_state()
+                    # ✅ reset 指令同時清除 paused 狀態，防止邊緣情況下 paused 殘留
+                    session.paused = False
+                    session.reset()
                     remainder_buf.clear()
-                    silenced = False
-                    consecutive_hits = 0
-                    await websocket.send(json.dumps({"event": "reset_ok"}))
-                    print("[OWW-WS] 🔄 reset 完成，恢復偵測")
+                    await websocket.send(json.dumps({"event": "reset_ok", "session_id": session_id}))
                     continue
 
                 if cmd == "ping":
                     await websocket.send(json.dumps({"event": "pong"}))
                     continue
 
+                try:
+                    cmd_obj = json.loads(message)
+                    if cmd_obj.get("command") == "pause":
+                        session.paused = True
+                        await websocket.send(json.dumps({"event": "paused", "session_id": session_id}))
+                        continue
+                    if cmd_obj.get("command") == "resume":
+                        session.paused = False
+                        session.reset()
+                        remainder_buf.clear()  # ✅ resume 時也清除緩衝，避免殘留音訊誤觸發
+                        await websocket.send(json.dumps({"event": "resumed", "session_id": session_id}))
+                        continue
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+
                 await websocket.send(json.dumps({"event": "unknown_command", "command": cmd}))
                 continue
 
-            # -----------------------------
-            # Binary PCM
-            # -----------------------------
-            if silenced:
-                # 靜默期間丟棄音訊，等待 reset
+            if session.paused:
                 continue
 
+            session.last_active = time.time()
             remainder_buf.extend(message)
+
             if len(remainder_buf) < CHUNK_BYTES:
                 continue
 
@@ -293,87 +307,70 @@ async def ws_handler(websocket, path=None):
             prob_max = 0.0
             detected = False
 
-            with model_lock:
-                for i in range(num_chunks):
-                    chunk = audio_np[i * CHUNK_SIZE:(i + 1) * CHUNK_SIZE]
-                    pred = oww_model.predict(chunk)
-                    raw = float(pred.get(TARGET_NAME, 0.0))
-                    prob = sigmoid(raw)
+            for i in range(num_chunks):
+                chunk = audio_np[i * CHUNK_SIZE:(i + 1) * CHUNK_SIZE]
+                raw, prob = session.predict_chunk(chunk)
 
-                    if raw > raw_max:
-                        raw_max = raw
-                    if prob > prob_max:
-                        prob_max = prob
+                if raw > raw_max:
+                    raw_max = raw
+                if prob > prob_max:
+                    prob_max = prob
 
-                    if prob > PROB_THRESHOLD:
-                        consecutive_hits += 1
-                    else:
-                        consecutive_hits = 0
+                if prob > PROB_THRESHOLD:
+                    session.consecutive_hits += 1
+                else:
+                    session.consecutive_hits = 0
 
-                    now = time.time()
-                    cooldown_ok = (now - last_trigger_ts) >= COOLDOWN_SEC
-                    if consecutive_hits >= MIN_CONSECUTIVE and cooldown_ok:
-                        detected = True
-                        last_trigger_ts = now
-                        break
+                now = time.time()
+                cooldown_ok = (now - session.last_trigger_ts) >= COOLDOWN_SEC
+
+                if session.consecutive_hits >= MIN_CONSECUTIVE and cooldown_ok:
+                    detected = True
+                    session.last_trigger_ts = now
+                    break
 
             if raw_max == float("-inf"):
                 raw_max = 0.0
 
-            # 回傳結果（可觀測）
             payload = {
                 "event": "inference",
+                "session_id": session_id,
                 "detected": detected,
                 "raw_score": round(raw_max, 6),
                 "prob_score": round(prob_max, 6),
                 "threshold_prob": PROB_THRESHOLD,
                 "chunks": num_chunks,
-                "consecutive_hits": consecutive_hits,
-                "silenced": silenced
+                "consecutive_hits": session.consecutive_hits,
+                "paused": session.paused,
             }
 
-            # 降低噪音：沒 debug 時，只在 detected 才送
             if DEBUG_SCORE or detected:
                 await websocket.send(json.dumps(payload))
 
             if detected:
-                print(f"[OWW-WS] ✅ 偵測到喚醒詞 raw={raw_max:.4f} prob={prob_max:.4f}")
-                # 進入靜默，等待上游送 reset
-                silenced = True
-                remainder_buf.clear()
-                consecutive_hits = 0
-                with model_lock:
-                    reset_model_state()
-                await websocket.send(json.dumps({"event": "detected_and_silenced"}))
-                print("[OWW-WS] 🔇 已進入靜默期，等待 reset")
+                print(f"[OWW-WS] ✅ Session {session_id} 偵測到喚醒詞! prob={prob_max:.4f}")
 
     except websockets.exceptions.ConnectionClosed:
         pass
     except Exception as e:
-        print(f"[OWW-WS] 錯誤: {e}")
+        print(f"[OWW-WS] ❌ Session {session_id} 錯誤: {e}")
     finally:
-        print(f"[OWW-WS] 連線關閉: {peer}")
+        print(f"[OWW-WS] 🔌 斷線: session={session_id}")
 
 # =========================================================
-# Run
+# Start servers
 # =========================================================
-def run_flask():
-    print(f"[OWW] HTTP 啟動於 0.0.0.0:{HTTP_PORT}")
-    app.run(host="0.0.0.0", port=HTTP_PORT, debug=False, use_reloader=False)
+def run_ws():
+    async def _start():
+        async with websockets.serve(ws_handler, "0.0.0.0", WS_PORT):
+            print(f"[OWW-WS] WebSocket 伺服器啟動於 ws://0.0.0.0:{WS_PORT}")
+            await asyncio.Future()  # 永久等待，不結束
 
-async def run_websocket():
-    print(f"[OWW] WebSocket 啟動於 0.0.0.0:{WS_PORT}")
-    async with websockets.serve(
-        ws_handler,
-        "0.0.0.0",
-        WS_PORT,
-        max_size=2**22,      # 放寬訊息大小上限
-        ping_interval=20,
-        ping_timeout=20
-    ):
-        await asyncio.Future()
+    asyncio.run(_start())
+
 
 if __name__ == "__main__":
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    asyncio.run(run_websocket())
+    ws_thread = threading.Thread(target=run_ws, daemon=True)
+    ws_thread.start()
+    print(f"[OWW-HTTP] HTTP 伺服器啟動於 http://0.0.0.0:{HTTP_PORT}")
+    app.run(host="0.0.0.0", port=HTTP_PORT, debug=False, use_reloader=False)
