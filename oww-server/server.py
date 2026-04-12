@@ -16,19 +16,19 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # =========================================================
-# Config — 純環境變數，無預設值
+# Config
 # =========================================================
 BASE_DIR = Path(__file__).resolve().parent
 
-MODEL_PATH     = Path(os.environ["OWW_MODEL_PATH"])
-HTTP_PORT      = int(os.environ["OWW_PORT"])
-WS_PORT        = int(os.environ["OWW_WS_PORT"])
-CHUNK_SIZE     = int(os.environ["OWW_CHUNK_SIZE"])
-PROB_THRESHOLD = float(os.environ["OWW_PROB_THRESHOLD"])
+MODEL_PATH      = Path(os.environ["OWW_MODEL_PATH"])
+HTTP_PORT       = int(os.environ["OWW_PORT"])
+WS_PORT         = int(os.environ["OWW_WS_PORT"])
+CHUNK_SIZE      = int(os.environ["OWW_CHUNK_SIZE"])
+PROB_THRESHOLD  = float(os.environ["OWW_PROB_THRESHOLD"])
 MIN_CONSECUTIVE = int(os.environ["OWW_MIN_CONSECUTIVE"])
-COOLDOWN_SEC   = float(os.environ["OWW_COOLDOWN_SEC"])
-MAX_SESSIONS   = int(os.environ["OWW_MAX_SESSIONS"])
-DEBUG_SCORE    = os.environ["OWW_DEBUG_SCORE"] == "1"
+COOLDOWN_SEC    = float(os.environ["OWW_COOLDOWN_SEC"])
+MAX_SESSIONS    = int(os.environ["OWW_MAX_SESSIONS"])
+DEBUG_SCORE     = os.environ["OWW_DEBUG_SCORE"] == "1"
 
 SAMPLE_RATE = 16000
 CHUNK_BYTES = CHUNK_SIZE * 2  # int16 => 2 bytes/sample
@@ -59,8 +59,6 @@ def check_model_files(model_path: Path):
 # Per-Session Model Manager
 # =========================================================
 class OWWSession:
-    """每個使用者一個獨立的 OWW 模型實例，擁有獨立的狀態"""
-
     def __init__(self, session_id: str):
         self.session_id = session_id
         self.model = Model(
@@ -86,7 +84,6 @@ class OWWSession:
                 print(f"[OWW] ⚠️ Session {self.session_id} reset 失敗: {e}")
 
     def predict_chunk(self, chunk: np.ndarray):
-        """對單個 chunk 做推理，回傳 (raw, prob)"""
         with self.lock:
             prediction = self.model.predict(chunk)
             raw = float(prediction.get(self.target_name, 0.0))
@@ -95,8 +92,6 @@ class OWWSession:
 
 
 class SessionManager:
-    """管理所有使用者的 OWW Session"""
-
     def __init__(self, max_sessions: int):
         self.sessions: Dict[str, OWWSession] = {}
         self.max_sessions = max_sessions
@@ -109,10 +104,8 @@ class SessionManager:
             if session_id in self.sessions:
                 self.sessions[session_id].last_active = time.time()
                 return self.sessions[session_id]
-
             if len(self.sessions) >= self.max_sessions:
                 self._evict_oldest()
-
             session = OWWSession(session_id)
             self.sessions[session_id] = session
             print(f"[OWW] 🆕 建立 Session: {session_id} (總數: {len(self.sessions)})")
@@ -218,7 +211,103 @@ def resume_all():
     return jsonify({"ok": True})
 
 # =========================================================
-# WebSocket Streaming (Per-User)
+# ✅ 新增：/detect — 單次 PCM 片段喚醒詞偵測（HTTP POST）
+#
+#   Body: raw binary (int16 LE, 16kHz mono)
+#   Query: ?session_id=xxx
+#
+#   流程：
+#     1. 接收最多 2 秒的 PCM 二進位資料
+#     2. 切成 CHUNK_SIZE 幀逐一推理
+#     3. 只要有任一幀 prob > PROB_THRESHOLD 且連續達標
+#        → 回傳 detected: true
+#     4. 每個 session 獨立冷卻，防止同一人重複觸發
+# =========================================================
+@app.route("/detect", methods=["POST"])
+def detect():
+    session_id = request.args.get("session_id", "").strip()
+    if not session_id:
+        return jsonify({"error": "missing session_id"}), 400
+
+    pcm_bytes = request.data
+    if not pcm_bytes:
+        return jsonify({"error": "empty body"}), 400
+
+    # 最多接受 2 秒的資料（2 * 16000 * 2 = 64000 bytes）
+    MAX_DETECT_BYTES = SAMPLE_RATE * 2 * 2
+    if len(pcm_bytes) > MAX_DETECT_BYTES:
+        pcm_bytes = pcm_bytes[:MAX_DETECT_BYTES]
+
+    session = session_manager.get_or_create(session_id)
+
+    if session.paused:
+        return jsonify({"detected": False, "reason": "paused"})
+
+    audio_np = np.frombuffer(pcm_bytes, dtype=np.int16)
+    num_chunks = len(audio_np) // CHUNK_SIZE
+
+    if num_chunks == 0:
+        return jsonify({"detected": False, "reason": "too_short"})
+
+    # 每次 /detect 呼叫前先重置連續計數，避免跨呼叫累積
+    session.consecutive_hits = 0
+
+    detected    = False
+    prob_max    = 0.0
+    raw_max     = float("-inf")
+
+    now = time.time()
+    cooldown_ok = (now - session.last_trigger_ts) >= COOLDOWN_SEC
+
+    if not cooldown_ok:
+        return jsonify({
+            "detected": False,
+            "reason": "cooldown",
+            "cooldown_remaining": round(COOLDOWN_SEC - (now - session.last_trigger_ts), 2)
+        })
+
+    for i in range(num_chunks):
+        chunk = audio_np[i * CHUNK_SIZE:(i + 1) * CHUNK_SIZE]
+        raw, prob = session.predict_chunk(chunk)
+
+        if raw > raw_max:
+            raw_max = raw
+        if prob > prob_max:
+            prob_max = prob
+
+        if prob > PROB_THRESHOLD:
+            session.consecutive_hits += 1
+        else:
+            session.consecutive_hits = 0
+
+        if session.consecutive_hits >= MIN_CONSECUTIVE:
+            detected = True
+            session.last_trigger_ts = time.time()
+            break
+
+    # 推理完畢後重置，避免殘留影響下次呼叫
+    session.consecutive_hits = 0
+
+    if raw_max == float("-inf"):
+        raw_max = 0.0
+
+    if DEBUG_SCORE or detected:
+        print(
+            f"[OWW-HTTP] session={session_id} "
+            f"detected={detected} prob_max={prob_max:.4f} "
+            f"chunks={num_chunks}"
+        )
+
+    return jsonify({
+        "detected":   detected,
+        "prob_score": round(prob_max, 6),
+        "raw_score":  round(raw_max, 6),
+        "chunks":     num_chunks,
+        "session_id": session_id,
+    })
+
+# =========================================================
+# WebSocket Streaming（保留，供其他用途）
 # =========================================================
 async def ws_handler(websocket, path=None):
     peer = websocket.remote_address
@@ -246,29 +335,23 @@ async def ws_handler(websocket, path=None):
         return
 
     print(f"[OWW-WS] 新連線: {peer} session={session_id}")
-
     session = session_manager.get_or_create(session_id)
     session.reset()
-
     remainder_buf = bytearray()
 
     try:
         async for message in websocket:
             if isinstance(message, str):
                 cmd = message.strip().lower()
-
                 if cmd == "reset":
-                    # ✅ reset 指令同時清除 paused 狀態，防止邊緣情況下 paused 殘留
                     session.paused = False
                     session.reset()
                     remainder_buf.clear()
                     await websocket.send(json.dumps({"event": "reset_ok", "session_id": session_id}))
                     continue
-
                 if cmd == "ping":
                     await websocket.send(json.dumps({"event": "pong"}))
                     continue
-
                 try:
                     cmd_obj = json.loads(message)
                     if cmd_obj.get("command") == "pause":
@@ -278,12 +361,11 @@ async def ws_handler(websocket, path=None):
                     if cmd_obj.get("command") == "resume":
                         session.paused = False
                         session.reset()
-                        remainder_buf.clear()  # ✅ resume 時也清除緩衝，避免殘留音訊誤觸發
+                        remainder_buf.clear()
                         await websocket.send(json.dumps({"event": "resumed", "session_id": session_id}))
                         continue
                 except (json.JSONDecodeError, AttributeError):
                     pass
-
                 await websocket.send(json.dumps({"event": "unknown_command", "command": cmd}))
                 continue
 
@@ -292,7 +374,6 @@ async def ws_handler(websocket, path=None):
 
             session.last_active = time.time()
             remainder_buf.extend(message)
-
             if len(remainder_buf) < CHUNK_BYTES:
                 continue
 
@@ -302,7 +383,6 @@ async def ws_handler(websocket, path=None):
 
             audio_np = np.frombuffer(pcm, dtype=np.int16)
             num_chunks = len(audio_np) // CHUNK_SIZE
-
             raw_max = float("-inf")
             prob_max = 0.0
             detected = False
@@ -310,20 +390,14 @@ async def ws_handler(websocket, path=None):
             for i in range(num_chunks):
                 chunk = audio_np[i * CHUNK_SIZE:(i + 1) * CHUNK_SIZE]
                 raw, prob = session.predict_chunk(chunk)
-
-                if raw > raw_max:
-                    raw_max = raw
-                if prob > prob_max:
-                    prob_max = prob
-
+                if raw > raw_max: raw_max = raw
+                if prob > prob_max: prob_max = prob
                 if prob > PROB_THRESHOLD:
                     session.consecutive_hits += 1
                 else:
                     session.consecutive_hits = 0
-
                 now = time.time()
                 cooldown_ok = (now - session.last_trigger_ts) >= COOLDOWN_SEC
-
                 if session.consecutive_hits >= MIN_CONSECUTIVE and cooldown_ok:
                     detected = True
                     session.last_trigger_ts = now
@@ -333,20 +407,16 @@ async def ws_handler(websocket, path=None):
                 raw_max = 0.0
 
             payload = {
-                "event": "inference",
-                "session_id": session_id,
-                "detected": detected,
-                "raw_score": round(raw_max, 6),
+                "event": "inference", "session_id": session_id,
+                "detected": detected, "raw_score": round(raw_max, 6),
                 "prob_score": round(prob_max, 6),
                 "threshold_prob": PROB_THRESHOLD,
                 "chunks": num_chunks,
                 "consecutive_hits": session.consecutive_hits,
                 "paused": session.paused,
             }
-
             if DEBUG_SCORE or detected:
                 await websocket.send(json.dumps(payload))
-
             if detected:
                 print(f"[OWW-WS] ✅ Session {session_id} 偵測到喚醒詞! prob={prob_max:.4f}")
 
@@ -364,10 +434,8 @@ def run_ws():
     async def _start():
         async with websockets.serve(ws_handler, "0.0.0.0", WS_PORT):
             print(f"[OWW-WS] WebSocket 伺服器啟動於 ws://0.0.0.0:{WS_PORT}")
-            await asyncio.Future()  # 永久等待，不結束
-
+            await asyncio.Future()
     asyncio.run(_start())
-
 
 if __name__ == "__main__":
     ws_thread = threading.Thread(target=run_ws, daemon=True)
