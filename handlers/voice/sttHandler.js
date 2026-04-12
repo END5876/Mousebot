@@ -5,7 +5,7 @@ const fs    = require('fs');
 const path  = require('path');
 const axios = require('axios');
 const Groq  = require('groq-sdk');
-const { getGeminiResponseVoice } = require('../aiHandler'); // 🎙️ 語音專用 AI 回覆
+const { getGeminiResponseVoice } = require('../../handlers/ai/aiHandler');
 
 // ── 設定（純環境變數）────────────────────────────────────
 const OWW_HTTP_URL        = process.env.OWW_HTTP_URL;
