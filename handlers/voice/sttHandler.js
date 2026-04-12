@@ -5,6 +5,7 @@ const fs    = require('fs');
 const path  = require('path');
 const axios = require('axios');
 const Groq  = require('groq-sdk');
+const { getGeminiResponseVoice } = require('../aiHandler'); // 🎙️ 語音專用 AI 回覆
 
 // ── 設定（純環境變數）────────────────────────────────────
 const OWW_HTTP_URL        = process.env.OWW_HTTP_URL;
@@ -312,7 +313,7 @@ async function handleWakeup(guildId, userId, member) {
   const state = guildStates.get(guildId);
   if (!state || state.isExclusive) return;
 
-  const { connection, textChannel, onWakeup } = state;
+  const { connection, textChannel } = state;
   const userState = state.users.get(userId);
   if (!userState) return;
 
@@ -428,16 +429,29 @@ async function handleWakeup(guildId, userId, member) {
   console.log(`[STT] 📝 ${finalName}：${text}`);
   await textChannel.send(`🗣️ "**${finalName}**" ：${text}`).catch(() => {});
 
-  // ── 6. 退出 + 冷卻 + callback ──
+  // ── 6. 退出獨佔模式 + 冷卻 ──
   exitExclusiveMode(guildId);
   userState.cooldownUntil = Date.now() + WAKEUP_COOLDOWN_MS;
 
-  if (typeof onWakeup === 'function') {
-    try {
-      await onWakeup(userId, member, text, textChannel);
-    } catch (err) {
-      console.error(`[STT] callback 錯誤: ${err.message}`);
+  // ── 7. 🎙️ 呼叫語音專用 AI 回覆 ──
+  try {
+    const aiReply = await getGeminiResponseVoice(userId, text);
+    if (aiReply) {
+      // 文字頻道顯示回覆
+      await textChannel.send(aiReply).catch(() => {});
+
+      // TTS 朗讀（直接用 guildId 呼叫，不需要 message 物件）
+      const { playTTS } = require('../ttsHandler');
+      const ttsResult = await playTTS(guildId, aiReply);
+      if (ttsResult.success) {
+        console.log(`🔊 [STT→TTS] 朗讀中 (engine: ${ttsResult.engine}, queued: ${ttsResult.queued})`);
+      } else {
+        console.warn(`⚠️ [STT→TTS] 朗讀失敗 (reason: ${ttsResult.reason})`);
+      }
     }
+  } catch (err) {
+    console.error(`[STT] AI 回覆錯誤: ${err.message}`);
+    await textChannel.send('❌ AI 回覆失敗').catch(() => {});
   }
 }
 
