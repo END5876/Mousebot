@@ -34,6 +34,9 @@ SAMPLE_RATE = 16000
 CHUNK_BYTES = CHUNK_SIZE * 2  # int16 => 2 bytes/sample
 
 app = Flask(__name__)
+# 關閉 Werkzeug access log（隱藏 /detect 的每次請求紀錄）
+import logging
+logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 # =========================================================
 # Utilities
