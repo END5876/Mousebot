@@ -40,6 +40,17 @@ const MODE_MAP = {
     gugu: guguMode
 };
 
+// ── 語音模式附加 Prompt ──────────────────────────────────
+const VOICE_MODE_ADDON = `
+
+## 語音回覆規則（最高優先，覆蓋長度設定）
+1. 使用者現在是透過「語音」跟你講話，你的回覆也會被轉成語音播放。
+2. 回答必須「極度口語化」，像真人聊天一樣自然，多用口語發語詞（如：嗯、對啊、喔、欸、哈哈）。
+3. 保持簡短！盡量控制在 1~3 句話以內（約 30~50 字），絕對不要長篇大論。
+4. 絕對不要使用 Markdown 語法（如 **粗體**、*斜體*、列表、程式碼區塊），因為語音引擎無法朗讀排版。
+5. 在遵守以上規則的前提下，必須完全保持你現在的人格設定與語氣。
+`;
+
 /**
  * 根據模式名稱獲取對應的 System Prompt
  */
@@ -56,9 +67,15 @@ function getSystemPrompt(mode) {
 
 /**
  * 獲取模型實例（根據模式調整 prompt）
+ * @param {string} mode - 模式名稱
+ * @param {boolean} isVoice - 是否為語音輸入，會附加口語化簡短回覆規則
  */
-function getModel(mode) {
-    const systemPrompt = getSystemPrompt(mode);
+function getModel(mode, isVoice = false) {
+    let systemPrompt = getSystemPrompt(mode);
+
+    if (isVoice) {
+        systemPrompt = systemPrompt + VOICE_MODE_ADDON;
+    }
     
     return genAI.getGenerativeModel({ 
         model: MODEL_NAME,
@@ -212,6 +229,41 @@ async function getGeminiResponse(userId, prompt, imageParts = []) {
 }
 
 /**
+ * 🎙️ 語音輸入專用 Gemini 回應函數
+ * 自動套用語音模式（短回覆、口語化）
+ * @param {string} userId - 用戶 Discord ID
+ * @param {string} prompt - STT 辨識出的文字
+ * @returns {Promise<string>} AI 回覆文字
+ */
+async function getGeminiResponseVoice(userId, prompt) {
+    try {
+        const mode = getUserMode(userId, prompt);
+        const model = getModel(mode, true); // isVoice = true
+        const history = getUserHistory(userId);
+
+        const chat = model.startChat({
+            history: history,
+            generationConfig: {
+                ...GENERATION_CONFIG,
+                maxOutputTokens: 150, // 語音模式限制 token 數，避免回太長
+            },
+        });
+
+        const result = await chat.sendMessage([{ text: prompt }]);
+        const response = result.response.text().trim();
+
+        updateUserHistory(userId, 'user', prompt);
+        updateUserHistory(userId, 'model', response);
+
+        console.log(`[Voice AI] ${userId}: "${prompt}" → "${response}"`);
+        return response;
+    } catch (error) {
+        console.error(`[Voice AI] Gemini Error:`, error.message);
+        throw error;
+    }
+}
+
+/**
  * 短回應生成函數（隨機回應用）
  */
 async function getShortResponse(userId, message, imageParts = []) {
@@ -352,8 +404,8 @@ function setupAICommands(client) {
 
             const urlPattern = /(https?:\/\/[^\s]+)|(www\.[^\s]+)/gi;
             const hasUrl = urlPattern.test(cleanedContent);
-            const isGuguCommand = cleanedContent.startsWith('${PREFIX}gugu');
-            const isTTSCommand  = cleanedContent.startsWith(`${PREFIX}m`);
+            const isGuguCommand = cleanedContent.startsWith('!gugu');
+            const isTTSCommand  = cleanedContent.startsWith(`!m`);
             const isSTTCommand  = cleanedContent.startsWith('!stt');
 
             if (hasUrl || isGuguCommand || isTTSCommand || isSTTCommand) return;
@@ -401,4 +453,4 @@ function splitMessage(text, maxLength = 1900) {
     return chunks;
 }
 
-module.exports = { setupAICommands, getGeminiResponse };
+module.exports = { setupAICommands, getGeminiResponse, getGeminiResponseVoice };
