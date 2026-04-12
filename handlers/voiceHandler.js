@@ -176,7 +176,7 @@ function setupVoiceCommands(client) {
         : `**#${sttTextChannel.name}**`;
 
       message.reply(
-        `🎙️ STT 語音辨識已啟動！\n📝 轉錄結果將發送至 ${targetChannelName}\n🔇 說出喚醒詞來呼叫我`
+        `🎙️ STT 語音辨識已啟動！\n📝 轉錄結果將發送至 ${targetChannelName}\n🗣️ 說 **hey機器鳥** 來呼叫我`
       );
 
       console.log(`[STT] 手動啟動 Guild: ${message.guild.name}`);
