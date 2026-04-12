@@ -352,10 +352,11 @@ function setupAICommands(client) {
 
             const urlPattern = /(https?:\/\/[^\s]+)|(www\.[^\s]+)/gi;
             const hasUrl = urlPattern.test(cleanedContent);
-            const isGuguCommand = cleanedContent.startsWith('!gugu');
+            const isGuguCommand = cleanedContent.startsWith('${PREFIX}gugu');
             const isTTSCommand  = cleanedContent.startsWith(`${PREFIX}m`);
+            const isSTTCommand  = cleanedContent.startsWith('!stt');
 
-            if (hasUrl || isGuguCommand || isTTSCommand) return;
+            if (hasUrl || isGuguCommand || isTTSCommand || isSTTCommand) return;
 
             const randomValue = Math.random();
             if (randomValue < RANDOM_REPLY_CHANCE) {
