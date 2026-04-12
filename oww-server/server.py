@@ -29,6 +29,8 @@ MIN_CONSECUTIVE = int(os.environ["OWW_MIN_CONSECUTIVE"])
 COOLDOWN_SEC    = float(os.environ["OWW_COOLDOWN_SEC"])
 MAX_SESSIONS    = int(os.environ["OWW_MAX_SESSIONS"])
 DEBUG_SCORE     = os.environ["OWW_DEBUG_SCORE"] == "1"
+SESSION_TTL_SEC = float(os.environ.get("OWW_SESSION_TTL_SEC", "300"))   # 預設 5 分鐘
+TTL_CHECK_SEC   = float(os.environ.get("OWW_TTL_CHECK_SEC",   "60"))    # 預設每 60 秒掃描一次
 
 SAMPLE_RATE = 16000
 CHUNK_BYTES = CHUNK_SIZE * 2  # int16 => 2 bytes/sample
@@ -149,6 +151,26 @@ class SessionManager:
         del self.sessions[oldest_id]
         print(f"[OWW] ♻️ 淘汰最舊 Session: {oldest_id}")
 
+    # =========================================================
+    # ✅ 新增：TTL 清理
+    # =========================================================
+    def cleanup_expired_sessions(self):
+        """清理超過 SESSION_TTL_SEC 未活躍的 Session"""
+        now = time.time()
+        with self.global_lock:
+            expired = [
+                sid for sid, s in self.sessions.items()
+                if now - s.last_active > SESSION_TTL_SEC
+            ]
+            for sid in expired:
+                del self.sessions[sid]
+                print(
+                    f"[OWW] 🧹 TTL 清理 Session: {sid} "
+                    f"(閒置 {now - self.sessions.get(sid, type('', (), {'last_active': now - SESSION_TTL_SEC})()).last_active:.0f}s)"  # noqa
+                )
+        if expired:
+            print(f"[OWW] 🧹 本次清理 {len(expired)} 個過期 Session，剩餘: {len(self.sessions)}")
+
     def get_status(self) -> dict:
         with self.global_lock:
             return {
@@ -171,6 +193,7 @@ print("[OWW] 啟動中...")
 print(f"[OWW] MODEL_PATH={MODEL_PATH}")
 print(f"[OWW] PROB_THRESHOLD={PROB_THRESHOLD}, MIN_CONSECUTIVE={MIN_CONSECUTIVE}")
 print(f"[OWW] MAX_SESSIONS={MAX_SESSIONS}")
+print(f"[OWW] SESSION_TTL_SEC={SESSION_TTL_SEC}, TTL_CHECK_SEC={TTL_CHECK_SEC}")
 
 check_model_files(MODEL_PATH)
 
@@ -183,6 +206,22 @@ del _test_model
 print(f"[OWW] 模型驗證完成 ✅ target={TARGET_NAME}")
 
 session_manager = SessionManager(max_sessions=MAX_SESSIONS)
+
+# =========================================================
+# ✅ 新增：TTL 清理背景執行緒
+# =========================================================
+def _ttl_cleanup_loop():
+    """每隔 TTL_CHECK_SEC 秒執行一次過期 Session 清理"""
+    while True:
+        time.sleep(TTL_CHECK_SEC)
+        try:
+            session_manager.cleanup_expired_sessions()
+        except Exception as e:
+            print(f"[OWW] ⚠️ TTL 清理執行緒發生錯誤: {e}")
+
+_ttl_thread = threading.Thread(target=_ttl_cleanup_loop, daemon=True, name="oww-ttl-cleanup")
+_ttl_thread.start()
+print(f"[OWW] 🕐 TTL 清理執行緒已啟動（每 {TTL_CHECK_SEC:.0f}s 掃描，TTL={SESSION_TTL_SEC:.0f}s）")
 
 # =========================================================
 # HTTP Routes
@@ -198,6 +237,8 @@ def health():
         "min_consecutive": MIN_CONSECUTIVE,
         "cooldown_sec": COOLDOWN_SEC,
         "max_sessions": MAX_SESSIONS,
+        "session_ttl_sec": SESSION_TTL_SEC,
+        "ttl_check_sec": TTL_CHECK_SEC,
         **session_manager.get_status()
     })
 
@@ -214,7 +255,7 @@ def resume_all():
     return jsonify({"ok": True})
 
 # =========================================================
-# ✅ 新增：/detect — 單次 PCM 片段喚醒詞偵測（HTTP POST）
+# ✅ /detect — 單次 PCM 片段喚醒詞偵測（HTTP POST）
 #
 #   Body: raw binary (int16 LE, 16kHz mono)
 #   Query: ?session_id=xxx
