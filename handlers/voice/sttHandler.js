@@ -1,31 +1,38 @@
-// handlers/voice/sttHandler.js — Multi-User Architecture
+// handlers/voice/sttHandler.js — Speaking-Triggered Architecture
 const { EndBehaviorType, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
 const prism = require('prism-media');
 const fs    = require('fs');
 const path  = require('path');
-const WebSocket = require('ws');
+const axios = require('axios');
 const Groq  = require('groq-sdk');
 
 // ── 設定（純環境變數）────────────────────────────────────
-const OWW_WS_URL         = process.env.OWW_WS_URL;
-const OWW_HTTP_URL       = process.env.OWW_HTTP_URL;
-const WAKEUP_VOICE_PATH  = path.join(__dirname, 'sttwakeupvoice.wav');
-const TEMP_DIR           = path.join(__dirname, '../../temp');
-const RECORD_DURATION_MS = parseInt(process.env.STT_RECORD_MS);
-const WAKEUP_COOLDOWN_MS = parseInt(process.env.STT_COOLDOWN_MS);
-const RMS_THRESHOLD      = parseFloat(process.env.STT_RMS_THRESHOLD);
+const OWW_HTTP_URL        = process.env.OWW_HTTP_URL;
+const WAKEUP_VOICE_PATH   = path.join(__dirname, 'sttwakeupvoice.wav');
+const TEMP_DIR            = path.join(__dirname, '../../temp');
+const RECORD_MAX_MS       = parseInt(process.env.STT_RECORD_MS);         // 最長錄音上限
+const RECORD_SILENCE_MS   = parseInt(process.env.STT_SILENCE_MS) || 1000; // 靜音多久後自動截止
+const WAKEUP_COOLDOWN_MS  = parseInt(process.env.STT_COOLDOWN_MS);
+const RMS_THRESHOLD       = parseFloat(process.env.STT_RMS_THRESHOLD);
 
-// ── [新增] VAD / 長度 設定 ───────────────────────────────
-const VAD_FRAME_SIZE_MS    = 20;                                        // 每幀 20ms
-const VAD_SAMPLE_RATE      = 16000;                                     // 16kHz
-const VAD_FRAME_SAMPLES    = (VAD_SAMPLE_RATE * VAD_FRAME_SIZE_MS) / 1000; // 320 samples
-const VAD_FRAME_BYTES      = VAD_FRAME_SAMPLES * 2;                    // 640 bytes (Int16)
-const VAD_AMP_THRESHOLD    = parseFloat(process.env.STT_VAD_THRESHOLD)  || 600;  // 幀平均振幅閾值
-const VAD_VOICE_RATIO_MIN  = parseFloat(process.env.STT_VAD_RATIO_MIN)  || 0.15; // 最低有聲幀比例
-const MIN_AUDIO_DURATION_MS = parseInt(process.env.STT_MIN_DURATION_MS) || 800;  // 最短音訊長度
+// ── 喚醒偵測緩衝設定 ────────────────────────────────────
+const DETECT_WINDOW_MS  = parseInt(process.env.STT_DETECT_WINDOW_MS) || 2000;
+const SAMPLE_RATE       = 16000;
+const DETECT_MAX_BYTES  = SAMPLE_RATE * (DETECT_WINDOW_MS / 1000) * 2;
 
-// ── [新增] no_speech_prob 閾值 ───────────────────────────
-const NO_SPEECH_THRESHOLD  = parseFloat(process.env.STT_NO_SPEECH_PROB) || 0.6;
+// ── VAD / 長度 設定 ─────────────────────────────────────
+const VAD_FRAME_SIZE_MS     = 20;
+const VAD_FRAME_SAMPLES     = (SAMPLE_RATE * VAD_FRAME_SIZE_MS) / 1000;
+const VAD_FRAME_BYTES       = VAD_FRAME_SAMPLES * 2;
+const VAD_AMP_THRESHOLD     = parseFloat(process.env.STT_VAD_THRESHOLD)  || 600;
+const VAD_VOICE_RATIO_MIN   = parseFloat(process.env.STT_VAD_RATIO_MIN)  || 0.15;
+const MIN_AUDIO_DURATION_MS = parseInt(process.env.STT_MIN_DURATION_MS)  || 800;
+
+// ── 靜音偵測設定 ────────────────────────────────────────
+const SILENCE_CHECK_MS  = 100;   // 每 100ms 檢查一次靜音
+
+// ── no_speech_prob 閾值 ──────────────────────────────────
+const NO_SPEECH_THRESHOLD = parseFloat(process.env.STT_NO_SPEECH_PROB) || 0.6;
 
 // ── Groq 客戶端 ─────────────────────────────────────────
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -33,7 +40,9 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 // ── Guild 狀態 Map ───────────────────────────────────────
 const guildStates = new Map();
 
-// ── 工具 ────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════
+// 工具函式
+// ══════════════════════════════════════════════════════════
 function ensureTempDir() {
   if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 }
@@ -66,9 +75,6 @@ function writeWav(filename, pcmBuffer) {
   fs.writeFileSync(filename, Buffer.concat([header, pcmBuffer]));
 }
 
-// ────────────────────────────────────────────────────────
-// [保留] calcRMS — 仍作為第一道快速過濾
-// ────────────────────────────────────────────────────────
 function calcRMS(pcmBuffer) {
   const samples = pcmBuffer.length / 2;
   let sumSq = 0;
@@ -79,42 +85,24 @@ function calcRMS(pcmBuffer) {
   return Math.sqrt(sumSq / samples);
 }
 
-// ────────────────────────────────────────────────────────
-// [新增 1] VAD — 計算有聲幀比例
-//   原理：將 PCM 切成 20ms 幀，計算每幀平均振幅，
-//         超過 VAD_AMP_THRESHOLD 視為「有聲幀」，
-//         最後回傳有聲幀佔總幀數的比例（0.0 ~ 1.0）
-// ────────────────────────────────────────────────────────
 function calcVoiceRatio(pcmBuffer) {
   const totalFrames = Math.floor(pcmBuffer.length / VAD_FRAME_BYTES);
   if (totalFrames === 0) return 0;
-
   let voiceFrames = 0;
-
   for (let i = 0; i < totalFrames; i++) {
     const start = i * VAD_FRAME_BYTES;
-    const end   = start + VAD_FRAME_BYTES;
-    const frame = pcmBuffer.slice(start, end);
-
+    const frame = pcmBuffer.slice(start, start + VAD_FRAME_BYTES);
     let ampSum = 0;
     for (let j = 0; j < frame.length; j += 2) {
       ampSum += Math.abs(frame.readInt16LE(j));
     }
-    const avgAmp = ampSum / (frame.length / 2);
-
-    if (avgAmp > VAD_AMP_THRESHOLD) voiceFrames++;
+    if (ampSum / (frame.length / 2) > VAD_AMP_THRESHOLD) voiceFrames++;
   }
-
-  const ratio = voiceFrames / totalFrames;
-  return ratio;
+  return voiceFrames / totalFrames;
 }
 
-// ────────────────────────────────────────────────────────
-// [新增 2] 音訊長度（ms）計算
-// ────────────────────────────────────────────────────────
 function calcDurationMs(pcmBuffer) {
-  // PCM 16-bit mono 16kHz：每秒 = 16000 samples * 2 bytes = 32000 bytes
-  return (pcmBuffer.length / 2 / VAD_SAMPLE_RATE) * 1000;
+  return (pcmBuffer.length / 2 / SAMPLE_RATE) * 1000;
 }
 
 const HALLUCINATION_PATTERNS = [
@@ -127,126 +115,29 @@ function isHallucination(text) {
 }
 
 // ══════════════════════════════════════════════════════════
-// Per-User OWW WebSocket 管理
+// HTTP 單次偵測
 // ══════════════════════════════════════════════════════════
-
-function createUserOWWConnection(guildId, userId) {
-  const state = guildStates.get(guildId);
-  if (!state) return;
-
-  const userState = state.users.get(userId);
-  if (!userState) return;
-
-  const wsUrl = `${OWW_WS_URL}/?session_id=${guildId}_${userId}`;
-  const ws = new WebSocket(wsUrl);
-  userState.owwWs = ws;
-  userState.owwReady = false;
-
-  ws.on('open', () => {
-    console.log(`[STT] 🔗 OWW WS 已連線 User: ${userId} (Guild: ${guildId})`);
-    ws.send(JSON.stringify({ session_id: `${guildId}_${userId}` }));
-    ws.send('reset');
-    userState.owwReady = true;
-  });
-
-  ws.on('message', (data) => {
-    if (!state.active) return;
-
-    let msg;
-    try { msg = JSON.parse(data.toString()); }
-    catch { return; }
-
-    if (msg.event === 'reset_ok') {
-      console.log(`[STT] ✅ OWW reset 確認 User: ${userId}`);
-      return;
-    }
-
-    if (msg.event === 'resumed') {
-      console.log(`[STT] ▶️ OWW resume 確認 User: ${userId}`);
-      return;
-    }
-
-    if (msg.event === 'inference' && msg.detected) {
-      const now = Date.now();
-
-      if (state.isExclusive) return;
-      if (now < userState.cooldownUntil) return;
-
-      console.log(`[STT] ✅ 喚醒詞觸發 User: ${userId}, prob: ${msg.prob_score}`);
-
-      handleWakeup(guildId, userId, userState.member).catch((err) => {
-        console.error('[STT] handleWakeup 錯誤:', err.message);
-      });
-    }
-  });
-
-  ws.on('close', () => {
-    console.warn(`[STT] ⚠️ OWW WS 斷線 User: ${userId}`);
-    userState.owwReady = false;
-
-    if (state.active && state.users.has(userId)) {
-      setTimeout(() => {
-        if (state.active && state.users.has(userId)) {
-          console.log(`[STT] 🔄 重連 OWW WS User: ${userId}`);
-          createUserOWWConnection(guildId, userId);
-        }
-      }, 2000);
-    }
-  });
-
-  ws.on('error', (err) => {
-    console.error(`[STT] OWW WS 錯誤 User: ${userId}:`, err.message);
-  });
-}
-
-function pauseAllOWW(guildId, exceptUserId = null) {
-  const state = guildStates.get(guildId);
-  if (!state) return;
-
-  for (const [uid, userState] of state.users.entries()) {
-    if (uid === exceptUserId) continue;
-    if (userState.owwWs && userState.owwWs.readyState === WebSocket.OPEN) {
-      userState.owwWs.send(JSON.stringify({ command: 'pause' }));
-    }
-    userState.owwPaused = true;
+async function detectWakeword(guildId, userId, pcmBuffer) {
+  try {
+    const sessionId = `${guildId}_${userId}`;
+    const response  = await axios.post(
+      `${OWW_HTTP_URL}/detect?session_id=${sessionId}`,
+      pcmBuffer,
+      {
+        headers: { 'Content-Type': 'application/octet-stream' },
+        timeout: 3000,
+      }
+    );
+    return response.data;
+  } catch (err) {
+    console.error(`[STT] OWW HTTP 偵測失敗 (${userId}):`, err.message);
+    return { detected: false };
   }
-}
-
-function resumeAllOWW(guildId) {
-  const state = guildStates.get(guildId);
-  if (!state) return;
-
-  for (const [uid, userState] of state.users.entries()) {
-    if (userState.owwWs && userState.owwWs.readyState === WebSocket.OPEN) {
-      userState.owwWs.send(JSON.stringify({ command: 'resume' }));
-    }
-    userState.owwPaused = false;
-    userState.pendingChunks = [];
-  }
-}
-
-function sendPCMToUserOWW(userState, chunk) {
-  if (userState.owwPaused) return;
-  if (!userState.owwReady || !userState.owwWs || userState.owwWs.readyState !== WebSocket.OPEN) {
-    userState.pendingChunks.push(chunk);
-    const maxPending = Math.ceil(16000 * 2 / chunk.length);
-    while (userState.pendingChunks.length > maxPending) userState.pendingChunks.shift();
-    return;
-  }
-
-  if (userState.pendingChunks.length > 0) {
-    const merged = Buffer.concat(userState.pendingChunks);
-    userState.pendingChunks = [];
-    userState.owwWs.send(merged);
-  }
-
-  userState.owwWs.send(chunk);
 }
 
 // ══════════════════════════════════════════════════════════
 // 訂閱使用者音訊
 // ══════════════════════════════════════════════════════════
-
 function subscribeUser(guildId, userId, member) {
   const state = guildStates.get(guildId);
   if (!state || state.users.has(userId)) return;
@@ -255,17 +146,15 @@ function subscribeUser(guildId, userId, member) {
 
   const userState = {
     member,
-    owwWs:         null,
-    owwReady:      false,
-    owwPaused:     false,
-    pendingChunks: [],
+    detectChunks:  [],
+    detectBytes:   0,
     recordChunks:  [],
     stream:        null,
     cooldownUntil: 0,
+    isDetecting:   false,
+    detectTimer:   null,
   };
   state.users.set(userId, userState);
-
-  createUserOWWConnection(guildId, userId);
 
   const opusStream = connection.receiver.subscribe(userId, {
     end: { behavior: EndBehaviorType.Manual },
@@ -276,6 +165,36 @@ function subscribeUser(guildId, userId, member) {
   );
   userState.stream = pcmStream;
 
+  // ── 說話開始：啟動偵測視窗 ──
+  connection.receiver.speaking.on('start', (speakingUserId) => {
+    if (speakingUserId !== userId) return;
+    if (!state.active) return;
+    if (state.isExclusive) return;
+    if (userState.isDetecting) return;
+
+    userState.isDetecting  = true;
+    userState.detectChunks = [];
+    userState.detectBytes  = 0;
+
+    userState.detectTimer = setTimeout(() => {
+      triggerDetection(guildId, userId);
+    }, DETECT_WINDOW_MS);
+  });
+
+  // ── 說話結束：提前送出偵測 ──
+  connection.receiver.speaking.on('end', (speakingUserId) => {
+    if (speakingUserId !== userId) return;
+    if (!state.active) return;
+    if (!userState.isDetecting) return;
+
+    if (userState.detectTimer) {
+      clearTimeout(userState.detectTimer);
+      userState.detectTimer = null;
+    }
+    triggerDetection(guildId, userId);
+  });
+
+  // ── PCM 資料流 ──
   pcmStream.on('data', (chunk) => {
     if (!state.active) return;
 
@@ -286,7 +205,15 @@ function subscribeUser(guildId, userId, member) {
       return;
     }
 
-    sendPCMToUserOWW(userState, chunk);
+    if (userState.isDetecting) {
+      userState.detectChunks.push(chunk);
+      userState.detectBytes += chunk.length;
+
+      while (userState.detectBytes > DETECT_MAX_BYTES && userState.detectChunks.length > 0) {
+        const dropped = userState.detectChunks.shift();
+        userState.detectBytes -= dropped.length;
+      }
+    }
   });
 
   pcmStream.on('error', (err) => {
@@ -294,6 +221,55 @@ function subscribeUser(guildId, userId, member) {
   });
 
   console.log(`[STT] 🎧 開始監聽使用者：${member?.displayName || userId}`);
+}
+
+// ══════════════════════════════════════════════════════════
+// 觸發偵測（說話結束 or 2 秒到期）
+// ══════════════════════════════════════════════════════════
+async function triggerDetection(guildId, userId) {
+  const state = guildStates.get(guildId);
+  if (!state) return;
+
+  const userState = state.users.get(userId);
+  if (!userState) return;
+
+  userState.isDetecting = false;
+  if (userState.detectTimer) {
+    clearTimeout(userState.detectTimer);
+    userState.detectTimer = null;
+  }
+
+  if (state.isExclusive) return;
+
+  const now = Date.now();
+  if (now < userState.cooldownUntil) return;
+
+  const chunks = userState.detectChunks.splice(0);
+  userState.detectBytes = 0;
+
+  if (chunks.length === 0) return;
+
+  const pcmBuffer = Buffer.concat(chunks);
+
+  const rms = calcRMS(pcmBuffer);
+  if (rms < RMS_THRESHOLD) return;
+
+  console.log(`[STT] 🔍 送出偵測 User: ${userState.member?.displayName || userId} (${calcDurationMs(pcmBuffer).toFixed(0)}ms, RMS: ${rms.toFixed(0)})`);
+
+  const result = await detectWakeword(guildId, userId, pcmBuffer);
+
+  if (!result.detected) {
+    if (result.prob_score !== undefined) {
+      console.log(`[STT] ❌ 未偵測到喚醒詞 prob=${result.prob_score?.toFixed(4)} User: ${userId}`);
+    }
+    return;
+  }
+
+  console.log(`[STT] ✅ 喚醒詞觸發 User: ${userId}, prob: ${result.prob_score}`);
+
+  handleWakeup(guildId, userId, userState.member).catch((err) => {
+    console.error('[STT] handleWakeup 錯誤:', err.message);
+  });
 }
 
 // ── 播放喚醒音效 ─────────────────────────────────────────
@@ -321,19 +297,16 @@ function playWakeupSound(connection) {
   });
 }
 
-// ────────────────────────────────────────────────────────
-// [新增 3] Groq 轉文字 — verbose_json + no_speech_prob
-// ────────────────────────────────────────────────────────
+// ── Groq 轉文字 ──────────────────────────────────────────
 async function transcribeWithGroq(wavFilePath) {
   const transcription = await groq.audio.transcriptions.create({
     file:            fs.createReadStream(wavFilePath),
     model:           'whisper-large-v3',
     language:        'zh',
-    response_format: 'verbose_json',   // ← 取得 segments 資訊
+    response_format: 'verbose_json',
     prompt:          '以下是使用者對語音助理說的指令。',
   });
 
-  // ── no_speech_prob 過濾 ──────────────────────────────
   if (transcription.segments && transcription.segments.length > 0) {
     const avgNoSpeech = transcription.segments.reduce(
       (sum, seg) => sum + (seg.no_speech_prob ?? 0), 0
@@ -353,7 +326,6 @@ async function transcribeWithGroq(wavFilePath) {
 // ══════════════════════════════════════════════════════════
 // 喚醒後流程（獨佔模式）
 // ══════════════════════════════════════════════════════════
-
 async function handleWakeup(guildId, userId, member) {
   const state = guildStates.get(guildId);
   if (!state) return;
@@ -364,29 +336,71 @@ async function handleWakeup(guildId, userId, member) {
   if (!userState) return;
 
   // ── 1. 進入獨佔模式 ──
-  state.isExclusive = true;
+  state.isExclusive     = true;
   state.exclusiveUserId = userId;
-  state.isRecording = false;
+  state.isRecording     = false;
 
   console.log(`[STT] 🔒 進入獨佔模式 User: ${member?.displayName || userId}`);
-
-  pauseAllOWW(guildId);
   for (const us of state.users.values()) us.recordChunks = [];
 
-  // ── 2. 播放喚醒音效 + 提示 ──
+  // ── 2. 提示文字 + 立刻開始錄音 + 播音效 ──
   const wakeupName = member?.displayName || '使用者';
   textChannel.send(`🎙️ "**${wakeupName}**" 說吧，我在聽`).catch(() => {});
+
+  state.isRecording = true;   // 音效播出同時開始收音
+
   await playWakeupSound(connection).catch(() => {});
 
-  // ── 3. 獨佔錄音 ──
-  state.isRecording = true;
-
+  // ── 3. 錄音：靜音自動截止 + 最長上限 ──────────────────
+  //
+  //   每 SILENCE_CHECK_MS(100ms) 檢查最近收到的 chunk RMS
+  //   若連續靜音超過 RECORD_SILENCE_MS → 提前截止
+  //   若超過 RECORD_MAX_MS → 強制截止
+  //
   await new Promise((resolve) => {
+    let silenceAccumMs = 0;
+    let totalElapsedMs = 0;
+
+    // 最長上限保底計時器
     state.recordTimer = setTimeout(() => {
+      clearInterval(silenceChecker);
       state.isRecording = false;
       state.recordTimer = null;
+      console.log(`[STT] ⏱️ 達到最長錄音上限 (${RECORD_MAX_MS}ms)，截止`);
       resolve();
-    }, RECORD_DURATION_MS);
+    }, RECORD_MAX_MS);
+
+    // 每 100ms 檢查靜音
+    const silenceChecker = setInterval(() => {
+      totalElapsedMs += SILENCE_CHECK_MS;
+
+      // 取最近約 100ms 的 chunks（960 samples/chunk @16kHz ≈ 60ms，取最後 2 個約 120ms）
+      const recentChunks = userState.recordChunks.slice(-2);
+
+      if (recentChunks.length === 0) {
+        // 完全沒有任何資料，視為靜音
+        silenceAccumMs += SILENCE_CHECK_MS;
+      } else {
+        const recentBuf = Buffer.concat(recentChunks);
+        const rms = calcRMS(recentBuf);
+
+        if (rms < RMS_THRESHOLD) {
+          silenceAccumMs += SILENCE_CHECK_MS;
+        } else {
+          silenceAccumMs = 0;   // 有聲音，重置靜音計數
+        }
+      }
+
+      // 靜音超過閾值 且 已錄超過最短長度 → 提前截止
+      if (silenceAccumMs >= RECORD_SILENCE_MS && totalElapsedMs >= MIN_AUDIO_DURATION_MS) {
+        clearTimeout(state.recordTimer);
+        clearInterval(silenceChecker);
+        state.isRecording = false;
+        state.recordTimer = null;
+        console.log(`[STT] 🔇 靜音 ${silenceAccumMs}ms，提前截止（共錄 ${totalElapsedMs}ms）`);
+        resolve();
+      }
+    }, SILENCE_CHECK_MS);
   });
 
   // ── 4. 取出錄音資料 ──
@@ -402,7 +416,7 @@ async function handleWakeup(guildId, userId, member) {
 
   const pcmBuffer = Buffer.concat(recordedChunks);
 
-  // ── [新增 2] 音訊長度下限檢查 ──────────────────────────
+  // ── 音訊長度下限檢查 ──
   const durationMs = calcDurationMs(pcmBuffer);
   console.log(`[STT] ⏱️ 音訊長度：${durationMs.toFixed(0)}ms（下限：${MIN_AUDIO_DURATION_MS}ms）`);
 
@@ -413,22 +427,19 @@ async function handleWakeup(guildId, userId, member) {
     return;
   }
 
-  // ── [新增 1] VAD 有聲幀比例檢查（取代純 RMS）──────────
+  // ── VAD 有聲幀比例檢查 ──
   const voiceRatio = calcVoiceRatio(pcmBuffer);
   console.log(`[STT] 🎙️ VAD 有聲幀比例：${(voiceRatio * 100).toFixed(1)}%（下限：${(VAD_VOICE_RATIO_MIN * 100).toFixed(0)}%）`);
 
   if (voiceRatio < VAD_VOICE_RATIO_MIN) {
-    // 有聲幀不足，但仍做 RMS 二次確認（避免誤殺短促語音）
     const rms = calcRMS(pcmBuffer);
     console.log(`[STT] 🔊 VAD 不足，RMS 二次確認：${rms.toFixed(1)}（閾值：${RMS_THRESHOLD}）`);
-
     if (rms < RMS_THRESHOLD) {
       console.warn('[STT] ⚠️ VAD + RMS 均不足，視為靜音');
       await textChannel.send('❌ 沒有偵測到語音，請再試一次').catch(() => {});
       exitExclusiveMode(guildId);
       return;
     }
-
     console.log('[STT] ℹ️ RMS 通過，繼續處理（短促語音）');
   }
 
@@ -439,7 +450,7 @@ async function handleWakeup(guildId, userId, member) {
 
   let text = '';
   try {
-    text = await transcribeWithGroq(wavFile);  // 內含 no_speech_prob 過濾
+    text = await transcribeWithGroq(wavFile);
     console.log(`[STT] 📝 辨識結果：「${text}」 (User: ${userId})`);
   } catch (err) {
     console.error('[STT] Groq 轉文字失敗:', err.message);
@@ -461,7 +472,7 @@ async function handleWakeup(guildId, userId, member) {
   const finalName = speakerMember?.displayName || '使用者';
   await textChannel.send(`🗣️ "**${finalName}**" ：${text}`).catch(() => {});
 
-  // ── 6. 退出獨佔模式（在 callback 之前）──
+  // ── 6. 退出獨佔模式 ──
   exitExclusiveMode(guildId);
 
   // ── 7. 設定冷卻 ──
@@ -493,14 +504,12 @@ function exitExclusiveMode(guildId) {
     state.recordTimer = null;
   }
 
-  resumeAllOWW(guildId);
   console.log(`[STT] 🔓 已退出獨佔模式 (Guild: ${guildId})`);
 }
 
 // ══════════════════════════════════════════════════════════
 // 公開 API
 // ══════════════════════════════════════════════════════════
-
 function startSTTListening(connection, guild, textChannel, onWakeup) {
   const guildId = guild.id;
 
@@ -523,7 +532,6 @@ function startSTTListening(connection, guild, textChannel, onWakeup) {
   };
   guildStates.set(guildId, state);
 
-  // 訂閱目前在頻道內的所有使用者
   const voiceChannel = guild.channels.cache.get(connection.joinConfig.channelId);
   if (voiceChannel) {
     for (const [memberId, member] of voiceChannel.members) {
@@ -533,7 +541,6 @@ function startSTTListening(connection, guild, textChannel, onWakeup) {
     }
   }
 
-  // 監聽新加入的使用者
   connection.receiver.speaking.on('start', (userId) => {
     if (!state.active) return;
     const member = guild.members.cache.get(userId);
@@ -557,8 +564,8 @@ function stopSTTListening(guildId) {
   }
 
   for (const [userId, userState] of state.users.entries()) {
-    if (userState.owwWs) {
-      try { userState.owwWs.close(); } catch {}
+    if (userState.detectTimer) {
+      clearTimeout(userState.detectTimer);
     }
     if (userState.stream) {
       try { userState.stream.destroy(); } catch {}
