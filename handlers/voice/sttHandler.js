@@ -334,6 +334,7 @@ async function handleWakeup(guildId, userId, member) {
   await new Promise((resolve) => {
     let silenceAccumMs = 0;
     let totalElapsedMs = 0;
+    const START_DELAY_MS = parseInt(process.env.STT_START_DELAY_MS); // 開口緩衝
 
     state.recordTimer = setTimeout(() => {
       clearInterval(silenceChecker);
@@ -345,6 +346,8 @@ async function handleWakeup(guildId, userId, member) {
 
     const silenceChecker = setInterval(() => {
       totalElapsedMs += SILENCE_CHECK_MS;
+
+      if (totalElapsedMs <= START_DELAY_MS) return;
 
       const recentBuf = userState.recordChunks.length > 0
         ? Buffer.concat(userState.recordChunks.slice(-2))
@@ -366,6 +369,7 @@ async function handleWakeup(guildId, userId, member) {
       }
     }, SILENCE_CHECK_MS);
   });
+
 
   // ── 4. 取出錄音資料 ──
   const recordedChunks = userState.recordChunks.splice(0);
