@@ -138,6 +138,7 @@ async function detectWakeword(guildId, userId, pcmBuffer) {
 
 // ══════════════════════════════════════════════════════════
 // 訂閱使用者音訊
+// ✅ 移除 speaking.on('start'/'end')，改由 startSTTListening 統一管理
 // ══════════════════════════════════════════════════════════
 function subscribeUser(guildId, userId, member) {
   const state = guildStates.get(guildId);
@@ -165,35 +166,6 @@ function subscribeUser(guildId, userId, member) {
     new prism.opus.Decoder({ rate: 16000, channels: 1, frameSize: 960 })
   );
   userState.stream = pcmStream;
-
-  // ── 說話開始：啟動偵測視窗 ──
-  connection.receiver.speaking.on('start', (speakingUserId) => {
-    if (speakingUserId !== userId) return;
-    if (!state.active) return;
-    if (state.isExclusive) return;
-    if (userState.isDetecting) return;
-
-    userState.isDetecting  = true;
-    userState.detectChunks = [];
-    userState.detectBytes  = 0;
-
-    userState.detectTimer = setTimeout(() => {
-      triggerDetection(guildId, userId);
-    }, DETECT_WINDOW_MS);
-  });
-
-  // ── 說話結束：提前送出偵測 ──
-  connection.receiver.speaking.on('end', (speakingUserId) => {
-    if (speakingUserId !== userId) return;
-    if (!state.active) return;
-    if (!userState.isDetecting) return;
-
-    if (userState.detectTimer) {
-      clearTimeout(userState.detectTimer);
-      userState.detectTimer = null;
-    }
-    triggerDetection(guildId, userId);
-  });
 
   // ── PCM 資料流 ──
   pcmStream.on('data', (chunk) => {
@@ -335,7 +307,7 @@ async function handleWakeup(guildId, userId, member) {
   await new Promise((resolve) => {
     let silenceAccumMs = 0;
     let totalElapsedMs = 0;
-    const START_DELAY_MS = parseInt(process.env.STT_START_DELAY_MS); // 開口緩衝
+    const START_DELAY_MS = parseInt(process.env.STT_START_DELAY_MS);
 
     state.recordTimer = setTimeout(() => {
       clearInterval(silenceChecker);
@@ -370,7 +342,6 @@ async function handleWakeup(guildId, userId, member) {
       }
     }, SILENCE_CHECK_MS);
   });
-
 
   // ── 4. 取出錄音資料 ──
   const recordedChunks = userState.recordChunks.splice(0);
@@ -437,10 +408,8 @@ async function handleWakeup(guildId, userId, member) {
   try {
     const aiReply = await getGeminiResponseVoice(userId, text);
     if (aiReply) {
-      // 文字頻道顯示回覆
       await textChannel.send(aiReply).catch(() => {});
 
-      // TTS 朗讀（直接用 guildId 呼叫，不需要 message 物件）
       const { playTTS } = require('../ttsHandler');
       const ttsResult = await playTTS(guildId, aiReply);
       if (ttsResult.success) {
@@ -482,19 +451,22 @@ function startSTTListening(connection, guild, textChannel, onWakeup) {
   }
 
   const state = {
-    active:          true,
+    active:           true,
     connection,
     guild,
     textChannel,
     onWakeup,
-    users:           new Map(),
-    isExclusive:     false,
-    exclusiveUserId: null,
-    isRecording:     false,
-    recordTimer:     null,
+    users:            new Map(),
+    isExclusive:      false,
+    exclusiveUserId:  null,
+    isRecording:      false,
+    recordTimer:      null,
+    _onSpeakingStart: null,   // ✅ 儲存 handler 引用供 stop 時移除
+    _onSpeakingEnd:   null,
   };
   guildStates.set(guildId, state);
 
+  // ── 訂閱頻道內現有成員 ──
   const voiceChannel = guild.channels.cache.get(connection.joinConfig.channelId);
   if (voiceChannel) {
     for (const [memberId, member] of voiceChannel.members) {
@@ -502,11 +474,48 @@ function startSTTListening(connection, guild, textChannel, onWakeup) {
     }
   }
 
-  connection.receiver.speaking.on('start', (userId) => {
+  // ✅ 統一綁定一次 speaking 事件（不再於 subscribeUser 內各自綁定）
+  const onSpeakingStart = (userId) => {
     if (!state.active) return;
+
+    // 新加入者自動訂閱（放在 isExclusive 判斷之前，確保獨佔期間加入的人也能被訂閱）
     const member = guild.members.cache.get(userId);
     if (member && !member.user.bot) subscribeUser(guildId, userId, member);
-  });
+
+    // 獨佔模式中不啟動偵測視窗
+    if (state.isExclusive) return;
+
+    const userState = state.users.get(userId);
+    if (!userState || userState.isDetecting) return;
+
+    userState.isDetecting  = true;
+    userState.detectChunks = [];
+    userState.detectBytes  = 0;
+
+    userState.detectTimer = setTimeout(() => {
+      triggerDetection(guildId, userId);
+    }, DETECT_WINDOW_MS);
+  };
+
+  const onSpeakingEnd = (userId) => {
+    if (!state.active) return;
+
+    const userState = state.users.get(userId);
+    if (!userState || !userState.isDetecting) return;
+
+    if (userState.detectTimer) {
+      clearTimeout(userState.detectTimer);
+      userState.detectTimer = null;
+    }
+    triggerDetection(guildId, userId);
+  };
+
+  connection.receiver.speaking.on('start', onSpeakingStart);
+  connection.receiver.speaking.on('end',   onSpeakingEnd);
+
+  // ✅ 儲存引用，stopSTTListening 時用來正確 removeListener
+  state._onSpeakingStart = onSpeakingStart;
+  state._onSpeakingEnd   = onSpeakingEnd;
 
   console.log(`[STT] 開始監聽：${guild.name}`);
 }
@@ -517,14 +526,30 @@ function stopSTTListening(guildId) {
 
   state.active = false;
 
+  // ✅ 正確移除 speaking 監聽器，避免殘留
+  if (state._onSpeakingStart) {
+    state.connection.receiver.speaking.removeListener('start', state._onSpeakingStart);
+    state._onSpeakingStart = null;
+  }
+  if (state._onSpeakingEnd) {
+    state.connection.receiver.speaking.removeListener('end', state._onSpeakingEnd);
+    state._onSpeakingEnd = null;
+  }
+
+  // ── 清理計時器與 stream ──
   if (state.recordTimer) {
     clearTimeout(state.recordTimer);
     state.recordTimer = null;
   }
 
   for (const [, userState] of state.users.entries()) {
-    if (userState.detectTimer) clearTimeout(userState.detectTimer);
-    if (userState.stream) try { userState.stream.destroy(); } catch {}
+    if (userState.detectTimer) {
+      clearTimeout(userState.detectTimer);
+      userState.detectTimer = null;
+    }
+    if (userState.stream) {
+      try { userState.stream.destroy(); } catch {}
+    }
   }
 
   guildStates.delete(guildId);
