@@ -394,13 +394,13 @@ function setupTTSCommands(client) {
           return interaction.editReply({ content: reason });
         }
 
-        const model = getActiveModel(guildId);
+        // ✅ 只顯示朗讀文字，不顯示 engine/model 資訊
+        const quotedText = text.split('\n').map(line => `> ${line}`).join('\n');
         await interaction.editReply({
           content:
-            `🔊 朗讀中 (engine: **${result.engine}**` +
-            (result.engine === 'sovits' ? ` | model: **${model.name}**` : '') +
-            `)` +
-            (result.queued ? `\n📋 已加入排隊（第 ${result.position} 位）` : '')
+            `🔊 **朗讀中**\n` +
+            `${quotedText}` +
+            (result.queued ? `\n\n📋 已加入排隊（第 ${result.position} 位）` : '')
         });
       }
 
