@@ -1,35 +1,31 @@
 const {
   getVoiceConnection,
-  createAudioPlayer,
-  createAudioResource,
-  AudioPlayerStatus,
-  StreamType
 } = require('@discordjs/voice');
-const { PREFIX } = require('../config/settings');
+const { SlashCommandBuilder } = require('discord.js');
 const { execSync, spawn } = require('child_process');
-const fs = require('fs');
+const fs   = require('fs');
 const path = require('path');
 const http = require('http');
-const dns = require('dns').promises;
+const dns  = require('dns').promises;
 
-// ── TTS 播放器 / 排隊 Map ────────────────────────────────
-const ttsPlayers  = new Map();
-const ttsQueues   = new Map();
+// ✅ 改用 audioManager 統一管理 TTS 層
+const { playTTSLayer } = require('./audioManager');
 
-// ── 目前啟用的模型（每個 Guild 各自獨立）─────────────────
+// ── TTS 排隊 Map ─────────────────────────────────────────
+// ttsPlayers 不再需要，由 audioManager 內部管理
+const ttsQueues    = new Map();
+const ttsIsPlaying = new Map(); // 追蹤是否正在播放（取代 ttsPlayers）
 const activeModels = new Map();
 
-// ── 字數上限 ─────────────────────────────────────────────
 const TTS_MAX_LENGTH = 1000;
 
 // ── SoVITS 連線設定 ──────────────────────────────────────
 const SOVITS_HOST = process.env.SOVITS_HOST || 'localhost';
 const SOVITS_PORT = parseInt(process.env.SOVITS_PORT) || 9880;
 
-// ── 從 .env 掃描所有模型 ─────────────────────────────────
-//    格式: SOVITS_MODEL_{key}_{FIELD}
-//    例如: SOVITS_MODEL_manbo_NAME=Manbo
-// ────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════
+//  模型載入
+// ════════════════════════════════════════════════════════
 const TTS_MODELS = {};
 
 function loadModelsFromEnv() {
@@ -37,52 +33,24 @@ function loadModelsFromEnv() {
   const fields = ['NAME', 'GPT', 'SOVITS', 'REF_AUDIO', 'PROMPT_TEXT', 'PROMPT_LANG', 'TEXT_LANG'];
   const found  = new Set();
 
-  // 先收集所有 key
   for (const envKey of Object.keys(process.env)) {
     if (!envKey.startsWith(prefix)) continue;
-    const rest = envKey.slice(prefix.length);          // e.g. "manbo_NAME"
-    const lastUnderscore = rest.lastIndexOf('_');
-    if (lastUnderscore === -1) continue;
-
-    const field = rest.slice(lastUnderscore + 1);      // e.g. "NAME"
-    // 處理像 PROMPT_TEXT、PROMPT_LANG、TEXT_LANG、REF_AUDIO 這種多底線欄位
-    // 策略：從已知 fields 反向比對
-    let matchedField = null;
-    let modelKey = null;
+    const rest = envKey.slice(prefix.length);
     for (const f of fields) {
-      if (envKey === `${prefix}${rest}` && rest.endsWith(`_${f}`)) {
-        matchedField = f;
-        modelKey = rest.slice(0, rest.length - f.length - 1).toLowerCase();
+      if (rest.endsWith(`_${f}`)) {
+        const modelKey = rest.slice(0, rest.length - f.length - 1).toLowerCase();
+        found.add(modelKey);
         break;
       }
     }
-    if (matchedField && modelKey) {
-      found.add(modelKey);
-    }
   }
 
-  // 再逐一讀取
   for (const key of found) {
-    // 找出 .env 中這個 key 用的原始大小寫
-    // 因為 key 已經 toLowerCase，需要重新匹配原始 env key 的 casing
-    const envPrefix = `SOVITS_MODEL_`;
-    
-    // 直接用 key 去讀（.env 中 key 部分保持原樣）
     const getVal = (field) => {
-      // 嘗試原始 key
-      const tryKeys = [
-        `${envPrefix}${key}_${field}`,
-        // 也嘗試保留原始大小寫的版本
-      ];
-      for (const k of tryKeys) {
-        // process.env 在 Windows 不分大小寫，但 Linux 分
-        // 所以我們遍歷所有 env key 做 case-insensitive 比對
-        const match = Object.keys(process.env).find(
-          e => e.toLowerCase() === k.toLowerCase()
-        );
-        if (match) return process.env[match];
-      }
-      return '';
+      const match = Object.keys(process.env).find(
+        e => e.toLowerCase() === `${prefix}${key}_${field}`.toLowerCase()
+      );
+      return match ? process.env[match] : '';
     };
 
     TTS_MODELS[key] = {
@@ -92,7 +60,7 @@ function loadModelsFromEnv() {
       ref_audio:      getVal('REF_AUDIO'),
       prompt_text:    getVal('PROMPT_TEXT'),
       prompt_lang:    getVal('PROMPT_LANG') || 'zh',
-      text_lang:      getVal('TEXT_LANG') || 'zh',
+      text_lang:      getVal('TEXT_LANG')   || 'zh',
     };
   }
 
@@ -101,7 +69,9 @@ function loadModelsFromEnv() {
 
 const DEFAULT_MODEL = (process.env.SOVITS_DEFAULT_MODEL || '').toLowerCase();
 
-// ── DNS 快取 ─────────────────────────────────────────────
+// ════════════════════════════════════════════════════════
+//  DNS 快取
+// ════════════════════════════════════════════════════════
 let cachedSoVITSIP = null;
 let cacheExpireAt  = 0;
 const DNS_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -123,12 +93,10 @@ async function resolveSoVITSHost() {
   }
 }
 
-// ── edge-tts fallback 語音設定 ────────────────────────────
-const VOICE_MAP = {
-  zh: 'zh-TW-YunJheNeural',
-  en: 'zh-TW-YunJheNeural',
-  ja: 'ja-JP-KeitaNeural',
-};
+// ════════════════════════════════════════════════════════
+//  edge-tts fallback
+// ════════════════════════════════════════════════════════
+const VOICE_MAP    = { zh: 'zh-TW-YunJheNeural', en: 'zh-TW-YunJheNeural', ja: 'ja-JP-KeitaNeural' };
 const DEFAULT_VOICE = 'zh-TW-YunJheNeural';
 
 function detectLanguage(text) {
@@ -138,9 +106,7 @@ function detectLanguage(text) {
   return 'zh';
 }
 
-function resolveVoice(text) {
-  return VOICE_MAP[detectLanguage(text)] ?? DEFAULT_VOICE;
-}
+function resolveVoice(text) { return VOICE_MAP[detectLanguage(text)] ?? DEFAULT_VOICE; }
 
 let hasEdgeTTS = false;
 function checkEdgeTTS() {
@@ -148,27 +114,22 @@ function checkEdgeTTS() {
   catch { return false; }
 }
 
-// ── 取得 Guild 目前的模型設定 ──────────────────────────────
+// ════════════════════════════════════════════════════════
+//  模型工具
+// ════════════════════════════════════════════════════════
 function getActiveModel(guildId) {
   const key = activeModels.get(guildId) || DEFAULT_MODEL || Object.keys(TTS_MODELS)[0];
   return { key, ...(TTS_MODELS[key] || {}) };
 }
 
-// ── 呼叫 SoVITS API 切換權重 ──────────────────────────────
 async function switchSoVITSWeights(gptWeights, sovitsWeights) {
   const resolvedIP = await resolveSoVITSHost();
 
   const callAPI = (apiPath) => new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      req.destroy(new Error('切換模型逾時'));
-    }, 15000);
-
+    const timer = setTimeout(() => { req.destroy(new Error('切換模型逾時')); }, 15000);
     const req = http.request({
-      hostname: resolvedIP,
-      port:     SOVITS_PORT,
-      path:     apiPath,
-      method:   'GET',
-      headers:  { Host: SOVITS_HOST },
+      hostname: resolvedIP, port: SOVITS_PORT, path: apiPath,
+      method: 'GET', headers: { Host: SOVITS_HOST },
     }, (res) => {
       clearTimeout(timer);
       let body = '';
@@ -178,39 +139,33 @@ async function switchSoVITSWeights(gptWeights, sovitsWeights) {
         else reject(new Error(`HTTP ${res.statusCode}: ${body}`));
       });
     });
-
     req.on('error', (err) => { clearTimeout(timer); reject(err); });
     req.end();
   });
 
   console.log(`🔄 [SoVITS] 切換 GPT: ${gptWeights}`);
   await callAPI(`/set_gpt_weights?weights_path=${encodeURIComponent(gptWeights)}`);
-
   console.log(`🔄 [SoVITS] 切換 SoVITS: ${sovitsWeights}`);
   await callAPI(`/set_sovits_weights?weights_path=${encodeURIComponent(sovitsWeights)}`);
 }
 
-// ── GPT-SoVITS 生成 TTS ────────────────────────────────────
+// ════════════════════════════════════════════════════════
+//  TTS 生成核心
+// ════════════════════════════════════════════════════════
 async function generateSoVITS(text, filename, guildId) {
   const resolvedIP = await resolveSoVITSHost();
   const model = getActiveModel(guildId);
 
   return new Promise((resolve, reject) => {
     const params = new URLSearchParams({
-      text,
-      text_lang:      model.text_lang,
-      ref_audio_path: model.ref_audio,
-      prompt_lang:    model.prompt_lang,
-      prompt_text:    model.prompt_text,
-      media_type:     'wav',
+      text, text_lang: model.text_lang, ref_audio_path: model.ref_audio,
+      prompt_lang: model.prompt_lang, prompt_text: model.prompt_text, media_type: 'wav',
     });
 
     let settled = false;
     function done(err) {
-      if (settled) return;
-      settled = true;
-      clearTimeout(connectTimer);
-      clearTimeout(receiveTimer);
+      if (settled) return; settled = true;
+      clearTimeout(connectTimer); clearTimeout(receiveTimer);
       if (err) reject(err); else resolve();
     }
 
@@ -220,21 +175,13 @@ async function generateSoVITS(text, filename, guildId) {
     let receiveTimer = null;
 
     const req = http.request({
-      hostname: resolvedIP,
-      port:     SOVITS_PORT,
-      path:     `/tts?${params.toString()}`,
-      method:   'GET',
-      headers:  { Host: SOVITS_HOST },
+      hostname: resolvedIP, port: SOVITS_PORT,
+      path: `/tts?${params.toString()}`, method: 'GET', headers: { Host: SOVITS_HOST },
     }, (res) => {
-      if (res.statusCode !== 200) {
-        done(new Error(`SoVITS HTTP ${res.statusCode}`));
-        res.resume();
-        return;
-      }
+      if (res.statusCode !== 200) { done(new Error(`SoVITS HTTP ${res.statusCode}`)); res.resume(); return; }
       receiveTimer = setTimeout(() => {
         req.destroy(new Error('SoVITS 音訊接收逾時（處理超過 30 秒）'));
       }, 30000);
-
       const fileStream = fs.createWriteStream(filename);
       res.pipe(fileStream);
       fileStream.on('finish', () => done(null));
@@ -247,28 +194,19 @@ async function generateSoVITS(text, filename, guildId) {
         console.log('🔌 [SoVITS] TCP 連線成功，等待推理完成...');
       });
     });
-
     req.on('error', (err) => done(err));
     req.end();
   });
 }
 
-// ── edge-tts 生成 ──────────────────────────────────────────
 function generateEdgeTTS(text, filename, voice) {
   return new Promise((resolve, reject) => {
-    const proc = spawn('edge-tts', [
-      '--voice', voice, '--text', text, '--write-media', filename,
-      '--rate', '+10%'
-    ]);
-    proc.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`edge-tts 退出碼: ${code}`));
-    });
+    const proc = spawn('edge-tts', ['--voice', voice, '--text', text, '--write-media', filename, '--rate', '+10%']);
+    proc.on('close', (code) => { if (code === 0) resolve(); else reject(new Error(`edge-tts 退出碼: ${code}`)); });
     proc.on('error', reject);
   });
 }
 
-// ── 統一 TTS 生成 ──────────────────────────────────────────
 async function generateTTS(text, filename, guildId) {
   try {
     const sovitsFile = filename.replace(/\.\w+$/, '_sovits.wav');
@@ -279,54 +217,55 @@ async function generateTTS(text, filename, guildId) {
   } catch (err) {
     console.warn(`⚠️ [SoVITS] 失敗 (${err.message})，切換至 edge-tts`);
   }
-
   if (!hasEdgeTTS) throw new Error('SoVITS 不可用且 edge-tts 未安裝');
-
-  const voice = resolveVoice(text);
+  const voice    = resolveVoice(text);
   const edgeFile = filename.replace(/\.\w+$/, '_edge.mp3');
   await generateEdgeTTS(text, edgeFile, voice);
   console.log(`✅ [edge-tts] 生成成功: ${text.slice(0, 20)}...`);
   return { file: edgeFile, engine: 'edge', voice };
 }
 
-// ── 安全刪除 ──────────────────────────────────────────────
 function safeUnlink(f) { try { fs.unlinkSync(f); } catch {} }
 
-// ── Queue 處理 ────────────────────────────────────────────
+// ════════════════════════════════════════════════════════
+//  佇列處理（改用 audioManager.playTTSLayer）
+// ════════════════════════════════════════════════════════
 async function processQueue(guildId) {
   const queue = ttsQueues.get(guildId);
-  if (!queue || queue.length === 0) { ttsQueues.delete(guildId); return; }
-
-  const { filename } = queue[0];
-  const connection = getVoiceConnection(guildId);
-
-  if (!connection) {
-    for (const item of queue) safeUnlink(item.filename);
+  if (!queue || queue.length === 0) {
     ttsQueues.delete(guildId);
-    ttsPlayers.delete(guildId);
+    ttsIsPlaying.delete(guildId);
     return;
   }
 
-  const player   = createAudioPlayer();
-  const resource = createAudioResource(filename, { inputType: StreamType.Arbitrary });
+  const { filename } = queue[0];
+  const connection = getVoiceConnection(guildId);
+  if (!connection) {
+    for (const item of queue) safeUnlink(item.filename);
+    ttsQueues.delete(guildId);
+    ttsIsPlaying.delete(guildId);
+    return;
+  }
 
-  player.play(resource);
-  connection.subscribe(player);
-  ttsPlayers.set(guildId, player);
+  ttsIsPlaying.set(guildId, true);
 
-  player.on(AudioPlayerStatus.Idle, () => {
-    safeUnlink(filename); queue.shift(); ttsPlayers.delete(guildId);
-    processQueue(guildId);
+  // ✅ 交由 audioManager 處理 subscribe，TTS 結束後自動恢復音樂/靜音層
+  const ok = playTTSLayer(guildId, filename, () => {
+    safeUnlink(filename);
+    queue.shift();
+    ttsIsPlaying.delete(guildId);
+    processQueue(guildId); // 繼續下一筆
   });
 
-  player.on('error', (err) => {
-    console.error(`❌ [${guildId}] TTS 播放錯誤:`, err.message);
-    safeUnlink(filename); queue.shift(); ttsPlayers.delete(guildId);
+  if (!ok) {
+    // audioManager 回傳失敗（connection 不存在）
+    safeUnlink(filename);
+    queue.shift();
+    ttsIsPlaying.delete(guildId);
     processQueue(guildId);
-  });
+  }
 }
 
-// ── 播放 TTS ──────────────────────────────────────────────
 async function playTTS(guildId, text) {
   const connection = getVoiceConnection(guildId);
   if (!connection) return { success: false, reason: 'no_connection' };
@@ -335,7 +274,6 @@ async function playTTS(guildId, text) {
   if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
   const baseFile = path.join(tempDir, `tts_${guildId}_${Date.now()}.tmp`);
-
   let result;
   try {
     result = await generateTTS(text, baseFile, guildId);
@@ -346,8 +284,7 @@ async function playTTS(guildId, text) {
 
   if (!ttsQueues.has(guildId)) ttsQueues.set(guildId, []);
   const queue     = ttsQueues.get(guildId);
-  const isPlaying = ttsPlayers.has(guildId);
-
+  const isPlaying = ttsIsPlaying.has(guildId);
   queue.push({ text, filename: result.file, engine: result.engine });
   if (!isPlaying) processQueue(guildId);
 
@@ -358,129 +295,173 @@ async function playTTS(guildId, text) {
   };
 }
 
-// ── 停止 TTS ──────────────────────────────────────────────
 function stopTTS(guildId) {
   if (ttsQueues.has(guildId)) {
     for (const item of ttsQueues.get(guildId)) safeUnlink(item.filename);
     ttsQueues.delete(guildId);
   }
-  if (ttsPlayers.has(guildId)) {
-    try { ttsPlayers.get(guildId).stop(); } catch {}
-    ttsPlayers.delete(guildId);
-    return true;
-  }
-  return false;
+  ttsIsPlaying.delete(guildId);
+  return true;
 }
 
-// ── 主設定 ────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════
+//  setupTTSCommands
+// ════════════════════════════════════════════════════════
 function setupTTSCommands(client) {
-  // 載入模型
   const count = loadModelsFromEnv();
   console.log(`📦 從 .env 載入了 ${count} 個 TTS 模型: ${Object.keys(TTS_MODELS).join(', ')}`);
-
-  if (count === 0) {
-    console.warn('⚠️ 未找到任何 SOVITS_MODEL_* 設定，請檢查 .env');
-  }
+  if (count === 0) console.warn('⚠️ 未找到任何 SOVITS_MODEL_* 設定，請檢查 .env');
 
   hasEdgeTTS = checkEdgeTTS();
-  if (!hasEdgeTTS) {
-    console.warn('⚠️ edge-tts 未安裝，fallback 不可用');
-  } else {
-    console.log('✅ edge-tts 已就緒（作為 fallback）');
-  }
-
+  console.log(hasEdgeTTS ? '✅ edge-tts 已就緒（作為 fallback）' : '⚠️ edge-tts 未安裝，fallback 不可用');
   console.log(`🎙️ GPT-SoVITS 目標: http://${SOVITS_HOST}:${SOVITS_PORT}`);
 
   resolveSoVITSHost().then(ip => {
     console.log(`✅ [DNS] 預解析完成: ${SOVITS_HOST} → ${ip}`);
   });
 
-  client.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
-    const content = message.content;
-    const guildId = message.guild?.id;
-    if (!guildId) return;
+  // ── 注入 /tts 子指令群組 ─────────────────────────────
+  client.commands.set('tts', {
+    data: new SlashCommandBuilder()
+      .setName('tts')
+      .setDescription('GPT-SoVITS 語音合成功能')
 
-    // ── !mmodels → 列出所有模型 ──────────────────────────
-    if (content === `${PREFIX}mmodels`) {
-      const modelKeys = Object.keys(TTS_MODELS);
-      if (modelKeys.length === 0) {
-        return message.reply('❌ 沒有設定任何模型，請檢查 `.env`');
+      // /tts say
+      .addSubcommand(sub =>
+        sub.setName('say')
+          .setDescription('朗讀文字')
+          .addStringOption(opt =>
+            opt.setName('text')
+              .setDescription(`要朗讀的文字（上限 ${TTS_MAX_LENGTH} 字）`)
+              .setRequired(true)
+          )
+      )
+
+      // /tts stop
+      .addSubcommand(sub =>
+        sub.setName('stop')
+          .setDescription('停止 TTS 並清空排隊')
+      )
+
+      // /tts models
+      .addSubcommand(sub =>
+        sub.setName('models')
+          .setDescription('列出所有可用的 TTS 模型')
+      )
+
+      // /tts model
+      .addSubcommand(sub =>
+        sub.setName('model')
+          .setDescription('切換 TTS 模型')
+          .addStringOption(opt =>
+            opt.setName('key')
+              .setDescription('模型名稱（使用 /tts models 查看）')
+              .setRequired(true)
+          )
+      ),
+
+    async execute(interaction) {
+      const sub     = interaction.options.getSubcommand();
+      const guildId = interaction.guildId;
+
+      if (!guildId) {
+        return interaction.reply({ content: '❌ 此指令只能在伺服器中使用', ephemeral: true });
       }
 
-      const current = activeModels.get(guildId) || DEFAULT_MODEL || modelKeys[0];
-      const lines = modelKeys.map(key => {
-        const m = TTS_MODELS[key];
-        const marker = key === current ? ' ◀ 目前' : '';
-        return `• \`${key}\` — **${m.name}**${marker}`;
-      });
+      // ── /tts say ───────────────────────────────────────
+      if (sub === 'say') {
+        const text = interaction.options.getString('text');
 
-      return message.reply(
-        `🎙️ **可用 TTS 模型：**\n${lines.join('\n')}\n\n` +
-        `切換：\`${PREFIX}mmodel <名稱>\``
-      );
-    }
+        if (text.length > TTS_MAX_LENGTH) {
+          return interaction.reply({
+            content: `❌ 太長！上限 ${TTS_MAX_LENGTH} 字（目前 ${text.length} 字）`,
+            ephemeral: true
+          });
+        }
 
-    // ── !mmodel <key> → 切換模型 ─────────────────────────
-    if (content.startsWith(`${PREFIX}mmodel `)) {
-      const key = content.slice(`${PREFIX}mmodel `.length).trim().toLowerCase();
+        const connection = getVoiceConnection(guildId);
+        if (!connection) {
+          return interaction.reply({ content: '❌ Bot 不在語音頻道！請先使用 `/join` 加入', ephemeral: true });
+        }
 
-      if (!TTS_MODELS[key]) {
-        const available = Object.keys(TTS_MODELS).map(k => `\`${k}\``).join(', ');
-        return message.reply(`❌ 找不到模型 \`${key}\`\n可用：${available}`);
+        await interaction.deferReply();
+        const result = await playTTS(guildId, text);
+
+        if (!result.success) {
+          const reason = result.reason === 'tts_failed'
+            ? '❌ TTS 生成失敗（SoVITS 離線且 edge-tts 不可用）'
+            : '❌ Bot 不在語音頻道';
+          return interaction.editReply({ content: reason });
+        }
+
+        const model = getActiveModel(guildId);
+        await interaction.editReply({
+          content:
+            `🔊 朗讀中 (engine: **${result.engine}**` +
+            (result.engine === 'sovits' ? ` | model: **${model.name}**` : '') +
+            `)` +
+            (result.queued ? `\n📋 已加入排隊（第 ${result.position} 位）` : '')
+        });
       }
 
-      const model = TTS_MODELS[key];
-      const msg = await message.reply(`🔄 正在切換至 **${model.name}**...`);
-
-      try {
-        await switchSoVITSWeights(model.gpt_weights, model.sovits_weights);
-        activeModels.set(guildId, key);
-
-        await msg.edit(
-          `✅ 已切換至 **${model.name}**！\n`
-        );
-      } catch (err) {
-        console.error('❌ 切換模型失敗:', err.message);
-        await msg.edit(`❌ 切換失敗：${err.message}`);
-      }
-      return;
-    }
-
-    // ── !m <文字> → TTS ───────────────────────────────────
-    if (content.startsWith(`${PREFIX}m `)) {
-      const text = content.slice(`${PREFIX}m `.length).trim();
-      if (!text) return message.reply(`❌ 用法：\`${PREFIX}m 你好\``);
-      if (text.length > TTS_MAX_LENGTH) {
-        return message.reply(`❌ 太長！上限 ${TTS_MAX_LENGTH} 字（目前 ${text.length}）`);
+      // ── /tts stop ──────────────────────────────────────
+      else if (sub === 'stop') {
+        const stopped = stopTTS(guildId);
+        await interaction.reply({
+          content: stopped ? '⏹️ 已停止 TTS 並清空排隊' : '❌ 目前沒有 TTS 在播放',
+          ephemeral: !stopped
+        });
       }
 
-      const connection = getVoiceConnection(guildId);
-      if (!connection) {
-        return message.reply(`❌ Bot 不在語音頻道！請先 \`${PREFIX}join\``);
+      // ── /tts models ────────────────────────────────────
+      else if (sub === 'models') {
+        const modelKeys = Object.keys(TTS_MODELS);
+
+        if (modelKeys.length === 0) {
+          return interaction.reply({ content: '❌ 沒有設定任何模型，請檢查 `.env`', ephemeral: true });
+        }
+
+        const current = activeModels.get(guildId) || DEFAULT_MODEL || modelKeys[0];
+        const lines = modelKeys.map(key => {
+          const m      = TTS_MODELS[key];
+          const marker = key === current ? ' ◀ **目前**' : '';
+          return `• \`${key}\` — **${m.name}**${marker}`;
+        });
+
+        await interaction.reply({
+          content: `🎙️ **可用 TTS 模型：**\n${lines.join('\n')}\n\n切換：\`/tts model key:<名稱>\``,
+          ephemeral: true
+        });
       }
 
-      await message.react('🔊');
-      const result = await playTTS(guildId, text);
+      // ── /tts model ─────────────────────────────────────
+      else if (sub === 'model') {
+        const key = interaction.options.getString('key').trim().toLowerCase();
 
-      if (!result.success) {
-        await message.reactions.removeAll().catch(() => {});
-        if (result.reason === 'tts_failed') {
-          return message.reply('❌ TTS 生成失敗（SoVITS 離線且 edge-tts 不可用）');
+        if (!TTS_MODELS[key]) {
+          const available = Object.keys(TTS_MODELS).map(k => `\`${k}\``).join(', ');
+          return interaction.reply({
+            content: `❌ 找不到模型 \`${key}\`\n可用：${available}`,
+            ephemeral: true
+          });
+        }
+
+        const model = TTS_MODELS[key];
+        await interaction.deferReply();
+
+        try {
+          await switchSoVITSWeights(model.gpt_weights, model.sovits_weights);
+          activeModels.set(guildId, key);
+          await interaction.editReply({ content: `✅ 已切換至 **${model.name}**！` });
+        } catch (err) {
+          console.error('❌ 切換模型失敗:', err.message);
+          await interaction.editReply({ content: `❌ 切換失敗：${err.message}` });
         }
       }
-      return;
-    }
-
-    // ── !mstop → 停止 ────────────────────────────────────
-    if (content === `${PREFIX}mstop`) {
-      const stopped = stopTTS(guildId);
-      return message.reply(stopped
-        ? '⏹️ 已停止 TTS 並清空排隊'
-        : '❌ 目前沒有 TTS 在播放'
-      );
     }
   });
+
+  console.log('✅ TTS Slash Commands 已載入（/tts say / stop / models / model）');
 }
 
 module.exports = { setupTTSCommands, playTTS, stopTTS };

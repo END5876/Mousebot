@@ -1,140 +1,157 @@
-const { EmbedBuilder } = require('discord.js');
-const { PREFIX, getRandom } = require('../config/settings');
+const { EmbedBuilder, SlashCommandBuilder } = require('discord.js');
+const { getRandom } = require('../config/settings');
+
+// 有 !say 權限的使用者 ID
+const SAY_AUTHORIZED_ID = '598054316510806017';
+// 「有什麼了不起」豁免的使用者 ID
+const LBQI_EXEMPT_ID    = '932536588389466162';
 
 function setupBasicCommands(client) {
+
+    // ════════════════════════════════════════════════════
+    //  保留：被動關鍵字監聽（不適合做成指令）
+    // ════════════════════════════════════════════════════
     client.on('messageCreate', async message => {
         if (message.author.bot) return;
-
         const content = message.content;
 
-        // !help
-        /*if (content === '!help') {
-            const embed = new EmbedBuilder()
-                .setColor(0x5865F2)
-                .setTitle('🤖 Bot 指令列表')
-                .setDescription('以下是所有可用的指令：')
-                .addFields(
-                    {
-                        name: '🎵 音樂指令',
-                        value: '`!play <網址>` - 播放 YouTube 音樂\n' +
-                               '`!stop` - 停止播放並離開\n' +
-                               '`!skip` - 跳過當前歌曲\n' +
-                               '`!pause` - 暫停播放\n' +
-                               '`!resume` - 繼續播放\n' +
-                               '`!queue` - 顯示播放佇列\n' +
-                               '`!nowplaying` / `!np` - 顯示當前歌曲'
-                    },
-                    {
-                        name: '🎤 語音指令',
-                        value: '`!join` - 加入你的語音頻道\n' +
-                               '`!leave` - 離開語音頻道\n' +
-                               '`!voice` - 顯示語音狀態'
-                    },
-                    {
-                        name: '📊 基本指令',
-                        value: '`!ping` - 測試延遲\n' +
-                               '`!serverinfo` - 伺服器資訊\n' +
-                               '`!help` - 顯示此幫助訊息'
-                    },
-                    {
-                        name: '🔞 其他指令',
-                        value: '`!nh<數字>` - nhentai 直接連結\n' +
-                               '`!nhs<關鍵字>` - nhentai 搜尋\n' +
-                               '`!nhr` - nhentai 隨機'
-                    }
-                )
-                .setFooter({ text: '使用 ! 作為指令前綴' })
-                .setTimestamp();
-
-            message.reply({ embeds: [embed] });
-        }*/
-
-        // !ping
-        if (content === '!ping') {
-            const sent = await message.reply('🏓 計算中...');
-            const ping = sent.createdTimestamp - message.createdTimestamp;
-            sent.edit(`🏓 Pong!\n📡 延遲：${ping}ms\n🌐 API 延遲：${Math.round(client.ws.ping)}ms`);
-        }
-
-        // !serverinfo
-        if (content === '!serverinfo') {
-            const { guild } = message;
-            const embed = new EmbedBuilder()
-                .setColor(0x5865F2)
-                .setTitle(`📊 ${guild.name} 伺服器資訊`)
-                .setThumbnail(guild.iconURL())
-                .addFields(
-                    { name: '👥 成員數量', value: `${guild.memberCount}`, inline: true },
-                    { name: '📅 創建日期', value: guild.createdAt.toLocaleDateString('zh-TW'), inline: true },
-                    { name: '👑 擁有者', value: `<@${guild.ownerId}>`, inline: true },
-                    { name: '💬 頻道數量', value: `${guild.channels.cache.size}`, inline: true },
-                    { name: '😀 表情符號', value: `${guild.emojis.cache.size}`, inline: true },
-                    { name: '🎭 身分組', value: `${guild.roles.cache.size}`, inline: true }
-                )
-                .setTimestamp();
-
-            message.reply({ embeds: [embed] });
-        }
-
-        // !陳樂瞳 或 !肖仔
-        if (content === `${PREFIX}陳樂瞳` || content === `${PREFIX}肖仔`) {
-            message.channel.send('陳樂瞳我不會再說你是肖仔了 因為你媽媽很酷');
-            return;
-        }
-
-        // !nh<數字>
-        if (content.startsWith(`${PREFIX}nh`) && !content.includes('s') && !content.includes('r')) {
-            const code = content.replace(`${PREFIX}nh`, '').trim();
-            if (code && /^\d+$/.test(code)) {
-                message.channel.send(`https://nhentai.net/g/${code}/`);
-                console.log(`🔞 nhentai 查詢: ${code}`);
-                return;
-            }
-        }
-
-        // !nhs<關鍵字>
-        if (content.startsWith(`${PREFIX}nhs`)) {
-            const query = content.replace(`${PREFIX}nhs`, '').trim();
-            if (query) {
-                message.channel.send(`https://nhentai.net/search/?q=${encodeURIComponent(query)}`);
-                console.log(`🔍 nhentai 搜尋: ${query}`);
-                return;
-            }
-        }
-
-        // !nhr
-        if (content === `${PREFIX}nhr`) {
-            const randomCode = getRandom(620000);
-            message.channel.send(`https://nhentai.net/g/${randomCode}/`);
-            console.log(`🎲 nhentai 隨機: ${randomCode}`);
-            return;
-        }
-
-        // !say<訊息>
-        if (content.startsWith(`${PREFIX}say`) && content !== `${PREFIX}say`) {
-            if (message.author.id === '598054316510806017') {
-                const sayText = content.replace(`${PREFIX}say`, '').trim();
-                message.delete().catch(() => {});
-                message.channel.send(sayText);
-                console.log(`💬 Say 指令: ${sayText}`);
-            } else {
-                message.reply('別想操控我 爛咖👎');
-            }
-            return;
-        }
-
-        // 有什麼了不起
-        if (content.includes('有什麼了不起') && 
-            message.author.id !== '932536588389466162' && 
-            content !== '裊器') {
+        // 「有什麼了不起」觸發
+        if (
+            content.includes('有什麼了不起') &&
+            message.author.id !== LBQI_EXEMPT_ID &&
+            content !== '裊器'
+        ) {
             const target = content.replace('有什麼了不起', '').trim();
             if (target) {
-                message.channel.send(`${target}有什麼了不起 爛${target}😒🤙`);
-                console.log(`😒 了不起回應: ${target}`);
-                return;
+                message.channel.send(`${target}有什麼了不起 爛${target}🙁🤙`);
+                console.log(`🙁 了不起回應: ${target}`);
             }
         }
     });
+
+    // ════════════════════════════════════════════════════
+    //  Slash Commands 注入
+    // ════════════════════════════════════════════════════
+
+    // ── /ping ────────────────────────────────────────────
+    client.commands.set('ping', {
+        data: new SlashCommandBuilder()
+            .setName('ping')
+            .setDescription('測試 Bot 延遲'),
+
+        async execute(interaction, client) {
+            await interaction.reply({ content: '🏓 計算中...' });
+            const ping = interaction.createdTimestamp - Date.now();
+            await interaction.editReply(
+                `🏓 Pong!\n` +
+                `📡 延遲：${Math.abs(ping)}ms\n` +
+                `🌐 API 延遲：${Math.round(client.ws.ping)}ms`
+            );
+        }
+    });
+
+    // ── /serverinfo ──────────────────────────────────────
+    client.commands.set('serverinfo', {
+        data: new SlashCommandBuilder()
+            .setName('serverinfo')
+            .setDescription('查看伺服器資訊'),
+
+        async execute(interaction) {
+            const { guild } = interaction;
+            await interaction.reply({ embeds: [
+                new EmbedBuilder()
+                    .setColor(0x5865F2)
+                    .setTitle(`📊 ${guild.name} 伺服器資訊`)
+                    .setThumbnail(guild.iconURL())
+                    .addFields(
+                        { name: '👥 成員數量', value: `${guild.memberCount}`,                          inline: true },
+                        { name: '📅 創建日期', value: guild.createdAt.toLocaleDateString('zh-TW'),    inline: true },
+                        { name: '👑 擁有者',   value: `<@${guild.ownerId}>`,                          inline: true },
+                        { name: '💬 頻道數量', value: `${guild.channels.cache.size}`,                 inline: true },
+                        { name: '😀 表情符號', value: `${guild.emojis.cache.size}`,                   inline: true },
+                        { name: '🎭 身分組',   value: `${guild.roles.cache.size}`,                    inline: true }
+                    )
+                    .setTimestamp()
+            ]});
+        }
+    });
+
+    // ── /nh ─────────────────────────────────────────────
+    client.commands.set('nh', {
+        data: new SlashCommandBuilder()
+            .setName('nh')
+            .setDescription('🔞 nhentai 直接連結')
+            .addIntegerOption(opt =>
+                opt.setName('code')
+                    .setDescription('nhentai 編號')
+                    .setRequired(true)
+                    .setMinValue(1)
+            ),
+
+        async execute(interaction) {
+            const code = interaction.options.getInteger('code');
+            await interaction.reply({ content: `https://nhentai.net/g/${code}/` });
+            console.log(`🔞 nhentai 查詢: ${code}`);
+        }
+    });
+
+    // ── /nhs ─────────────────────────────────────────────
+    client.commands.set('nhs', {
+        data: new SlashCommandBuilder()
+            .setName('nhs')
+            .setDescription('🔞 nhentai 搜尋')
+            .addStringOption(opt =>
+                opt.setName('query')
+                    .setDescription('搜尋關鍵字')
+                    .setRequired(true)
+            ),
+
+        async execute(interaction) {
+            const query = interaction.options.getString('query');
+            await interaction.reply({ content: `https://nhentai.net/search/?q=${encodeURIComponent(query)}` });
+            console.log(`🔍 nhentai 搜尋: ${query}`);
+        }
+    });
+
+    // ── /nhr ─────────────────────────────────────────────
+    client.commands.set('nhr', {
+        data: new SlashCommandBuilder()
+            .setName('nhr')
+            .setDescription('🔞 nhentai 隨機'),
+
+        async execute(interaction) {
+            const randomCode = getRandom(620000);
+            await interaction.reply({ content: `https://nhentai.net/g/${randomCode}/` });
+            console.log(`🎲 nhentai 隨機: ${randomCode}`);
+        }
+    });
+
+    // ── /say ─────────────────────────────────────────────
+    client.commands.set('say', {
+        data: new SlashCommandBuilder()
+            .setName('say')
+            .setDescription('讓機器裊說一句話')
+            .addStringOption(opt =>
+                opt.setName('text')
+                    .setDescription('要說的內容')
+                    .setRequired(true)
+            ),
+
+        async execute(interaction) {
+            if (interaction.user.id !== SAY_AUTHORIZED_ID) {
+                return interaction.reply({ content: '別想操控我 爛咖👎', ephemeral: true });
+            }
+
+            const sayText = interaction.options.getString('text');
+
+            // Slash Command 無法刪除觸發訊息，改用 ephemeral 確認
+            await interaction.reply({ content: `✅ 已發送`, ephemeral: true });
+            await interaction.channel.send(sayText);
+            console.log(`💬 Say 指令: ${sayText}`);
+        }
+    });
+
+    console.log('✅ 基本指令已載入');
 }
 
 module.exports = { setupBasicCommands };

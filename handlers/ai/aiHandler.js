@@ -1,10 +1,10 @@
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
-const { PREFIX } = require('../../config/settings');
+const { SlashCommandBuilder } = require('discord.js');
 const { GENERATION_CONFIG } = require('../../config/aiSettings');
 const { selectMode, getModeName } = require('./modeSelector');
 const developerMode = require('./modes/developerMode');
-const guguMode = require('./modes/gugugagaMode'); 
-const { playTTS } = require('../ttsHandler'); // 🔊 連動 TTS
+const guguMode = require('./modes/gugugagaMode');
+const { playTTS } = require('../ttsHandler');
 
 // 導入所有模式
 const lossMode = require('./modes/lossMode');
@@ -14,16 +14,16 @@ const inmuMode = require('./modes/inmuMode');
 const loverMode = require('./modes/loverMode');
 
 // --- 設定區域 ---
-const MODEL_NAME = "gemini-2.5-flash-lite"; 
-const RANDOM_REPLY_CHANCE = 0.15; // 15% 機率自動回應
-const MAX_IMAGE_SIZE_MB = 7; // 圖片大小上限（MB）
-const TTS_MAX_LENGTH = 1000; // TTS 字數上限（與 ttsHandler 保持一致）
+const MODEL_NAME = "gemini-2.5-flash-lite";
+const RANDOM_REPLY_CHANCE = 0.15;
+const MAX_IMAGE_SIZE_MB = 7;
+const TTS_MAX_LENGTH = 1000;
 
 // 初始化 API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// --- AI 回覆 TTS 開關（每個 Guild 獨立）---
-const aiTTSEnabled = new Map(); // guildId -> boolean，預設 True
+// --- AI TTS 開關（每個 Guild 獨立）---
+const aiTTSEnabled = new Map();
 
 function isAITTSEnabled(guildId) {
     return aiTTSEnabled.get(guildId) ?? true;
@@ -51,33 +51,21 @@ const VOICE_MODE_ADDON = `
 5. 在遵守以上規則的前提下，必須完全保持你現在的人格設定與語氣。
 `;
 
-/**
- * 根據模式名稱獲取對應的 System Prompt
- */
 function getSystemPrompt(mode) {
     const modeModule = MODE_MAP[mode];
     if (!modeModule) {
         console.error(`Unknown mode: ${mode}`);
         return lossMode.LOSS_MODE_PROMPT;
     }
-    
     const promptKey = Object.keys(modeModule).find(key => key.endsWith('_PROMPT'));
     return modeModule[promptKey];
 }
 
-/**
- * 獲取模型實例（根據模式調整 prompt）
- * @param {string} mode - 模式名稱
- * @param {boolean} isVoice - 是否為語音輸入，會附加口語化簡短回覆規則
- */
 function getModel(mode, isVoice = false) {
     let systemPrompt = getSystemPrompt(mode);
+    if (isVoice) systemPrompt = systemPrompt + VOICE_MODE_ADDON;
 
-    if (isVoice) {
-        systemPrompt = systemPrompt + VOICE_MODE_ADDON;
-    }
-    
-    return genAI.getGenerativeModel({ 
+    return genAI.getGenerativeModel({
         model: MODEL_NAME,
         systemInstruction: systemPrompt,
         safetySettings: [
@@ -99,9 +87,9 @@ function getUserHistory(userId) {
 
 function updateUserHistory(userId, role, text) {
     const history = getUserHistory(userId);
-    history.push({ role: role, parts: [{ text: text }] });
+    history.push({ role, parts: [{ text }] });
     if (history.length > 20) {
-        history.shift(); 
+        history.shift();
         history.shift();
     }
 }
@@ -110,22 +98,13 @@ function clearUserHistory(userId) {
     userChats.delete(userId);
 }
 
-/**
- * 從 Discord 附件下載圖片並轉成 Base64
- */
 async function fetchImageAsBase64(attachment) {
     const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
-    if (attachment.size > sizeLimit) {
-        console.warn(`[Image] 圖片過大，跳過：${attachment.name} (${(attachment.size / 1024 / 1024).toFixed(2)} MB)`);
-        return null;
-    }
+    if (attachment.size > sizeLimit) return null;
 
     const supportedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'];
     const mimeType = attachment.contentType?.split(';')[0] || 'image/jpeg';
-    if (!supportedTypes.includes(mimeType)) {
-        console.warn(`[Image] 不支援的格式，跳過：${mimeType}`);
-        return null;
-    }
+    if (!supportedTypes.includes(mimeType)) return null;
 
     try {
         const response = await fetch(attachment.url);
@@ -138,28 +117,18 @@ async function fetchImageAsBase64(attachment) {
     }
 }
 
-/**
- * 每次都重新選擇模式（不記住）
- */
 function getUserMode(userId, message) {
     const mode = selectMode(userId, message);
     console.log(`[Mode] User ${userId} -> ${getModeName(mode)}`);
     return mode;
 }
 
-/**
- * 🔊 觸發 TTS 朗讀
- * 僅在 AI TTS 開關開啟，且觸發者位於語音頻道時才朗讀
- */
-async function speakWithTTS(message, text) {
-    const guildId = message.guild?.id;
+async function speakWithTTS(source, text, guildId) {
     if (!guildId) return;
-
-    // ✅ 檢查 AI TTS 開關
     if (!isAITTSEnabled(guildId)) return;
 
-    // ✅ 檢查觸發者是否在語音頻道
-    const voiceChannel = message.member?.voice?.channel;
+    // source 可能是 message 或 interaction
+    const voiceChannel = source.member?.voice?.channel;
     if (!voiceChannel) {
         console.log(`🔇 [TTS] 使用者不在語音頻道，跳過朗讀`);
         return;
@@ -178,38 +147,21 @@ async function speakWithTTS(message, text) {
     }
 }
 
-// --- 核心邏輯 ---
+// --- 核心 AI 邏輯（不變）---
 
-/**
- * 支援圖片的 Gemini 回應函數
- */
 async function getGeminiResponse(userId, prompt, imageParts = []) {
     try {
         const mode = getUserMode(userId, prompt);
         const model = getModel(mode);
         const history = getUserHistory(userId);
-        
-        const chat = model.startChat({
-            history: history,
-            generationConfig: GENERATION_CONFIG,
-        });
+
+        const chat = model.startChat({ history, generationConfig: GENERATION_CONFIG });
 
         const messageParts = [];
-
         for (const img of imageParts) {
-            messageParts.push({
-                inlineData: {
-                    mimeType: img.mimeType,
-                    data: img.base64,
-                }
-            });
+            messageParts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } });
         }
-
-        if (prompt) {
-            messageParts.push({ text: prompt });
-        } else if (imageParts.length > 0) {
-            messageParts.push({ text: '請吐槽這張圖片' });
-        }
+        messageParts.push({ text: prompt || '請吐槽這張圖片' });
 
         const result = await chat.sendMessage(messageParts);
         const response = result.response.text();
@@ -228,25 +180,15 @@ async function getGeminiResponse(userId, prompt, imageParts = []) {
     }
 }
 
-/**
- * 🎙️ 語音輸入專用 Gemini 回應函數
- * 自動套用語音模式（短回覆、口語化）
- * @param {string} userId - 用戶 Discord ID
- * @param {string} prompt - STT 辨識出的文字
- * @returns {Promise<string>} AI 回覆文字
- */
 async function getGeminiResponseVoice(userId, prompt) {
     try {
         const mode = getUserMode(userId, prompt);
-        const model = getModel(mode, true); // isVoice = true
+        const model = getModel(mode, true);
         const history = getUserHistory(userId);
 
         const chat = model.startChat({
-            history: history,
-            generationConfig: {
-                ...GENERATION_CONFIG,
-                maxOutputTokens: 150, // 語音模式限制 token 數，避免回太長
-            },
+            history,
+            generationConfig: { ...GENERATION_CONFIG, maxOutputTokens: 150 },
         });
 
         const result = await chat.sendMessage([{ text: prompt }]);
@@ -263,177 +205,33 @@ async function getGeminiResponseVoice(userId, prompt) {
     }
 }
 
-/**
- * 短回應生成函數（隨機回應用）
- */
 async function getShortResponse(userId, message, imageParts = []) {
     try {
         const mode = getUserMode(userId, message);
         const model = getModel(mode);
         const history = getUserHistory(userId);
-        
+
         const shortPrompt = imageParts.length > 0 && !message
             ? `請用大約10~200個字回應或吐槽這張圖片`
             : `請用大約10~200字回應或吐槽訊息：「${message}」`;
-        
+
         const chat = model.startChat({
-            history: history,
-            generationConfig: {
-                ...GENERATION_CONFIG,
-                maxOutputTokens: 300,
-            },
+            history,
+            generationConfig: { ...GENERATION_CONFIG, maxOutputTokens: 300 },
         });
 
         const messageParts = [];
-
         for (const img of imageParts) {
-            messageParts.push({
-                inlineData: {
-                    mimeType: img.mimeType,
-                    data: img.base64,
-                }
-            });
+            messageParts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } });
         }
-
         messageParts.push({ text: shortPrompt });
 
         const result = await chat.sendMessage(messageParts);
-        let response = result.response.text().trim();
-        
-        return response;
+        return result.response.text().trim();
     } catch (error) {
         console.error(`Short Response Error:`, error.message);
         return null;
     }
-}
-
-// --- Discord 訊息處理 ---
-
-function setupAICommands(client) {
-  client.on('messageCreate', async message => {
-      if (message.author.bot) return;
-
-      const hasAttachment = message.attachments.size > 0;
-      const content = message.content?.trim() || '';
-
-      if (!content && !hasAttachment) return;
-
-      const userId = message.author.id;
-      const guildId = message.guild?.id;
-
-      // ── !aitts ── AI 回覆朗讀開關 ──────────────────────
-      if (content === `${PREFIX}aitts` && guildId) {
-          const current = isAITTSEnabled(guildId);
-          aiTTSEnabled.set(guildId, !current);
-          const status = !current ? '🔊 已開啟' : '🔇 已關閉';
-          return message.channel.send(`${status} AI 回覆朗讀功能`);
-      }
-
-      // 清除記憶指令
-      const isClearCommand = content === `${PREFIX}reset` || content === `${PREFIX}clearai`;
-      if (isClearCommand) {
-          const mode = selectMode(userId, content);
-          const modeModule = MODE_MAP[mode];
-          const clearMsg = modeModule.getClearMemoryMessage();
-          
-          clearUserHistory(userId);
-          return message.channel.send(clearMsg);
-      }
-
-      const isMentioned = message.mentions.has(client.user);
-      
-      if (isMentioned) {
-          // === Mention 回應邏輯 ===
-          let question = content.replace(/<@!?\d+>/g, '').trim();
-          
-          if (!question && !hasAttachment) return;
-          if (question.startsWith(`${PREFIX}m`)) return; // 攔截 TTS 相關指令
-          if (!process.env.GEMINI_API_KEY) return message.channel.send('❌ 未設定 API Key');
-
-          let thinkingMsg = null;
-          try {
-              const mode = getUserMode(userId, question || '圖片');
-              const modeModule = MODE_MAP[mode];
-              const thinkingText = modeModule.getThinkingMessage();
-              
-              thinkingMsg = await message.channel.send(thinkingText);
-
-              const imageParts = [];
-              if (hasAttachment) {
-                  for (const [, attachment] of message.attachments) {
-                      const imgData = await fetchImageAsBase64(attachment);
-                      if (imgData) imageParts.push(imgData);
-                  }
-              }
-              
-              const answer = await getGeminiResponse(userId, question, imageParts);
-              if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
-
-              if (answer.length <= 2000) {
-                  await message.channel.send(answer);
-              } else {
-                  const chunks = splitMessage(answer);
-                  for (let i = 0; i < chunks.length; i++) {
-                      await message.channel.send(chunks[i]);
-                  }
-              }
-
-              // 🔊 TTS：開關開啟且觸發者在語音頻道才朗讀
-              await speakWithTTS(message, answer);
-
-          } catch (error) {
-              if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
-              
-              const mode = selectMode(userId, question || '圖片');
-              const modeModule = MODE_MAP[mode];
-              const errorMsg = modeModule.getErrorMessage(error);
-              
-              message.channel.send(errorMsg);
-          }
-      } else {
-            // === 隨機回應邏輯 ===
-            if (!process.env.GEMINI_API_KEY) return;
-
-            const cleanedContent = content
-                .replace(/<@!?\d+>/g, '')
-                .replace(/<@&\d+>/g, '')
-                .replace(/<#\d+>/g, '')
-                .trim();
-
-            if (!cleanedContent && !hasAttachment) return;
-
-            const urlPattern = /(https?:\/\/[^\s]+)|(www\.[^\s]+)/gi;
-            const hasUrl = urlPattern.test(cleanedContent);
-            const isGuguCommand = cleanedContent.startsWith('!gugu');
-            const isTTSCommand  = cleanedContent.startsWith(`!m`);
-            const isSTTCommand  = cleanedContent.startsWith('!stt');
-
-            if (hasUrl || isGuguCommand || isTTSCommand || isSTTCommand) return;
-
-            const randomValue = Math.random();
-            if (randomValue < RANDOM_REPLY_CHANCE) {
-                try {
-                    const imageParts = [];
-                    if (hasAttachment) {
-                        for (const [, attachment] of message.attachments) {
-                            const imgData = await fetchImageAsBase64(attachment);
-                            if (imgData) imageParts.push(imgData);
-                        }
-                    }
-
-                    const shortReply = await getShortResponse(userId, cleanedContent, imageParts);
-                    if (shortReply) {
-                        await message.channel.send(shortReply);
-
-                        // 🔊 TTS：開關開啟且觸發者在語音頻道才朗讀
-                        await speakWithTTS(message, shortReply);
-                    }
-                } catch (error) {
-                    console.error('Random reply error:', error.message);
-                }
-            }
-        }
-  });
 }
 
 function splitMessage(text, maxLength = 1900) {
@@ -451,6 +249,207 @@ function splitMessage(text, maxLength = 1900) {
         chunks.push(chunk);
     }
     return chunks;
+}
+
+// ════════════════════════════════════════════════════════
+//  Slash Command 定義
+// ════════════════════════════════════════════════════════
+
+const slashCommands = [
+
+    // ── /ai ── 詢問 AI ──────────────────────────────────
+    {
+        data: new SlashCommandBuilder()
+            .setName('ai')
+            .setDescription('詢問 AI 問題')
+            .addStringOption(opt =>
+                opt.setName('question')
+                    .setDescription('你想問的問題')
+                    .setRequired(true)
+            )
+            .addAttachmentOption(opt =>
+                opt.setName('image')
+                    .setDescription('附上圖片（選填）')
+                    .setRequired(false)
+            ),
+
+        async execute(interaction) {
+            if (!process.env.GEMINI_API_KEY) {
+                return interaction.reply({ content: '❌ 未設定 API Key', ephemeral: true });
+            }
+
+            const userId = interaction.user.id;
+            const guildId = interaction.guildId;
+            const question = interaction.options.getString('question');
+            const attachment = interaction.options.getAttachment('image');
+
+            const mode = getUserMode(userId, question);
+            const modeModule = MODE_MAP[mode];
+            const thinkingText = modeModule.getThinkingMessage();
+
+            await interaction.reply({ content: thinkingText });
+
+            try {
+                const imageParts = [];
+                if (attachment) {
+                    const imgData = await fetchImageAsBase64(attachment);
+                    if (imgData) imageParts.push(imgData);
+                }
+
+                const answer = await getGeminiResponse(userId, question, imageParts);
+                const chunks = splitMessage(answer);
+
+                // 編輯第一則（取代 thinking 訊息）
+                await interaction.editReply({ content: chunks[0] });
+
+                // 超過 2000 字的後續分段
+                for (let i = 1; i < chunks.length; i++) {
+                    await interaction.followUp({ content: chunks[i] });
+                }
+
+                await speakWithTTS(interaction, answer, guildId);
+
+            } catch (error) {
+                const errorMsg = modeModule.getErrorMessage(error);
+                await interaction.editReply({ content: errorMsg });
+            }
+        }
+    },
+
+    // ── /clearai ── 清除 AI 記憶 ────────────────────────
+    {
+        data: new SlashCommandBuilder()
+            .setName('clearai')
+            .setDescription('清除你與 AI 的對話記憶'),
+
+        async execute(interaction) {
+            const userId = interaction.user.id;
+            const mode = selectMode(userId, '');
+            const modeModule = MODE_MAP[mode];
+            const clearMsg = modeModule.getClearMemoryMessage();
+
+            clearUserHistory(userId);
+            await interaction.reply({ content: clearMsg });
+        }
+    },
+
+    // ── /aitts ── AI 回覆朗讀開關 ───────────────────────
+    {
+        data: new SlashCommandBuilder()
+            .setName('aitts')
+            .setDescription('切換 AI 回覆是否自動朗讀（語音頻道）'),
+
+        async execute(interaction) {
+            const guildId = interaction.guildId;
+            if (!guildId) {
+                return interaction.reply({ content: '❌ 此指令只能在伺服器中使用', ephemeral: true });
+            }
+
+            const current = isAITTSEnabled(guildId);
+            aiTTSEnabled.set(guildId, !current);
+            const status = !current ? '🔊 已開啟' : '🔇 已關閉';
+            await interaction.reply({ content: `${status} AI 回覆朗讀功能` });
+        }
+    },
+];
+
+// ════════════════════════════════════════════════════════
+//  setupAICommands：同時掛載 Slash + 保留事件監聽
+// ════════════════════════════════════════════════════════
+
+function setupAICommands(client) {
+
+    // ── 註冊 Slash Commands 到 client.commands ──────────
+    for (const cmd of slashCommands) {
+        client.commands.set(cmd.data.name, cmd);
+    }
+
+    // ── 保留：Mention 回應 + 隨機回應（messageCreate）──
+    client.on('messageCreate', async message => {
+        if (message.author.bot) return;
+
+        const hasAttachment = message.attachments.size > 0;
+        const content = message.content?.trim() || '';
+        if (!content && !hasAttachment) return;
+
+        const userId = message.author.id;
+        const guildId = message.guild?.id;
+        const isMentioned = message.mentions.has(client.user);
+
+        if (isMentioned) {
+            // === Mention 回應邏輯 ===
+            let question = content.replace(/<@!?\d+>/g, '').trim();
+            if (!question && !hasAttachment) return;
+            if (!process.env.GEMINI_API_KEY) return message.channel.send('❌ 未設定 API Key');
+
+            let thinkingMsg = null;
+            try {
+                const mode = getUserMode(userId, question || '圖片');
+                const modeModule = MODE_MAP[mode];
+                thinkingMsg = await message.channel.send(modeModule.getThinkingMessage());
+
+                const imageParts = [];
+                if (hasAttachment) {
+                    for (const [, attachment] of message.attachments) {
+                        const imgData = await fetchImageAsBase64(attachment);
+                        if (imgData) imageParts.push(imgData);
+                    }
+                }
+
+                const answer = await getGeminiResponse(userId, question, imageParts);
+                if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
+
+                const chunks = splitMessage(answer);
+                for (const chunk of chunks) {
+                    await message.channel.send(chunk);
+                }
+
+                await speakWithTTS(message, answer, guildId);
+
+            } catch (error) {
+                if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
+                const mode = selectMode(userId, question || '圖片');
+                const modeModule = MODE_MAP[mode];
+                message.channel.send(modeModule.getErrorMessage(error));
+            }
+
+        } else {
+            // === 隨機回應邏輯 ===
+            if (!process.env.GEMINI_API_KEY) return;
+
+            const cleanedContent = content
+                .replace(/<@!?\d+>/g, '')
+                .replace(/<@&\d+>/g, '')
+                .replace(/<#\d+>/g, '')
+                .trim();
+
+            if (!cleanedContent && !hasAttachment) return;
+
+            const urlPattern = /(https?:\/\/[^\s]+)|(www\.[^\s]+)/gi;
+            if (urlPattern.test(cleanedContent)) return;
+            if (/^!(gugu|m|stt)/.test(cleanedContent)) return;
+
+            if (Math.random() < RANDOM_REPLY_CHANCE) {
+                try {
+                    const imageParts = [];
+                    if (hasAttachment) {
+                        for (const [, attachment] of message.attachments) {
+                            const imgData = await fetchImageAsBase64(attachment);
+                            if (imgData) imageParts.push(imgData);
+                        }
+                    }
+
+                    const shortReply = await getShortResponse(userId, cleanedContent, imageParts);
+                    if (shortReply) {
+                        await message.channel.send(shortReply);
+                        await speakWithTTS(message, shortReply, guildId);
+                    }
+                } catch (error) {
+                    console.error('Random reply error:', error.message);
+                }
+            }
+        }
+    });
 }
 
 module.exports = { setupAICommands, getGeminiResponse, getGeminiResponseVoice };

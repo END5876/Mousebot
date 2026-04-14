@@ -1,35 +1,31 @@
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
+const { SlashCommandBuilder } = require('discord.js');
 const { GUGU_MODE_PROMPT } = require('./modes/gugugagaMode');
 
 // 初始化 API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// 模型名稱
 const MODEL_NAME = "gemini-2.5-flash-lite";
 
-// 生成配置
 const GENERATION_CONFIG = {
-temperature: 1.2,        // 提高創意度
-topK: 64,
-topP: 0.95,
-maxOutputTokens: 8192,
+    temperature: 1.2,
+    topK: 64,
+    topP: 0.95,
+    maxOutputTokens: 8192,
 };
 
-/**
- * 獲取咕咕嘎嘎生成模型
- */
 function getGuguModel() {
-return genAI.getGenerativeModel({ 
-    model: MODEL_NAME,
-    systemInstruction: GUGU_MODE_PROMPT,
-    safetySettings: [
-        { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-    ],
-    generationConfig: GENERATION_CONFIG
-});
+    return genAI.getGenerativeModel({
+        model: MODEL_NAME,
+        systemInstruction: GUGU_MODE_PROMPT,
+        safetySettings: [
+            { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+        ],
+        generationConfig: GENERATION_CONFIG
+    });
 }
 
 /**
@@ -38,11 +34,10 @@ return genAI.getGenerativeModel({
  * @returns {Promise<string>} 生成的文章
  */
 async function generateGuguArticle(topic) {
-try {
-    const model = getGuguModel();
-    
-    // 構建提示詞
-    const prompt = `請根據以下主題，創作一篇完整的「咕咕嘎嘎體」文章：
+    try {
+        const model = getGuguModel();
+
+        const prompt = `請根據以下主題，創作一篇完整的「咕咕嘎嘎體」文章：
 
 主題：${topic}
 
@@ -58,70 +53,67 @@ try {
 
 請直接生成文章，不要有任何前綴說明。`;
 
-    const result = await model.generateContent(prompt);
-    const response = result.response;
-    const text = response.text();
-    
-    return text;
-} catch (error) {
-    console.error('咕咕嘎嘎生成錯誤:', error);
-    throw error;
-}
+        const result = await model.generateContent(prompt);
+        return result.response.text();
+
+    } catch (error) {
+        console.error('咕咕嘎嘎生成錯誤:', error);
+        throw error;
+    }
 }
 
 /**
- * 設置咕咕嘎嘎生成指令
- * @param {Client} client - Discord 客戶端
+ * 統一錯誤訊息處理
  */
-function setupGuguGenerator(client) {
-client.on('messageCreate', async (message) => {
-    // 忽略機器人自己的訊息
-    if (message.author.bot) return;
-
-    // 檢查是否為咕咕嘎嘎生成指令
-    // 只支援格式：!gugu <主題>
-    const guguRegex = /^!gugu\s+(.+)/;
-    const match = message.content.match(guguRegex);
-
-    // 如果沒有匹配到，直接返回（不做任何事）
-    if (!match) return;
-
-    const topic = match[1].trim();
-
-    // 檢查主題是否為空（理論上不會發生，因為正則已經要求 .+）
-    if (!topic) return;
-
-    try {
-        // 發送思考訊息
-        const thinkingMsg = await message.channel.send('⏳ 我操了老鐵...');
-
-        // 生成文章
-        const article = await generateGuguArticle(topic);
-
-        // 直接顯示文章內容
-        await thinkingMsg.edit(article);
-
-    } catch (error) {
-        console.error('生成咕咕嘎嘎文章時發生錯誤:', error);
-        
-        let errorMsg = '❌ 我草了老鐵...生成失敗了：' + error.message;
-        
-        if (error.message.includes('quota')) {
-            errorMsg += '\n\n⚠️ API 配額用完了，這攻略線崩了啊🤔 咕咕嘎嘎';
-        } else if (error.message.includes('safety')) {
-            errorMsg += '\n\n⚠️ 內容被安全過濾擋住了，這好感度掉太快了吧😨 咕咕嘎嘎';
-        } else if (error.message.includes('not found') || error.message.includes('404')) {
-            errorMsg += '\n\n⚠️ 模型不可用，請檢查 API 設定 咕咕嘎嘎';
-        }
-        
-        await message.reply(errorMsg);
+function getErrorMessage(error) {
+    let msg = '❌ 我草了老鐵...生成失敗了：' + error.message;
+    if (error.message.includes('quota')) {
+        msg += '\n\n⚠️ API 配額用完了，這攻略線崩了啊🤔 咕咕嘎嘎';
+    } else if (error.message.includes('safety')) {
+        msg += '\n\n⚠️ 內容被安全過濾擋住了，這好感度掉太快了吧😨 咕咕嘎嘎';
+    } else if (error.message.includes('not found') || error.message.includes('404')) {
+        msg += '\n\n⚠️ 模型不可用，請檢查 API 設定 咕咕嘎嘎';
     }
-});
+    return msg;
+}
 
-console.log('✅ 咕咕嘎嘎生成器已啟動！');
+// ════════════════════════════════════════════════════════
+//  setupGuguGenerator：注入 Slash Command + 保留事件監聽
+// ════════════════════════════════════════════════════════
+
+function setupGuguGenerator(client) {
+
+    // ── 注入 /gugu 到 client.commands ───────────────────
+    client.commands.set('gugu', {
+        data: new SlashCommandBuilder()
+            .setName('gugu')
+            .setDescription('生成一篇咕咕嘎嘎體文章')
+            .addStringOption(opt =>
+                opt.setName('topic')
+                    .setDescription('文章主題（例如：上班、貓咪、宇宙）')
+                    .setRequired(true)
+            ),
+
+        async execute(interaction) {
+            const topic = interaction.options.getString('topic');
+
+            // 先回應避免 3 秒逾時，並顯示思考訊息
+            await interaction.reply({ content: '⏳ 我操了老鐵...' });
+
+            try {
+                const article = await generateGuguArticle(topic);
+                await interaction.editReply({ content: article });
+            } catch (error) {
+                console.error('生成咕咕嘎嘎文章時發生錯誤:', error);
+                await interaction.editReply({ content: getErrorMessage(error) });
+            }
+        }
+    });
+
+    console.log('✅ 咕咕嘎嘎生成器已啟動！');
 }
 
 module.exports = {
-setupGuguGenerator,
-generateGuguArticle
+    setupGuguGenerator,
+    generateGuguArticle
 };
