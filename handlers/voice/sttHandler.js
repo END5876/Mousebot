@@ -504,6 +504,197 @@ function exitExclusiveMode(guildId) {
 }
 
 // ══════════════════════════════════════════════════════════
+// 手動模式：初始化 Session（不需 /stt start）
+// ══════════════════════════════════════════════════════════
+function ensureManualSession(connection, guild, textChannel, onWakeup) {
+  const guildId = guild.id;
+  let state = guildStates.get(guildId);
+
+  if (!state) {
+    state = {
+      active:           true,
+      connection,
+      guild,
+      textChannel,
+      onWakeup,
+      users:            new Map(),
+      isExclusive:      false,
+      exclusiveUserId:  null,
+      isRecording:      false,
+      recordTimer:      null,
+      _onSpeakingStart: null,
+      _onSpeakingEnd:   null,
+      _memTimer:        null,
+      manualOnly:       true, // 標記為手動模式（不綁 speaking event）
+    };
+    guildStates.set(guildId, state);
+    console.log(`[STT][manual] 建立手動 Session：${guild.name}`);
+  } else {
+    // 更新引用（避免 reconnect / channel 切換）
+    state.active = true;
+    state.connection = connection || state.connection;
+    state.guild = guild || state.guild;
+    state.textChannel = textChannel || state.textChannel;
+    if (onWakeup) state.onWakeup = onWakeup;
+  }
+
+  return state;
+}
+
+// ══════════════════════════════════════════════════════════
+// 手動單次錄音：錄音 -> STT -> callback(AI/TTS 由外部處理)
+// ══════════════════════════════════════════════════════════
+async function manualRecordOnce(guildId, userId, member, textChannel, onWakeupOverride) {
+  const state = guildStates.get(guildId);
+  if (!state || !state.active) {
+    throw new Error('STT Session 不存在，請先 ensureManualSession');
+  }
+
+  const userMember = member || state.guild?.members?.cache?.get(userId);
+  if (!userMember || userMember.user?.bot) {
+    throw new Error('無效的使用者');
+  }
+
+  // 若此 user 尚未訂閱，補訂閱
+  if (!state.users.has(userId)) {
+    subscribeUser(guildId, userId, userMember);
+  }
+
+  const userState = state.users.get(userId);
+  if (!userState) throw new Error('建立使用者音訊訂閱失敗');
+
+  // 避免與喚醒模式或其他手動流程衝突
+  if (state.isExclusive) {
+    throw new Error('目前已有錄音流程進行中，請稍後');
+  }
+
+  let silenceChecker = null;
+  const targetTextChannel = textChannel || state.textChannel;
+
+  try {
+    // 1) 進入獨佔模式
+    state.isExclusive = true;
+    state.exclusiveUserId = userId;
+    state.isRecording = false;
+
+    for (const us of state.users.values()) {
+      us.recordChunks = [];
+      us.recordBytes = 0;
+    }
+
+    // 2) 提示 + 音效
+    const wakeupName = userMember?.displayName || '使用者';
+    await targetTextChannel?.send(`🎙️ "**${wakeupName}**" 手動錄音已開始，請說話`).catch(() => {});
+    state.isRecording = true;
+    await playWakeupSound(state.connection).catch(() => {});
+
+    // 3) 錄音（靜音截止 + 上限）
+    await new Promise((resolve) => {
+      let silenceAccumMs = 0;
+      let totalElapsedMs = 0;
+      const START_DELAY_MS = parseInt(process.env.STT_START_DELAY_MS || '200', 10);
+
+      state.recordTimer = setTimeout(() => {
+        if (silenceChecker) clearInterval(silenceChecker);
+        state.isRecording = false;
+        state.recordTimer = null;
+        console.log(`[STT][manual] ⏱️ 錄音上限到 (${RECORD_MAX_MS}ms)`);
+        resolve();
+      }, RECORD_MAX_MS);
+
+      silenceChecker = setInterval(() => {
+        totalElapsedMs += SILENCE_CHECK_MS;
+        if (totalElapsedMs <= START_DELAY_MS) return;
+
+        const recentBuf = userState.recordChunks.length > 0
+          ? Buffer.concat(userState.recordChunks.slice(-2))
+          : null;
+
+        if (!recentBuf || calcRMS(recentBuf) < RMS_THRESHOLD) {
+          silenceAccumMs += SILENCE_CHECK_MS;
+        } else {
+          silenceAccumMs = 0;
+        }
+
+        if (silenceAccumMs >= RECORD_SILENCE_MS && totalElapsedMs >= MIN_AUDIO_DURATION_MS) {
+          if (state.recordTimer) clearTimeout(state.recordTimer);
+          if (silenceChecker) clearInterval(silenceChecker);
+          state.isRecording = false;
+          state.recordTimer = null;
+          console.log(`[STT][manual] 🔇 靜音截止 (${totalElapsedMs}ms)`);
+          resolve();
+        }
+      }, SILENCE_CHECK_MS);
+    });
+
+    // 4) 取錄音
+    const recordedChunks = userState.recordChunks.splice(0);
+    userState.recordBytes = 0;
+
+    for (const us of state.users.values()) {
+      us.recordChunks = [];
+      us.recordBytes = 0;
+    }
+
+    if (recordedChunks.length === 0) {
+      await targetTextChannel?.send('❌ 沒有偵測到語音，請再試一次').catch(() => {});
+      return { ok: false, reason: 'no_audio' };
+    }
+
+    const pcmBuffer = Buffer.concat(recordedChunks);
+    const durationMs = calcDurationMs(pcmBuffer);
+    if (durationMs < MIN_AUDIO_DURATION_MS) {
+      await targetTextChannel?.send('❌ 音訊太短，請再試一次').catch(() => {});
+      return { ok: false, reason: 'too_short' };
+    }
+
+    const voiceRatio = calcVoiceRatio(pcmBuffer);
+    if (voiceRatio < VAD_VOICE_RATIO_MIN && calcRMS(pcmBuffer) < RMS_THRESHOLD) {
+      await targetTextChannel?.send('❌ 沒有偵測到有效語音，請再試一次').catch(() => {});
+      return { ok: false, reason: 'low_voice' };
+    }
+
+    // 5) STT
+    ensureTempDir();
+    const wavFile = path.join(TEMP_DIR, `manual_${guildId}_${userId}_${Date.now()}.wav`);
+    writeWav(wavFile, pcmBuffer);
+
+    let text = '';
+    try {
+      text = await transcribeWithGroq(wavFile);
+    } catch (err) {
+      console.error(`[STT][manual] Groq 失敗: ${err.message}`);
+      await targetTextChannel?.send('❌ 語音辨識失敗，請稍後再試').catch(() => {});
+      return { ok: false, reason: 'stt_failed' };
+    } finally {
+      safeUnlink(wavFile);
+    }
+
+    if (!text || isHallucination(text)) {
+      await targetTextChannel?.send('❌ 無法辨識語音內容').catch(() => {});
+      return { ok: false, reason: 'empty_or_hallucination' };
+    }
+
+    const finalName = state.guild.members.cache.get(userId)?.displayName || userMember.displayName || '使用者';
+    await targetTextChannel?.send(`🗣️ "**${finalName}**"：${text}`).catch(() => {});
+
+    userState.cooldownUntil = Date.now() + WAKEUP_COOLDOWN_MS;
+
+    // 6) 回調（交給 voiceHandler 做 AI + TTS）
+    const cb = onWakeupOverride || state.onWakeup;
+    if (typeof cb === 'function') {
+      await cb(userId, userMember, text, targetTextChannel);
+    }
+
+    return { ok: true, text };
+  } finally {
+    if (silenceChecker) clearInterval(silenceChecker);
+    exitExclusiveMode(guildId);
+  }
+}
+
+
+// ══════════════════════════════════════════════════════════
 // 公開 API
 // ══════════════════════════════════════════════════════════
 function startSTTListening(connection, guild, textChannel, onWakeup) {
@@ -620,4 +811,4 @@ function stopSTTListening(guildId) {
   console.log(`[STT] 停止監聽：${guildId}`);
 }
 
-module.exports = { startSTTListening, stopSTTListening };
+module.exports = { startSTTListening, stopSTTListening , ensureManualSession, manualRecordOnce,};
