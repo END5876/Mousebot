@@ -281,7 +281,7 @@ function setupVoiceCommands(client) {
   client.commands.set('heyjqn', {
     data: new SlashCommandBuilder()
       .setName('heyjqn')
-      .setDescription('發送手動錄音按鈕（不需 /stt start）'),
+      .setDescription('發送手動錄音按鈕'),
 
     async execute(interaction) {
       const guildId = interaction.guildId;
