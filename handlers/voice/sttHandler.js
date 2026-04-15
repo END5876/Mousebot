@@ -11,33 +11,34 @@ const { getGeminiResponseVoice } = require('../../handlers/ai/aiHandler');
 const OWW_HTTP_URL        = process.env.OWW_HTTP_URL;
 const WAKEUP_VOICE_PATH   = path.join(__dirname, 'sttwakeupvoice.wav');
 const TEMP_DIR            = path.join(__dirname, '../../temp');
-const RECORD_MAX_MS       = parseInt(process.env.STT_RECORD_MS || '8000', 10);
-const RECORD_SILENCE_MS   = parseInt(process.env.STT_SILENCE_MS || '1000', 10);
-const WAKEUP_COOLDOWN_MS  = parseInt(process.env.STT_COOLDOWN_MS || '1500', 10);
-const RMS_THRESHOLD       = parseFloat(process.env.STT_RMS_THRESHOLD || '500');
+const RECORD_MAX_MS       = parseInt(process.env.STT_RECORD_MS, 10);
+const RECORD_SILENCE_MS   = parseInt(process.env.STT_SILENCE_MS, 10);
+const WAKEUP_COOLDOWN_MS  = parseInt(process.env.STT_COOLDOWN_MS, 10);
+const RMS_THRESHOLD       = parseFloat(process.env.STT_RMS_THRESHOLD);
 
 // ── 喚醒偵測緩衝設定 ────────────────────────────────────
-const DETECT_WINDOW_MS  = parseInt(process.env.STT_DETECT_WINDOW_MS || '2000', 10);
+const DETECT_WINDOW_MS  = parseInt(process.env.STT_DETECT_WINDOW_MS, 10);
 const SAMPLE_RATE       = 16000;
 const DETECT_MAX_BYTES  = SAMPLE_RATE * (DETECT_WINDOW_MS / 1000) * 2;
 
-// ✅ 新增：硬上限，避免 Buffer 暴衝
-const MAX_DETECT_CHUNKS = parseInt(process.env.STT_MAX_DETECT_CHUNKS || '120', 10); // 約 2~3 秒
-const MAX_RECORD_BYTES  = parseInt(process.env.STT_MAX_RECORD_BYTES || String(SAMPLE_RATE * 2 * 15), 10); // 15秒
+// 硬上限，避免 Buffer 暴衝
+const MAX_DETECT_CHUNKS = parseInt(process.env.STT_MAX_DETECT_CHUNKS, 10); // 約 2~3 秒
+const MAX_RECORD_BYTES  = parseInt(process.env.STT_MAX_RECORD_BYTES, 10); // 15秒
 
 // ── VAD / 長度 設定 ─────────────────────────────────────
 const VAD_FRAME_SIZE_MS     = 20;
 const VAD_FRAME_SAMPLES     = (SAMPLE_RATE * VAD_FRAME_SIZE_MS) / 1000;
 const VAD_FRAME_BYTES       = VAD_FRAME_SAMPLES * 2;
-const VAD_AMP_THRESHOLD     = parseFloat(process.env.STT_VAD_THRESHOLD || '600');
-const VAD_VOICE_RATIO_MIN   = parseFloat(process.env.STT_VAD_RATIO_MIN || '0.15');
-const MIN_AUDIO_DURATION_MS = parseInt(process.env.STT_MIN_DURATION_MS || '800', 10);
+const VAD_AMP_THRESHOLD     = parseFloat(process.env.STT_VAD_THRESHOLD);
+const VAD_VOICE_RATIO_MIN   = parseFloat(process.env.STT_VAD_RATIO_MIN);
+const MIN_AUDIO_DURATION_MS = parseInt(process.env.STT_MIN_DURATION_MS, 10);
+const START_DELAY_MS = parseInt(process.env.STT_START_DELAY_MS, 10);
 
 // ── 靜音偵測設定 ────────────────────────────────────────
 const SILENCE_CHECK_MS  = 100;
 
 // ── no_speech_prob 閾值 ──────────────────────────────────
-const NO_SPEECH_THRESHOLD = parseFloat(process.env.STT_NO_SPEECH_PROB || '0.6');
+const NO_SPEECH_THRESHOLD = parseFloat(process.env.STT_NO_SPEECH_PROB);
 
 // ── Groq 客戶端 ─────────────────────────────────────────
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -375,7 +376,6 @@ async function handleWakeup(guildId, userId, member) {
     await new Promise((resolve) => {
       let silenceAccumMs = 0;
       let totalElapsedMs = 0;
-      const START_DELAY_MS = parseInt(process.env.STT_START_DELAY_MS || '200', 10);
 
       state.recordTimer = setTimeout(() => {
         if (silenceChecker) clearInterval(silenceChecker);
@@ -592,7 +592,6 @@ async function manualRecordOnce(guildId, userId, member, textChannel, onWakeupOv
     await new Promise((resolve) => {
       let silenceAccumMs = 0;
       let totalElapsedMs = 0;
-      const START_DELAY_MS = parseInt(process.env.STT_START_DELAY_MS || '200', 10);
 
       state.recordTimer = setTimeout(() => {
         if (silenceChecker) clearInterval(silenceChecker);
