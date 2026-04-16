@@ -40,6 +40,24 @@ const SILENCE_CHECK_MS  = 100;
 // ── no_speech_prob 閾值 ──────────────────────────────────
 const NO_SPEECH_THRESHOLD = parseFloat(process.env.STT_NO_SPEECH_PROB);
 
+// ── 環境變數檢查區塊 ────────────────────────────────────
+const requiredEnvVars = [
+  'OWW_HTTP_URL', 'STT_RECORD_MS', 'STT_SILENCE_MS', 'STT_COOLDOWN_MS',
+  'STT_RMS_THRESHOLD', 'STT_DETECT_WINDOW_MS', 'STT_MAX_DETECT_CHUNKS',
+  'STT_MAX_RECORD_BYTES', 'STT_VAD_THRESHOLD', 'STT_VAD_RATIO_MIN',
+  'STT_MIN_DURATION_MS', 'STT_START_DELAY_MS', 'STT_NO_SPEECH_PROB',
+  'GROQ_API_KEY'
+];
+
+const missingVars = requiredEnvVars.filter(v => process.env[v] === undefined);
+
+if (missingVars.length > 0) {
+  console.error(`[STT 錯誤] 缺少以下環境變數，請檢查 .env 檔案: ${missingVars.join(', ')}`);
+} else {
+  console.log('[STT] ✅ 所有環境變數載入成功');
+}
+// ────────────────────────────────────────────────────────
+
 // ── Groq 客戶端 ─────────────────────────────────────────
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
