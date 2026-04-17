@@ -1,17 +1,20 @@
 # server.py — Multi-Session OWW Server
-from flask import Flask, request, jsonify
-import numpy as np
-from openwakeword.model import Model
+import logging
+import math
 import os
 import threading
 import asyncio
-import websockets
 import json
-import math
 import time
+import urllib.parse
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Optional
+
+import numpy as np
+import websockets
 from dotenv import load_dotenv
+from flask import Flask, request, jsonify
+from openwakeword.model import Model
 
 load_dotenv()
 
@@ -29,15 +32,19 @@ MIN_CONSECUTIVE = int(os.environ["OWW_MIN_CONSECUTIVE"])
 COOLDOWN_SEC    = float(os.environ["OWW_COOLDOWN_SEC"])
 MAX_SESSIONS    = int(os.environ["OWW_MAX_SESSIONS"])
 DEBUG_SCORE     = os.environ["OWW_DEBUG_SCORE"] == "1"
-SESSION_TTL_SEC = float(os.environ.get("OWW_SESSION_TTL_SEC", "300"))   # 預設 5 分鐘
-TTL_CHECK_SEC   = float(os.environ.get("OWW_TTL_CHECK_SEC",   "60"))    # 預設每 60 秒掃描一次
+SESSION_TTL_SEC = float(os.environ.get("OWW_SESSION_TTL_SEC", "300"))  # 預設 5 分鐘
+TTL_CHECK_SEC   = float(os.environ.get("OWW_TTL_CHECK_SEC",   "60"))   # 預設每 60 秒掃描一次
 
 SAMPLE_RATE = 16000
 CHUNK_BYTES = CHUNK_SIZE * 2  # int16 => 2 bytes/sample
 
+# FIX #3: WS remainder_buf 上限（約 4 秒音訊），防止無界成長
+WS_MAX_BUF_BYTES = SAMPLE_RATE * 4 * 2
+
 app = Flask(__name__)
+
 # 關閉 Werkzeug access log（隱藏 /detect 的每次請求紀錄）
-import logging
+# FIX #9: import logging 移至頂層（原本在函式外但非頂層區段）
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 # =========================================================
@@ -79,11 +86,23 @@ class OWWSession:
         self.created_at = time.time()
         self.last_active = time.time()
 
+    # FIX #1: 顯式釋放 ONNX 原生記憶體，防止 C-heap 持續累積
+    def close(self):
+        """釋放 ONNX InferenceSession 佔用的原生資源。"""
+        with self.lock:
+            try:
+                if self.model is not None:
+                    # openwakeword Model 持有 onnxruntime.InferenceSession；
+                    # 刪除參考後 CPython 的引用計數機制會立即呼叫 C++ 解構子。
+                    self.model = None
+            except Exception as e:
+                print(f"[OWW] ⚠️ Session {self.session_id} close 失敗: {e}")
+
     def reset(self):
         with self.lock:
             self.consecutive_hits = 0
             try:
-                if hasattr(self.model, 'reset'):
+                if self.model is not None and hasattr(self.model, 'reset'):
                     self.model.reset()
             except Exception as e:
                 print(f"[OWW] ⚠️ Session {self.session_id} reset 失敗: {e}")
@@ -102,32 +121,55 @@ class SessionManager:
         self.max_sessions = max_sessions
         self.global_lock = threading.Lock()
         self.global_paused = False
-        self.active_wakeup_session: str | None = None
+        self.active_wakeup_session: Optional[str] = None
 
+    # FIX #4: 鎖外建立 OWWSession，防止 ONNX 載入期間阻塞所有請求
     def get_or_create(self, session_id: str) -> OWWSession:
+        # 快速路徑：session 已存在，只需更新 last_active
         with self.global_lock:
             if session_id in self.sessions:
                 self.sessions[session_id].last_active = time.time()
                 return self.sessions[session_id]
+            # 若 session 不存在，先佔位（None）防止其他執行緒並發建立相同 id
             if len(self.sessions) >= self.max_sessions:
                 self._evict_oldest()
-            session = OWWSession(session_id)
-            self.sessions[session_id] = session
-            print(f"[OWW] 🆕 建立 Session: {session_id} (總數: {len(self.sessions)})")
-            return session
+            self.sessions[session_id] = None  # 佔位符
 
+        # 在鎖外建立 OWWSession（ONNX 載入可能耗時數秒）
+        try:
+            new_session = OWWSession(session_id)
+        except Exception:
+            # 建立失敗時移除佔位符，讓下次請求重試
+            with self.global_lock:
+                if self.sessions.get(session_id) is None:
+                    del self.sessions[session_id]
+            raise
+
+        with self.global_lock:
+            # 再次確認：若其他執行緒已填入真實 session（理論上不會，但防禦性編程）
+            existing = self.sessions.get(session_id)
+            if existing is not None:
+                new_session.close()
+                return existing
+            self.sessions[session_id] = new_session
+            print(f"[OWW] 🆕 建立 Session: {session_id} (總數: {len(self.sessions)})")
+            return new_session
+
+    # FIX #1: remove 前呼叫 close() 釋放 ONNX 原生記憶體
     def remove(self, session_id: str):
         with self.global_lock:
-            if session_id in self.sessions:
-                del self.sessions[session_id]
-                print(f"[OWW] 🗑️ 移除 Session: {session_id} (剩餘: {len(self.sessions)})")
+            session = self.sessions.pop(session_id, None)
+        if session is not None:
+            session.close()
+            print(f"[OWW] 🗑️ 移除 Session: {session_id} (剩餘: {len(self.sessions)})")
 
     def pause_all(self, except_session: str = None):
         with self.global_lock:
             self.global_paused = True
             self.active_wakeup_session = except_session
             for sid, session in self.sessions.items():
-                session.paused = (sid != except_session)
+                if session is not None:
+                    session.paused = (sid != except_session)
             print(f"[OWW] ⏸️ 全域暫停，活躍 Session: {except_session}")
 
     def resume_all(self):
@@ -135,39 +177,62 @@ class SessionManager:
             self.global_paused = False
             self.active_wakeup_session = None
             for session in self.sessions.values():
-                session.paused = False
-                session.reset()
+                if session is not None:
+                    session.paused = False
+                    session.reset()
             print(f"[OWW] ▶️ 全域恢復偵測，已重置所有 Session")
 
     def reset_session(self, session_id: str):
         with self.global_lock:
-            if session_id in self.sessions:
-                self.sessions[session_id].reset()
+            session = self.sessions.get(session_id)
+        if session is not None:
+            session.reset()
 
+    # FIX #1: _evict_oldest 前呼叫 close()
     def _evict_oldest(self):
+        """必須在持有 global_lock 時呼叫。"""
         if not self.sessions:
             return
-        oldest_id = min(self.sessions, key=lambda k: self.sessions[k].last_active)
-        del self.sessions[oldest_id]
+        oldest_id = min(
+            (k for k, v in self.sessions.items() if v is not None),
+            key=lambda k: self.sessions[k].last_active,
+            default=None,
+        )
+        if oldest_id is None:
+            return
+        evicted = self.sessions.pop(oldest_id)
         print(f"[OWW] ♻️ 淘汰最舊 Session: {oldest_id}")
+        # close() 在鎖外呼叫（避免在持鎖期間執行 C++ 解構，雖然風險低但保持一致性）
+        # 注意：此處仍在 global_lock 內，若 close() 耗時長可考慮收集後統一在鎖外處理
+        if evicted is not None:
+            evicted.close()
 
     # =========================================================
-    # ✅ 新增：TTL 清理
+    # TTL 清理
     # =========================================================
     def cleanup_expired_sessions(self):
-        """清理超過 SESSION_TTL_SEC 未活躍的 Session"""
+        """清理超過 SESSION_TTL_SEC 未活躍的 Session。
+
+        FIX #2: 先記錄 idle 時間再刪除，修正日誌 bug。
+        FIX #6: 鎖內只做列表收集與 dict 移除，鎖外呼叫 close() 釋放原生資源，
+                縮短持鎖時間，避免阻塞所有請求。
+        """
         now = time.time()
+
+        # 鎖內：只收集過期項目並從 dict 移除
         with self.global_lock:
-            expired = [
-                sid for sid, s in self.sessions.items()
-                if now - s.last_active > SESSION_TTL_SEC
-            ]
-            for sid in expired:
-                del self.sessions[sid]
-                print(
-                    f"[OWW] 🧹 TTL 清理 Session: {sid} "
-                    f"(閒置 {now - self.sessions.get(sid, type('', (), {'last_active': now - SESSION_TTL_SEC})()).last_active:.0f}s)"  # noqa
-                )
+            expired: list[tuple[str, OWWSession, float]] = []
+            for sid, s in list(self.sessions.items()):
+                if s is not None and (now - s.last_active) > SESSION_TTL_SEC:
+                    idle_sec = now - s.last_active  # FIX #2: 先記錄，再刪除
+                    expired.append((sid, s, idle_sec))
+                    del self.sessions[sid]
+
+        # 鎖外：釋放 ONNX 原生記憶體（可能耗時）
+        for sid, session, idle_sec in expired:
+            session.close()
+            print(f"[OWW] 🧹 TTL 清理 Session: {sid} (閒置 {idle_sec:.0f}s)")
+
         if expired:
             print(f"[OWW] 🧹 本次清理 {len(expired)} 個過期 Session，剩餘: {len(self.sessions)}")
 
@@ -183,6 +248,7 @@ class SessionManager:
                         "last_active_sec": round(time.time() - s.last_active, 1),
                     }
                     for sid, s in self.sessions.items()
+                    if s is not None
                 }
             }
 
@@ -208,10 +274,10 @@ print(f"[OWW] 模型驗證完成 ✅ target={TARGET_NAME}")
 session_manager = SessionManager(max_sessions=MAX_SESSIONS)
 
 # =========================================================
-# ✅ 新增：TTL 清理背景執行緒
+# TTL 清理背景執行緒
 # =========================================================
 def _ttl_cleanup_loop():
-    """每隔 TTL_CHECK_SEC 秒執行一次過期 Session 清理"""
+    """每隔 TTL_CHECK_SEC 秒執行一次過期 Session 清理。"""
     while True:
         time.sleep(TTL_CHECK_SEC)
         try:
@@ -255,7 +321,7 @@ def resume_all():
     return jsonify({"ok": True})
 
 # =========================================================
-# ✅ /detect — 單次 PCM 片段喚醒詞偵測（HTTP POST）
+# /detect — 單次 PCM 片段喚醒詞偵測（HTTP POST）
 #
 #   Body: raw binary (int16 LE, 16kHz mono)
 #   Query: ?session_id=xxx
@@ -293,13 +359,6 @@ def detect():
     if num_chunks == 0:
         return jsonify({"detected": False, "reason": "too_short"})
 
-    # 每次 /detect 呼叫前先重置連續計數，避免跨呼叫累積
-    session.consecutive_hits = 0
-
-    detected    = False
-    prob_max    = 0.0
-    raw_max     = float("-inf")
-
     now = time.time()
     cooldown_ok = (now - session.last_trigger_ts) >= COOLDOWN_SEC
 
@@ -309,6 +368,13 @@ def detect():
             "reason": "cooldown",
             "cooldown_remaining": round(COOLDOWN_SEC - (now - session.last_trigger_ts), 2)
         })
+
+    # FIX #11: 使用區域變數 local_hits，不汙染 session.consecutive_hits，
+    #          消除 HTTP 與 WS 路徑同用同一 session 時的競態。
+    local_hits = 0
+    detected   = False
+    prob_max   = 0.0
+    raw_max    = float("-inf")
 
     for i in range(num_chunks):
         chunk = audio_np[i * CHUNK_SIZE:(i + 1) * CHUNK_SIZE]
@@ -320,17 +386,14 @@ def detect():
             prob_max = prob
 
         if prob > PROB_THRESHOLD:
-            session.consecutive_hits += 1
+            local_hits += 1
         else:
-            session.consecutive_hits = 0
+            local_hits = 0
 
-        if session.consecutive_hits >= MIN_CONSECUTIVE:
+        if local_hits >= MIN_CONSECUTIVE:
             detected = True
             session.last_trigger_ts = time.time()
             break
-
-    # 推理完畢後重置，避免殘留影響下次呼叫
-    session.consecutive_hits = 0
 
     if raw_max == float("-inf"):
         raw_max = 0.0
@@ -351,14 +414,14 @@ def detect():
     })
 
 # =========================================================
-# WebSocket Streaming（保留，供其他用途）
+# WebSocket Streaming
 # =========================================================
 async def ws_handler(websocket, path=None):
     peer = websocket.remote_address
 
-    import urllib.parse
-    parsed = urllib.parse.urlparse(str(websocket.path) if hasattr(websocket, 'path') else '/')
-    params = urllib.parse.parse_qs(parsed.query)
+    # FIX #9: urllib.parse 已移至頂層 import，此處直接使用
+    parsed    = urllib.parse.urlparse(str(websocket.path) if hasattr(websocket, 'path') else '/')
+    params    = urllib.parse.parse_qs(parsed.query)
     session_id = params.get("session_id", [None])[0]
 
     if not session_id:
@@ -383,14 +446,21 @@ async def ws_handler(websocket, path=None):
     session.reset()
     remainder_buf = bytearray()
 
+    # FIX #11: WS 路徑同樣使用區域變數追蹤連續命中，不共享 session.consecutive_hits
+    local_hits = 0
+
     try:
         async for message in websocket:
             if isinstance(message, str):
+                # FIX #8: 控制訊息也更新 last_active，防止活躍 session 被提前 TTL 清除
+                session.last_active = time.time()
+
                 cmd = message.strip().lower()
                 if cmd == "reset":
                     session.paused = False
                     session.reset()
                     remainder_buf.clear()
+                    local_hits = 0
                     await websocket.send(json.dumps({"event": "reset_ok", "session_id": session_id}))
                     continue
                 if cmd == "ping":
@@ -406,6 +476,7 @@ async def ws_handler(websocket, path=None):
                         session.paused = False
                         session.reset()
                         remainder_buf.clear()
+                        local_hits = 0
                         await websocket.send(json.dumps({"event": "resumed", "session_id": session_id}))
                         continue
                 except (json.JSONDecodeError, AttributeError):
@@ -417,6 +488,16 @@ async def ws_handler(websocket, path=None):
                 continue
 
             session.last_active = time.time()
+
+            # FIX #3: remainder_buf 上限保護，防止異常客戶端造成無界記憶體成長
+            if len(remainder_buf) + len(message) > WS_MAX_BUF_BYTES:
+                print(
+                    f"[OWW-WS] ⚠️ Session {session_id} buffer 超過上限 "
+                    f"({WS_MAX_BUF_BYTES} bytes)，清空緩衝區"
+                )
+                remainder_buf.clear()
+                local_hits = 0
+
             remainder_buf.extend(message)
             if len(remainder_buf) < CHUNK_BYTES:
                 continue
@@ -425,39 +506,47 @@ async def ws_handler(websocket, path=None):
             pcm = bytes(remainder_buf[:usable])
             del remainder_buf[:usable]
 
-            audio_np = np.frombuffer(pcm, dtype=np.int16)
+            audio_np   = np.frombuffer(pcm, dtype=np.int16)
             num_chunks = len(audio_np) // CHUNK_SIZE
-            raw_max = float("-inf")
-            prob_max = 0.0
-            detected = False
+            raw_max    = float("-inf")
+            prob_max   = 0.0
+            detected   = False
 
             for i in range(num_chunks):
                 chunk = audio_np[i * CHUNK_SIZE:(i + 1) * CHUNK_SIZE]
                 raw, prob = session.predict_chunk(chunk)
-                if raw > raw_max: raw_max = raw
-                if prob > prob_max: prob_max = prob
+                if raw > raw_max:
+                    raw_max = raw
+                if prob > prob_max:
+                    prob_max = prob
+
+                # FIX #11: 使用區域變數 local_hits（不修改 session.consecutive_hits）
                 if prob > PROB_THRESHOLD:
-                    session.consecutive_hits += 1
+                    local_hits += 1
                 else:
-                    session.consecutive_hits = 0
+                    local_hits = 0
+
                 now = time.time()
                 cooldown_ok = (now - session.last_trigger_ts) >= COOLDOWN_SEC
-                if session.consecutive_hits >= MIN_CONSECUTIVE and cooldown_ok:
+                if local_hits >= MIN_CONSECUTIVE and cooldown_ok:
                     detected = True
                     session.last_trigger_ts = now
+                    local_hits = 0  # 觸發後重置，防止連續觸發
                     break
 
             if raw_max == float("-inf"):
                 raw_max = 0.0
 
             payload = {
-                "event": "inference", "session_id": session_id,
-                "detected": detected, "raw_score": round(raw_max, 6),
-                "prob_score": round(prob_max, 6),
-                "threshold_prob": PROB_THRESHOLD,
-                "chunks": num_chunks,
-                "consecutive_hits": session.consecutive_hits,
-                "paused": session.paused,
+                "event":            "inference",
+                "session_id":       session_id,
+                "detected":         detected,
+                "raw_score":        round(raw_max, 6),
+                "prob_score":       round(prob_max, 6),
+                "threshold_prob":   PROB_THRESHOLD,
+                "chunks":           num_chunks,
+                "consecutive_hits": local_hits,
+                "paused":           session.paused,
             }
             if DEBUG_SCORE or detected:
                 await websocket.send(json.dumps(payload))
@@ -469,7 +558,9 @@ async def ws_handler(websocket, path=None):
     except Exception as e:
         print(f"[OWW-WS] ❌ Session {session_id} 錯誤: {e}")
     finally:
+        # FIX #7: 斷線時主動移除 session，立即釋放 ONNX 記憶體，不需等到 TTL 到期
         print(f"[OWW-WS] 🔌 斷線: session={session_id}")
+        session_manager.remove(session_id)
 
 # =========================================================
 # Start servers
@@ -482,6 +573,10 @@ def run_ws():
     asyncio.run(_start())
 
 if __name__ == "__main__":
+    # FIX #10: 生產環境建議改用 gunicorn 取代 Flask 內建開發伺服器，例如：
+    #   gunicorn -w 4 -k gevent --bind 0.0.0.0:PORT "server:app"
+    # 注意：多 worker 模式下 SessionManager 為 in-process 狀態，
+    # 需改用 Redis / 外部 store 才能跨 worker 共享 session。
     ws_thread = threading.Thread(target=run_ws, daemon=True)
     ws_thread.start()
     print(f"[OWW-HTTP] HTTP 伺服器啟動於 http://0.0.0.0:{HTTP_PORT}")
