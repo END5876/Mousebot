@@ -11,6 +11,7 @@ const { setupGuguGenerator } = require('./handlers/ai/gugugagaGenerator');
 const { setupBilibiliCommands } = require('./handlers/bilibiliHandler');
 const { setupAutoJoinCommands } = require('./handlers/autoJoinHandler');
 const { setupTTSCommands } = require('./handlers/ttsHandler');
+const { setupLocalMusicCommands } = require('./handlers/localMusicHandler');
 
 // 創建客戶端
 const client = new Client({
@@ -35,6 +36,7 @@ setupGuguGenerator(client);
 setupBilibiliCommands(client);
 setupAutoJoinCommands(client);
 setupTTSCommands(client);
+setupLocalMusicCommands(client);
 
 // ── Slash Command 互動處理 ─────────────────────────────────
 client.on('interactionCreate', async interaction => {
