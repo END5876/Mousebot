@@ -11,6 +11,8 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  StringSelectMenuBuilder,       // ✅ 新增
+  StringSelectMenuOptionBuilder, // ✅ 新增
 } = require('discord.js');
 
 // STT 相關
@@ -44,8 +46,10 @@ const HEYJQN_USER_COOLDOWN_MS = parseInt(process.env.HEYJQN_USER_COOLDOWN_MS || 
 const HEYJQN_BTN_TTL_MS       = parseInt(process.env.HEYJQN_BTN_TTL_MS || String(15 * 60 * 1000), 10);
 
 // interactionCreate 防重複註冊
-let heyjqnBound = false;
+let heyjqnBound   = false;
+let silenceMenuBound = false; // ✅ 新增
 
+// ── heyjqn 按鈕工具 ───────────────────────────────────────
 function buildHeyJqnButton(guildId, disabled = false) {
   const ts = Date.now();
   return new ActionRowBuilder().addComponents(
@@ -61,6 +65,37 @@ function parseHeyJqnCustomId(customId) {
   // heyjqn_record:guildId:timestamp
   const [prefix, gid, ts] = customId.split(':');
   return { prefix, gid, ts: Number(ts || 0) };
+}
+
+// ── /silence 選單工具 ─────────────────────────────────────
+function buildSilenceMenu(guildId) {
+  const isSilence = getActiveLayer(guildId) === 'silence';
+  const hasPending = silenceTimers.has(guildId);
+
+  return new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`silence_menu:${guildId}`)
+      .setPlaceholder('請選擇靜音防踢操作...')
+      .addOptions(
+        new StringSelectMenuOptionBuilder()
+          .setLabel('開始靜音防踢')
+          .setDescription('立即播放靜音音頻，防止 Bot 被踢出頻道')
+          .setValue('start')
+          .setEmoji('🔇')
+          .setDefault(isSilence),
+        new StringSelectMenuOptionBuilder()
+          .setLabel('停止靜音防踢')
+          .setDescription('停止播放靜音音頻')
+          .setValue('stop')
+          .setEmoji('⏹️'),
+        new StringSelectMenuOptionBuilder()
+          .setLabel('自動靜音（5 分鐘後）')
+          .setDescription(hasPending ? '⏳ 計時器已設置中，點此重設' : '設置計時器，5 分鐘後自動開始靜音防踢')
+          .setValue('auto')
+          .setEmoji('⏰')
+          .setDefault(hasPending),
+      )
+  );
 }
 
 // ════════════════════════════════════════════════════════
@@ -180,9 +215,9 @@ function setupVoiceCommands(client) {
         return interaction.reply({ content: '📢 Bot 目前不在任何語音頻道中', ephemeral: true });
       }
 
-      const channel       = interaction.guild.channels.cache.get(connection.joinConfig.channelId);
-      const activeLayer   = getActiveLayer(guildId);
-      const isSttActive   = sttActiveGuilds.has(guildId);
+      const channel     = interaction.guild.channels.cache.get(connection.joinConfig.channelId);
+      const activeLayer = getActiveLayer(guildId);
+      const isSttActive = sttActiveGuilds.has(guildId);
 
       const layerText = {
         silence: '🔇 靜音防踢中',
@@ -284,14 +319,13 @@ function setupVoiceCommands(client) {
       .setDescription('發送手動錄音按鈕'),
 
     async execute(interaction) {
-      const guildId = interaction.guildId;
+      const guildId    = interaction.guildId;
       const connection = getVoiceConnection(guildId);
 
       if (!connection) {
         return interaction.reply({ content: '❌ Bot 尚未加入語音頻道，請先使用 `/join`', ephemeral: true });
       }
 
-      // 不用 /stt start：先建立手動 session
       ensureManualSession(connection, interaction.guild, interaction.channel, async (userId, member, text, channel) => {
         const aiReply = await getGeminiResponseVoice(userId, text);
         await channel.send(`🤖 **機器鳥**：${aiReply}`);
@@ -308,51 +342,93 @@ function setupVoiceCommands(client) {
     }
   });
 
-  // ── /silence ──────────────────────────────────────────
+  // ── /silence（選單式）────────────────────────────────
   client.commands.set('silence', {
     data: new SlashCommandBuilder()
       .setName('silence')
-      .setDescription('管理靜音防踢功能')
-      .addSubcommand(sub =>
-        sub.setName('start').setDescription('開始播放靜音音頻，防止 Bot 被踢出頻道')
-      )
-      .addSubcommand(sub =>
-        sub.setName('stop').setDescription('停止播放靜音音頻')
-      )
-      .addSubcommand(sub =>
-        sub.setName('auto').setDescription('設置自動靜音模式（5 分鐘後自動啟動）')
-      ),
+      .setDescription('管理靜音防踢功能'),
 
     async execute(interaction) {
-      const sub     = interaction.options.getSubcommand();
-      const guildId = interaction.guildId;
+      const guildId    = interaction.guildId;
+      const connection = getVoiceConnection(guildId);
 
-      if (sub === 'start') {
+      if (!connection) {
+        return interaction.reply({
+          content: '❌ Bot 必須先加入語音頻道才能使用靜音功能，請先使用 `/join`',
+          ephemeral: true,
+        });
+      }
+
+      const activeLayer = getActiveLayer(guildId);
+      const layerText = {
+        silence: '🔇 靜音防踢中',
+        music:   '🎵 音樂播放中',
+        tts:     '🔊 TTS 播放中',
+      }[activeLayer] ?? '⏸️ 未啟用';
+
+      await interaction.reply({
+        content: `🔇 **靜音防踢管理**\n目前音頻層：**${layerText}**\n\n請從下方選單選擇操作：`,
+        components: [buildSilenceMenu(guildId)],
+        ephemeral: true,
+      });
+    }
+  });
+
+  // ── interactionCreate: silence 選單（防重複註冊）──────
+  if (!silenceMenuBound) {
+    silenceMenuBound = true;
+
+    client.on('interactionCreate', async (interaction) => {
+      if (!interaction.isStringSelectMenu()) return;
+      if (!interaction.customId.startsWith('silence_menu:')) return;
+
+      const guildId  = interaction.customId.split(':')[1];
+      const selected = interaction.values[0];
+
+      // ── start ───────────────────────────────────────
+      if (selected === 'start') {
         const connection = getVoiceConnection(guildId);
-
         if (!connection) {
-          return interaction.reply({ content: '❌ Bot 必須先加入語音頻道才能播放靜音音頻', ephemeral: true });
+          return interaction.update({ content: '❌ Bot 不在語音頻道，請先使用 `/join`', components: [] });
         }
         if (getActiveLayer(guildId) === 'silence') {
-          return interaction.reply({ content: '🔇 靜音音頻已經在播放中', ephemeral: true });
+          return interaction.update({
+            content: '🔇 靜音音頻已經在播放中',
+            components: [buildSilenceMenu(guildId)],
+          });
         }
 
         startSilenceLayer(guildId);
-        await interaction.reply('🔇 已開始播放靜音音頻，防止被踢出頻道');
-      } else if (sub === 'stop') {
+        await interaction.update({
+          content: '🔇 **已開始播放靜音音頻**，防止被踢出頻道',
+          components: [buildSilenceMenu(guildId)],
+        });
+      }
+
+      // ── stop ────────────────────────────────────────
+      else if (selected === 'stop') {
         if (getActiveLayer(guildId) !== 'silence') {
-          return interaction.reply({ content: '❌ 目前沒有播放靜音音頻', ephemeral: true });
+          return interaction.update({
+            content: '❌ 目前沒有播放靜音音頻',
+            components: [buildSilenceMenu(guildId)],
+          });
         }
 
         stopSilenceLayer(guildId);
-        await interaction.reply('⏹️ 已停止播放靜音音頻');
-      } else if (sub === 'auto') {
-        const connection = getVoiceConnection(guildId);
+        await interaction.update({
+          content: '⏹️ **已停止播放靜音音頻**',
+          components: [buildSilenceMenu(guildId)],
+        });
+      }
 
+      // ── auto ────────────────────────────────────────
+      else if (selected === 'auto') {
+        const connection = getVoiceConnection(guildId);
         if (!connection) {
-          return interaction.reply({ content: '❌ Bot 必須先加入語音頻道', ephemeral: true });
+          return interaction.update({ content: '❌ Bot 不在語音頻道，請先使用 `/join`', components: [] });
         }
 
+        // 重設計時器（若已存在則覆蓋）
         if (silenceTimers.has(guildId)) {
           clearTimeout(silenceTimers.get(guildId));
         }
@@ -361,18 +437,21 @@ function setupVoiceCommands(client) {
           const conn = getVoiceConnection(guildId);
           if (conn && getActiveLayer(guildId) !== 'silence') {
             startSilenceLayer(guildId);
-            console.log(`🔇 自動開始播放靜音音頻 (${interaction.guild.name})`);
+            console.log(`🔇 自動開始播放靜音音頻 (guildId: ${guildId})`);
           }
           silenceTimers.delete(guildId);
         }, 5 * 60 * 1000);
 
         silenceTimers.set(guildId, timer);
-        await interaction.reply('⏰ 已設置自動靜音模式，5 分鐘後將自動開始播放靜音音頻');
+        await interaction.update({
+          content: '⏰ **已設置自動靜音模式**，5 分鐘後將自動開始播放靜音音頻',
+          components: [buildSilenceMenu(guildId)],
+        });
       }
-    }
-  });
+    });
+  }
 
-  // ── interactionCreate: heyjqn 按鈕（防重複註冊） ───────
+  // ── interactionCreate: heyjqn 按鈕（防重複註冊）──────
   if (!heyjqnBound) {
     heyjqnBound = true;
 
@@ -380,8 +459,8 @@ function setupVoiceCommands(client) {
       if (!interaction.isButton()) return;
       if (!interaction.customId.startsWith('heyjqn_record:')) return;
 
-      const guildId = interaction.guildId;
-      const userId = interaction.user.id;
+      const guildId    = interaction.guildId;
+      const userId     = interaction.user.id;
       const connection = getVoiceConnection(guildId);
 
       if (!connection) {
@@ -399,8 +478,8 @@ function setupVoiceCommands(client) {
       }
 
       // user cooldown
-      const cdKey = `${guildId}:${userId}`;
-      const now = Date.now();
+      const cdKey      = `${guildId}:${userId}`;
+      const now        = Date.now();
       const availableAt = manualUserCooldown.get(cdKey) || 0;
       if (now < availableAt) {
         const left = ((availableAt - now) / 1000).toFixed(1);
@@ -415,7 +494,6 @@ function setupVoiceCommands(client) {
       manualGuildLocks.set(guildId, true);
       manualUserCooldown.set(cdKey, now + HEYJQN_USER_COOLDOWN_MS);
 
-      // 先準備 disabled row（保留原 customId）
       const disabledRow = new ActionRowBuilder().addComponents(
         ButtonBuilder.from(interaction.component).setDisabled(true)
       );
@@ -456,7 +534,7 @@ function setupVoiceCommands(client) {
           try {
             await interaction.message.edit({
               content: '✅ 可再次點擊開始手動錄音',
-              components: [buildHeyJqnButton(guildId, false)], // 新 customId
+              components: [buildHeyJqnButton(guildId, false)],
             });
           } catch (e) {
             console.warn('[heyjqn] 恢復按鈕失敗:', e.message);

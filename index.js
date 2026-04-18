@@ -2,18 +2,21 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, REST, Routes, Collection } = require('discord.js');
 const { customResponses } = require('./config/settings');
 
-// 導入所有處理器
-const { setupVoiceCommands } = require('./handlers/voiceHandler');
-const { setupBasicCommands } = require('./handlers/commandHandler');
-const { setupCustomResponses } = require('./handlers/responseHandler');
-const { setupAICommands } = require('./handlers/ai/aiHandler');
-const { setupGuguGenerator } = require('./handlers/ai/gugugagaGenerator');
-const { setupBilibiliCommands } = require('./handlers/bilibiliHandler');
+// ── 導入所有處理器 ─────────────────────────────────────────
+const { setupVoiceCommands }    = require('./handlers/voiceHandler');
+const { setupBasicCommands }    = require('./handlers/commandHandler');
+const { setupCustomResponses }  = require('./handlers/responseHandler');
+const { setupAICommands }       = require('./handlers/ai/aiHandler');
+const { setupGuguGenerator }    = require('./handlers/ai/gugugagaGenerator');
 const { setupAutoJoinCommands } = require('./handlers/autoJoinHandler');
-const { setupTTSCommands } = require('./handlers/ttsHandler');
-const { setupLocalMusicCommands } = require('./handlers/localMusicHandler');
+const { setupTTSCommands }      = require('./handlers/ttsHandler');
 
-// 創建客戶端
+// ── 重構後的音樂模組 ───────────────────────────────────────
+const { setupUnifiedCommands }  = require('./handlers/unifiedQueue');
+const { setupBilibiliEngine }   = require('./handlers/bilibiliHandler');
+const { setupLocalMusicEngine } = require('./handlers/localMusicHandler');
+
+// ── 創建客戶端 ─────────────────────────────────────────────
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -27,16 +30,14 @@ const client = new Client({
 // ── Slash Command 集合 ─────────────────────────────────────
 client.commands = new Collection();
 
-// ── 註冊所有處理器（各 handler 內部會自行注入 client.commands）──
+// ── 註冊非音樂處理器（同步，順序無關）────────────────────
 setupVoiceCommands(client);
 setupBasicCommands(client);
 setupCustomResponses(client);
-setupAICommands(client); 
+setupAICommands(client);
 setupGuguGenerator(client);
-setupBilibiliCommands(client);
 setupAutoJoinCommands(client);
 setupTTSCommands(client);
-setupLocalMusicCommands(client);
 
 // ── Slash Command 互動處理 ─────────────────────────────────
 client.on('interactionCreate', async interaction => {
@@ -64,8 +65,6 @@ client.on('interactionCreate', async interaction => {
 // ── 註冊 Slash Commands 到 Discord ────────────────────────
 async function registerSlashCommands() {
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-
-  // 從 client.commands 自動收集所有已注入的指令
   const commands = [...client.commands.values()].map(cmd => cmd.data.toJSON());
 
   try {
@@ -87,6 +86,13 @@ client.once('clientReady', async () => {
   console.log(`🎯 已載入 ${Object.keys(customResponses.exact).length} 個完全匹配回應`);
   console.log(`🔍 已載入 ${Object.keys(customResponses.contains).length} 個包含匹配回應`);
   console.log(`🤖 AI 功能已啟用 (Gemini API)`);
+
+  // ── 音樂引擎初始化（需 async，在 ready 後執行）──────────
+  // 順序重要：先注入引擎，再載入統一指令
+  await setupBilibiliEngine();     // 1. 注入 bilibili 引擎（含 yt-dlp 檢查）
+  setupLocalMusicEngine(client);   // 2. 注入 local 引擎 + /locallist 指令
+  setupUnifiedCommands(client);    // 3. 載入所有統一音樂指令
+
   console.log(`⚡ 已載入 ${client.commands.size} 個 Slash Commands`);
 
   client.user.setPresence({

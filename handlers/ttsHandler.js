@@ -12,9 +12,8 @@ const dns  = require('dns').promises;
 const { playTTSLayer } = require('./audioManager');
 
 // ── TTS 排隊 Map ─────────────────────────────────────────
-// ttsPlayers 不再需要，由 audioManager 內部管理
 const ttsQueues    = new Map();
-const ttsIsPlaying = new Map(); // 追蹤是否正在播放（取代 ttsPlayers）
+const ttsIsPlaying = new Map();
 const activeModels = new Map();
 
 const TTS_MAX_LENGTH = 1000;
@@ -249,16 +248,14 @@ async function processQueue(guildId) {
 
   ttsIsPlaying.set(guildId, true);
 
-  // ✅ 交由 audioManager 處理 subscribe，TTS 結束後自動恢復音樂/靜音層
   const ok = playTTSLayer(guildId, filename, () => {
     safeUnlink(filename);
     queue.shift();
     ttsIsPlaying.delete(guildId);
-    processQueue(guildId); // 繼續下一筆
+    processQueue(guildId);
   });
 
   if (!ok) {
-    // audioManager 回傳失敗（connection 不存在）
     safeUnlink(filename);
     queue.shift();
     ttsIsPlaying.delete(guildId);
@@ -305,6 +302,19 @@ function stopTTS(guildId) {
 }
 
 // ════════════════════════════════════════════════════════
+//  buildModelChoices — 從 TTS_MODELS 動態產生 choices 陣列
+//  Discord 限制：最多 25 個 choices，name/value 上限 100 字元
+// ════════════════════════════════════════════════════════
+function buildModelChoices() {
+  return Object.entries(TTS_MODELS)
+    .slice(0, 25)
+    .map(([key, m]) => ({
+      name:  `${m.name} (${key})`.slice(0, 100),
+      value: key,
+    }));
+}
+
+// ════════════════════════════════════════════════════════
 //  setupTTSCommands
 // ════════════════════════════════════════════════════════
 function setupTTSCommands(client) {
@@ -320,45 +330,54 @@ function setupTTSCommands(client) {
     console.log(`✅ [DNS] 預解析完成: ${SOVITS_HOST} → ${ip}`);
   });
 
-  // ── 注入 /tts 子指令群組 ─────────────────────────────
+  // ── 動態產生模型 choices ──────────────────────────────
+  const modelChoices = buildModelChoices();
+  const hasModels    = modelChoices.length > 0;
+
+  // ── 建構指令 Builder ─────────────────────────────────
+  const builder = new SlashCommandBuilder()
+    .setName('tts')
+    .setDescription('GPT-SoVITS 語音合成功能')
+
+    // /tts say
+    .addSubcommand(sub =>
+      sub.setName('say')
+        .setDescription('朗讀文字')
+        .addStringOption(opt =>
+          opt.setName('text')
+            .setDescription(`要朗讀的文字（上限 ${TTS_MAX_LENGTH} 字）`)
+            .setRequired(true)
+        )
+    )
+
+    // /tts stop
+    .addSubcommand(sub =>
+      sub.setName('stop')
+        .setDescription('停止 TTS 並清空排隊')
+    )
+
+    // /tts model — key 改為下拉選單
+    .addSubcommand(sub => {
+      sub.setName('model').setDescription('切換 TTS 模型');
+
+      sub.addStringOption(o => {
+        o.setName('key')
+          .setDescription('選擇要切換的模型')
+          .setRequired(true);
+
+        if (hasModels) {
+          o.addChoices(...modelChoices);
+        }
+
+        return o;
+      });
+
+      return sub;
+    });
+
+  // ── 注入 client.commands ─────────────────────────────
   client.commands.set('tts', {
-    data: new SlashCommandBuilder()
-      .setName('tts')
-      .setDescription('GPT-SoVITS 語音合成功能')
-
-      // /tts say
-      .addSubcommand(sub =>
-        sub.setName('say')
-          .setDescription('朗讀文字')
-          .addStringOption(opt =>
-            opt.setName('text')
-              .setDescription(`要朗讀的文字（上限 ${TTS_MAX_LENGTH} 字）`)
-              .setRequired(true)
-          )
-      )
-
-      // /tts stop
-      .addSubcommand(sub =>
-        sub.setName('stop')
-          .setDescription('停止 TTS 並清空排隊')
-      )
-
-      // /tts models
-      .addSubcommand(sub =>
-        sub.setName('models')
-          .setDescription('列出所有可用的 TTS 模型')
-      )
-
-      // /tts model
-      .addSubcommand(sub =>
-        sub.setName('model')
-          .setDescription('切換 TTS 模型')
-          .addStringOption(opt =>
-            opt.setName('key')
-              .setDescription('模型名稱（使用 /tts models 查看）')
-              .setRequired(true)
-          )
-      ),
+    data: builder,
 
     async execute(interaction) {
       const sub     = interaction.options.getSubcommand();
@@ -394,7 +413,6 @@ function setupTTSCommands(client) {
           return interaction.editReply({ content: reason });
         }
 
-        // ✅ 只顯示朗讀文字，不顯示 engine/model 資訊
         const quotedText = text.split('\n').map(line => `> ${line}`).join('\n');
         await interaction.editReply({
           content:
@@ -410,27 +428,6 @@ function setupTTSCommands(client) {
         await interaction.reply({
           content: stopped ? '⏹️ 已停止 TTS 並清空排隊' : '❌ 目前沒有 TTS 在播放',
           ephemeral: !stopped
-        });
-      }
-
-      // ── /tts models ────────────────────────────────────
-      else if (sub === 'models') {
-        const modelKeys = Object.keys(TTS_MODELS);
-
-        if (modelKeys.length === 0) {
-          return interaction.reply({ content: '❌ 沒有設定任何模型，請檢查 `.env`', ephemeral: true });
-        }
-
-        const current = activeModels.get(guildId) || DEFAULT_MODEL || modelKeys[0];
-        const lines = modelKeys.map(key => {
-          const m      = TTS_MODELS[key];
-          const marker = key === current ? ' ◀ **目前**' : '';
-          return `• \`${key}\` — **${m.name}**${marker}`;
-        });
-
-        await interaction.reply({
-          content: `🎙️ **可用 TTS 模型：**\n${lines.join('\n')}\n\n切換：\`/tts model key:<名稱>\``,
-          ephemeral: true
         });
       }
 
@@ -461,7 +458,7 @@ function setupTTSCommands(client) {
     }
   });
 
-  console.log('✅ TTS Slash Commands 已載入（/tts say / stop / models / model）');
+  console.log('✅ TTS Slash Commands 已載入（/tts say / stop / model）');
 }
 
 module.exports = { setupTTSCommands, playTTS, stopTTS };
