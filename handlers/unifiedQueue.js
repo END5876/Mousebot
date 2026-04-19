@@ -162,34 +162,39 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
 
     const loopMode = loopSettings.get(guildId) || 'off';
 
-    // 單曲循環：靜默重播，不產生 log
+    // 單曲循環：靜默重播
     if (loopMode === 'one') {
       await _playItem(guildId, item, channel, { silent: true });
       return;
     }
 
     const queue = queues.get(guildId) || [];
+    const isLoopAll = loopMode === 'all';
 
     // 列表循環：把播完的放回隊尾
-    if (loopMode === 'all') queue.push(item);
+    if (isLoopAll) queue.push(item);
 
     if (queue.length > 0) {
       const next = queue.shift();
       queues.set(guildId, queue);
-      console.log(`⏭️ [UnifiedQueue] 播放下一首: ${next.title}`);
 
-      channel.send({ embeds: [
-        new EmbedBuilder()
-          .setColor(0x1DB954)
-          .setTitle('⏭️ 正在播放下一首')
-          .setDescription(next.type === 'bilibili'
-            ? `[${next.title}](${next.url})`
-            : `🎧 **${next.title}**`)
-          .addFields({ name: '剩餘佇列', value: `${queue.length} 首`, inline: true })
-          .setThumbnail(next.thumbnail || null)
-      ]}).catch(() => {});
+      // 列表循環靜默切換，一般播放才通知
+      if (!isLoopAll) {
+        console.log(`⏭️ [UnifiedQueue] 播放下一首: ${next.title}`);
+        channel.send({ embeds: [
+          new EmbedBuilder()
+            .setColor(0x1DB954)
+            .setTitle('⏭️ 正在播放下一首')
+            .setDescription(next.type === 'bilibili'
+              ? `[${next.title}](${next.url})`
+              : `🎧 **${next.title}**`)
+            .addFields({ name: '剩餘佇列', value: `${queue.length} 首`, inline: true })
+            .setThumbnail(next.thumbnail || null)
+        ]}).catch(() => {});
+      }
 
-      await _playItem(guildId, next, channel);
+      // 列表循環傳 silent: true，不印開始播放 log
+      await _playItem(guildId, next, channel, { silent: isLoopAll });
       await updateControlPanel(guildId, channel);
 
     } else {
@@ -239,7 +244,7 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
   // ── 交給 audioManager 接管 subscribe ─────────────────
   setMusicPlayer(guildId, player);
 
-  // 只有非靜默模式（第一次播放 / 跳到下一首）才印 log
+  // 只有非靜默模式才印 log
   if (!silent) {
     console.log(`🎵 [UnifiedQueue] 開始播放: ${item.title} [${item.type}] (${guildId})`);
   }
@@ -376,7 +381,6 @@ async function handlePlay(interaction, input) {
     .setThumbnail(item.thumbnail || null)
     .setTimestamp();
 
-  // setFooter 不可傳空字串，僅在「開始播放」時才加
   if (!result.queued) {
     replyEmbed.setFooter({ text: '使用下方按鈕控制播放' });
   }
