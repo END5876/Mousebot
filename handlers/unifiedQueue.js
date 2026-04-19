@@ -22,8 +22,6 @@ const { setMusicPlayer, stopMusicLayer, startSilenceLayer } = require('./audioMa
 // ════════════════════════════════════════════════════════
 //  引擎注入（由各 handler 在 setup 時呼叫）
 // ════════════════════════════════════════════════════════
-// bilibili engine: { playStream(guildId, item, player), getInfo(url) }
-// local    engine: { playStream(guildId, item, player), getTrackInfo(filename), getMusicFiles() }
 const _engines = { bilibili: null, local: null };
 
 function registerEngine(type, engine) {
@@ -34,11 +32,11 @@ function registerEngine(type, engine) {
 // ════════════════════════════════════════════════════════
 //  Guild 狀態
 // ════════════════════════════════════════════════════════
-const queues       = new Map(); // guildId -> QueueItem[]
-const nowPlaying   = new Map(); // guildId -> { player, item }
-const loopSettings = new Map(); // guildId -> 'off' | 'one' | 'all'
-const controlMsgs  = new Map(); // guildId -> Message
-const connections  = new Map(); // guildId -> VoiceConnection
+const queues       = new Map();
+const nowPlaying   = new Map();
+const loopSettings = new Map();
+const controlMsgs  = new Map();
+const connections  = new Map();
 
 // ════════════════════════════════════════════════════════
 //  控制面板
@@ -148,7 +146,7 @@ function stopAll(guildId) {
 // ════════════════════════════════════════════════════════
 //  核心播放
 // ════════════════════════════════════════════════════════
-async function _playItem(guildId, item, channel) {
+async function _playItem(guildId, item, channel, { silent = false } = {}) {
   const connection = connections.get(guildId) || getVoiceConnection(guildId);
   if (!connection) {
     console.error('❌ [UnifiedQueue] 無語音連線');
@@ -159,16 +157,14 @@ async function _playItem(guildId, item, channel) {
 
   // ── Idle：播放結束後的邏輯 ───────────────────────────
   player.on(AudioPlayerStatus.Idle, async () => {
-    // 確認還在播放狀態（避免 stop() 後誤觸發）
     const current = nowPlaying.get(guildId);
     if (!current || current.player !== player) return;
 
     const loopMode = loopSettings.get(guildId) || 'off';
 
-    // 單曲循環
+    // 單曲循環：靜默重播，不產生 log
     if (loopMode === 'one') {
-      console.log(`🔂 [UnifiedQueue] 單曲循環: ${item.title}`);
-      await _playItem(guildId, item, channel);
+      await _playItem(guildId, item, channel, { silent: true });
       return;
     }
 
@@ -242,7 +238,11 @@ async function _playItem(guildId, item, channel) {
 
   // ── 交給 audioManager 接管 subscribe ─────────────────
   setMusicPlayer(guildId, player);
-  console.log(`🎵 [UnifiedQueue] 開始播放: ${item.title} [${item.type}] (${guildId})`);
+
+  // 只有非靜默模式（第一次播放 / 跳到下一首）才印 log
+  if (!silent) {
+    console.log(`🎵 [UnifiedQueue] 開始播放: ${item.title} [${item.type}] (${guildId})`);
+  }
 }
 
 // ════════════════════════════════════════════════════════
@@ -287,10 +287,8 @@ async function ensureConnection(interaction) {
 
   await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
 
-  // 啟動靜音層（保持連線活躍、避免 TTS 插播後無聲）
   startSilenceLayer(guildId);
 
-  // 斷線自動重連
   connection.on(VoiceConnectionStatus.Disconnected, async () => {
     try {
       await Promise.race([
@@ -298,6 +296,7 @@ async function ensureConnection(interaction) {
         entersState(connection, VoiceConnectionStatus.Connecting,  5_000),
       ]);
     } catch {
+      console.warn(`⚠️ [UnifiedQueue] 語音連線斷開 (${guildId})`);
       try { connection.destroy(); } catch {}
       stopAll(guildId);
       connections.delete(guildId);
@@ -315,7 +314,6 @@ async function ensureConnection(interaction) {
 async function handlePlay(interaction, input) {
   const guildId = interaction.guildId;
 
-  // ── 取得語音連線 ──────────────────────────────────────
   let connection;
   try {
     connection = await ensureConnection(interaction);
@@ -324,13 +322,11 @@ async function handlePlay(interaction, input) {
   }
   if (!connection) return interaction.editReply('❌ 你必須先加入語音頻道！');
 
-  // ── 判斷輸入類型（URL 或本地檔名）────────────────────
   const isUrl = (() => { try { new URL(input); return true; } catch { return false; } })();
 
   let item;
 
   if (isUrl) {
-    // 網路串流
     const engine = _engines.bilibili;
     if (!engine) return interaction.editReply('❌ 串流引擎未就緒');
 
@@ -345,7 +341,6 @@ async function handlePlay(interaction, input) {
       return interaction.editReply(`❌ 無法獲取影片資訊：${err.message}`);
     }
   } else {
-    // 本地音樂
     const engine = _engines.local;
     if (!engine) return interaction.editReply('❌ 本地音樂引擎未就緒');
 
@@ -354,7 +349,6 @@ async function handlePlay(interaction, input) {
     item.type = 'local';
   }
 
-  // ── 加入佇列或直接播放 ────────────────────────────────
   const result = await enqueue(guildId, item, interaction.channel);
 
   const descText = item.type === 'bilibili'
@@ -388,13 +382,12 @@ async function handlePlay(interaction, input) {
 }
 
 // ════════════════════════════════════════════════════════
-//  Autocomplete（/play 的 input 欄位）
+//  Autocomplete
 // ════════════════════════════════════════════════════════
 function handleAutocomplete(interaction) {
   if (interaction.commandName !== 'play') return false;
   const focused = interaction.options.getFocused().toLowerCase();
 
-  // 看起來像 URL → 不提供 autocomplete
   if (focused.startsWith('http')) {
     interaction.respond([]).catch(() => {});
     return true;
@@ -420,14 +413,12 @@ function handleAutocomplete(interaction) {
 // ════════════════════════════════════════════════════════
 function setupUnifiedCommands(client) {
 
-  // ── Autocomplete ──────────────────────────────────────
   client.on('interactionCreate', async interaction => {
     if (interaction.isAutocomplete()) {
       handleAutocomplete(interaction);
       return;
     }
 
-    // ── 按鈕互動 ────────────────────────────────────────
     if (!interaction.isButton()) return;
     if (!interaction.customId.startsWith('uq_')) return;
 
