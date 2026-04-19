@@ -58,6 +58,7 @@ function getTrackInfo(filename) {
   if (!found) return null;
   return {
     ...found,
+    title:    found.name,   // ← 補上 title，與 bilibili item 介面一致
     fileSize: getFileSize(found.filePath),
   };
 }
@@ -68,7 +69,6 @@ function getTrackInfo(filename) {
 function playStream(guildId, item, player) {
   if (!fs.existsSync(item.filePath)) {
     console.error(`❌ [LocalMusic] 找不到檔案: ${item.filePath}`);
-    // 觸發 error → unifiedQueue 的 error handler 會跳過
     player.emit('error', new Error(`找不到檔案: ${item.filename}`));
     return;
   }
@@ -90,7 +90,7 @@ function setupLocalMusicEngine(client) {
   // 注入引擎到 unifiedQueue
   registerEngine('local', {
     playStream,
-    getInfo:      getTrackInfo, // 統一介面（unifiedQueue 會呼叫 getInfo）
+    getInfo:      getTrackInfo,
     getTrackInfo,
     getMusicFiles,
   });

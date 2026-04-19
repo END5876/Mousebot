@@ -367,17 +367,21 @@ async function handlePlay(interaction, input) {
         ...(result.queued ? [{ name: '佇列位置', value: `第 ${result.position} 首`, inline: true }] : []),
       ];
 
-  await interaction.editReply({ embeds: [
-    new EmbedBuilder()
-      .setColor(0x1DB954)
-      .setTitle(result.queued ? '➕ 已加入佇列' : '▶️ 開始播放')
-      .setDescription(descText)
-      .addFields(...fields)
-      .setThumbnail(item.thumbnail || null)
-      .setFooter({ text: result.queued ? '' : '使用下方按鈕控制播放' })
-      .setTimestamp()
-  ]});
+  // ── 建立回覆 Embed ────────────────────────────────────
+  const replyEmbed = new EmbedBuilder()
+    .setColor(0x1DB954)
+    .setTitle(result.queued ? '➕ 已加入佇列' : '▶️ 開始播放')
+    .setDescription(descText)
+    .addFields(...fields)
+    .setThumbnail(item.thumbnail || null)
+    .setTimestamp();
 
+  // setFooter 不可傳空字串，僅在「開始播放」時才加
+  if (!result.queued) {
+    replyEmbed.setFooter({ text: '使用下方按鈕控制播放' });
+  }
+
+  await interaction.editReply({ embeds: [replyEmbed] });
   await updateControlPanel(guildId, interaction.channel);
 }
 
