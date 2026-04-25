@@ -15,6 +15,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   SlashCommandBuilder,
+  MessageFlags,              // ✅ 新增
 } = require('discord.js');
 
 const { setMusicPlayer, stopMusicLayer, startSilenceLayer } = require('./audioManager');
@@ -323,7 +324,6 @@ function _shuffle(arr) {
 async function _handlePlayAll(interaction, shuffleOpt) {
   const guildId = interaction.guildId;
 
-  // ── 1. 確保語音連線（使用者需在頻道，或機器人已在頻道）──
   let connection;
   try {
     connection = await ensureConnection(interaction);
@@ -332,7 +332,6 @@ async function _handlePlayAll(interaction, shuffleOpt) {
   }
   if (!connection) return interaction.editReply('❌ 你必須先加入語音頻道！');
 
-  // ── 2. 取得所有本地音樂 ───────────────────────────────
   const engine = _engines.local;
   if (!engine) return interaction.editReply('❌ 本地音樂引擎未就緒');
 
@@ -341,10 +340,8 @@ async function _handlePlayAll(interaction, shuffleOpt) {
     return interaction.editReply('❌ music 資料夾內沒有可播放的音訊檔案！');
   }
 
-  // ── 3. 洗牌（若選擇隨機）────────────────────────────
   if (shuffleOpt === 'yes') files = _shuffle(files);
 
-  // ── 4. 批次加入佇列 ───────────────────────────────────
   let addedCount = 0;
   for (const file of files) {
     const item = {
@@ -357,7 +354,6 @@ async function _handlePlayAll(interaction, shuffleOpt) {
     addedCount++;
   }
 
-  // ── 5. 回覆結果 Embed ─────────────────────────────────
   const orderLabel   = shuffleOpt === 'yes' ? '🔀 隨機排序' : '📋 依檔名順序';
   const previewLines = files
     .slice(0, 10)
@@ -389,12 +385,10 @@ async function _handlePlayAll(interaction, shuffleOpt) {
 async function handlePlay(interaction, input, shuffleOpt = 'no') {
   const guildId = interaction.guildId;
 
-  // ── 特殊值：全部本地音樂 ──────────────────────────────
   if (input === '__ALL_LOCAL__') {
     return _handlePlayAll(interaction, shuffleOpt);
   }
 
-  // ── 以下為原本邏輯（單首播放）────────────────────────
   let connection;
   try {
     connection = await ensureConnection(interaction);
@@ -471,7 +465,6 @@ function handleAutocomplete(interaction) {
   if (interaction.commandName !== 'play') return false;
   const focused = interaction.options.getFocused().toLowerCase();
 
-  // URL 輸入時不顯示本地選項
   if (focused.startsWith('http')) {
     interaction.respond([]).catch(() => {});
     return true;
@@ -480,7 +473,6 @@ function handleAutocomplete(interaction) {
   const engine = _engines.local;
   if (!engine) { interaction.respond([]).catch(() => {}); return true; }
 
-  // ── 固定選項：全部本地音樂（永遠顯示在最前面）──────
   const ALL_LOCAL_CHOICE = {
     name:  '📂 ▶ 全部本地音樂（一次加入所有檔案）',
     value: '__ALL_LOCAL__',
@@ -491,10 +483,9 @@ function handleAutocomplete(interaction) {
       f.name.toLowerCase().includes(focused) ||
       f.filename.toLowerCase().includes(focused)
     )
-    .slice(0, 24)           // 留 1 個位置給固定選項，共 25 上限
+    .slice(0, 24)
     .map(f => ({ name: `📁 ${f.name}`, value: f.filename }));
 
-  // 只有在搜尋關鍵字不是 URL 時才插入固定選項
   const choices = focused === '' || '__ALL_LOCAL__'.includes(focused) || '全部'.includes(focused)
     ? [ALL_LOCAL_CHOICE, ...fileChoices]
     : fileChoices;
@@ -521,7 +512,8 @@ function setupUnifiedCommands(client) {
     const np      = nowPlaying.get(guildId);
 
     if (!np) {
-      return interaction.reply({ content: '❌ 目前沒有播放音樂', ephemeral: true });
+      // ✅ 使用 flags 取代 ephemeral
+      return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
     }
 
     try {
@@ -531,17 +523,17 @@ function setupUnifiedCommands(client) {
           const queue = queues.get(guildId) || [];
           if (queue.length === 0) {
             stopAll(guildId);
-            await interaction.reply({ content: '⏭️ 已跳過，佇列為空，停止播放', ephemeral: true });
+            await interaction.reply({ content: '⏭️ 已跳過，佇列為空，停止播放', flags: MessageFlags.Ephemeral });
           } else {
             np.player.stop();
-            await interaction.reply({ content: '⏭️ 跳過當前歌曲', ephemeral: true });
+            await interaction.reply({ content: '⏭️ 跳過當前歌曲', flags: MessageFlags.Ephemeral });
           }
           break;
         }
 
         case 'uq_stop':
           stopAll(guildId);
-          await interaction.reply({ content: '⏹️ 已停止播放', ephemeral: true });
+          await interaction.reply({ content: '⏹️ 已停止播放', flags: MessageFlags.Ephemeral });
           break;
 
         case 'uq_loop_one': {
@@ -549,8 +541,8 @@ function setupUnifiedCommands(client) {
           const next = cur === 'one' ? 'off' : 'one';
           loopSettings.set(guildId, next);
           await interaction.reply({
-            content:   next === 'one' ? '🔂 單曲循環已開啟' : '❌ 循環已關閉',
-            ephemeral: true,
+            content: next === 'one' ? '🔂 單曲循環已開啟' : '❌ 循環已關閉',
+            flags:   MessageFlags.Ephemeral,
           });
           await updateControlPanel(guildId, interaction.channel);
           break;
@@ -561,8 +553,8 @@ function setupUnifiedCommands(client) {
           const next = cur === 'all' ? 'off' : 'all';
           loopSettings.set(guildId, next);
           await interaction.reply({
-            content:   next === 'all' ? '🔁 列表循環已開啟' : '❌ 循環已關閉',
-            ephemeral: true,
+            content: next === 'all' ? '🔁 列表循環已開啟' : '❌ 循環已關閉',
+            flags:   MessageFlags.Ephemeral,
           });
           await updateControlPanel(guildId, interaction.channel);
           break;
@@ -604,13 +596,14 @@ function setupUnifiedCommands(client) {
             });
           }
 
-          await interaction.reply({ embeds: [embed], ephemeral: true });
+          // ✅ 使用 flags 取代 ephemeral
+          await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
           break;
         }
       }
     } catch (err) {
       console.error('❌ [UnifiedQueue] 按鈕互動錯誤:', err);
-      try { await interaction.reply({ content: '❌ 操作失敗', ephemeral: true }); } catch {}
+      try { await interaction.reply({ content: '❌ 操作失敗', flags: MessageFlags.Ephemeral }); } catch {}
     }
   });
 
@@ -625,7 +618,6 @@ function setupUnifiedCommands(client) {
           .setRequired(true)
           .setAutocomplete(true)
       )
-      // ── 新增：shuffle 選項（只在選全部時有效）────────
       .addStringOption(opt =>
         opt.setName('shuffle')
           .setDescription('全部加入時的排序方式（單首播放時忽略此選項）')
@@ -650,7 +642,8 @@ function setupUnifiedCommands(client) {
       .setDescription('停止播放並清空佇列'),
     async execute(interaction) {
       if (!nowPlaying.has(interaction.guildId)) {
-        return interaction.reply({ content: '❌ 目前沒有播放音樂', ephemeral: true });
+        // ✅ 使用 flags 取代 ephemeral
+        return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
       }
       stopAll(interaction.guildId);
       await interaction.reply({ content: '⏹️ 已停止播放' });
@@ -664,7 +657,7 @@ function setupUnifiedCommands(client) {
       .setDescription('跳過當前歌曲'),
     async execute(interaction) {
       const np = nowPlaying.get(interaction.guildId);
-      if (!np) return interaction.reply({ content: '❌ 目前沒有播放音樂', ephemeral: true });
+      if (!np) return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
 
       const queue = queues.get(interaction.guildId) || [];
       if (queue.length === 0) {
@@ -683,7 +676,7 @@ function setupUnifiedCommands(client) {
       .setDescription('切換循環模式（關閉 → 單曲 → 列表）'),
     async execute(interaction) {
       const np = nowPlaying.get(interaction.guildId);
-      if (!np) return interaction.reply({ content: '❌ 目前沒有播放音樂', ephemeral: true });
+      if (!np) return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
 
       const cur  = loopSettings.get(interaction.guildId) || 'off';
       const next = cur === 'off' ? 'one' : cur === 'one' ? 'all' : 'off';
@@ -721,7 +714,7 @@ function setupUnifiedCommands(client) {
       const loopMode  = loopSettings.get(interaction.guildId) || 'off';
 
       if (!np && queueList.length === 0) {
-        return interaction.reply({ content: '❌ 目前沒有播放音樂且佇列為空', ephemeral: true });
+        return interaction.reply({ content: '❌ 目前沒有播放音樂且佇列為空', flags: MessageFlags.Ephemeral });
       }
 
       let loopText = '❌ 關閉';
@@ -769,7 +762,7 @@ function setupUnifiedCommands(client) {
     async execute(interaction) {
       const queue = queues.get(interaction.guildId);
       if (!queue || queue.length === 0) {
-        return interaction.reply({ content: '❌ 佇列已經是空的', ephemeral: true });
+        return interaction.reply({ content: '❌ 佇列已經是空的', flags: MessageFlags.Ephemeral });
       }
       const count = queue.length;
       queues.set(interaction.guildId, []);
@@ -784,7 +777,7 @@ function setupUnifiedCommands(client) {
       .setDescription('查看目前播放的詳細資訊'),
     async execute(interaction) {
       const np = nowPlaying.get(interaction.guildId);
-      if (!np) return interaction.reply({ content: '❌ 目前沒有播放音樂', ephemeral: true });
+      if (!np) return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
       const embed = _buildEmbed(interaction.guildId);
       await interaction.reply({ embeds: [embed] });
     },

@@ -9,6 +9,7 @@ const {
 const {
   EmbedBuilder,
   SlashCommandBuilder,
+  MessageFlags,              // ✅ 新增
 } = require('discord.js');
 const fs   = require('fs');
 const path = require('path');
@@ -110,8 +111,8 @@ function setupLocalMusicEngine(client) {
 
       if (musicFiles.length === 0) {
         return interaction.reply({
-          content:   '❌ music 資料夾內沒有可播放的音訊檔案\n支援格式：`.mp3` `.wav` `.ogg` `.flac` `.m4a` `.aac`',
-          ephemeral: true,
+          content: '❌ music 資料夾內沒有可播放的音訊檔案\n支援格式：`.mp3` `.wav` `.ogg` `.flac` `.m4a` `.aac`',
+          flags:   MessageFlags.Ephemeral,  // ✅ 使用 flags 取代 ephemeral
         });
       }
 
