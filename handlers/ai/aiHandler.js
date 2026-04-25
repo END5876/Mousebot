@@ -18,6 +18,7 @@ const MODEL_NAME = "gemini-2.5-flash-lite";
 const RANDOM_REPLY_CHANCE = 0.15;
 const MAX_IMAGE_SIZE_MB = 7;
 const TTS_MAX_LENGTH = 1000;
+const BUFFER_EXPIRE_MS = 10 * 60 * 1000; // 10 分鐘
 
 // 初始化 API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -102,24 +103,59 @@ function clearUserHistory(userId) {
 const channelBuffers = new Map();
 const MAX_BUFFER_SIZE = 15;
 
+// ✅ 加上 timestamp
 function addChannelMessage(channelId, userId, name, text) {
     if (!channelId) return;
     if (!channelBuffers.has(channelId)) channelBuffers.set(channelId, []);
     const buffer = channelBuffers.get(channelId);
-    buffer.push({ userId, name, text });
+    buffer.push({ userId, name, text, timestamp: Date.now() });
     if (buffer.length > MAX_BUFFER_SIZE) {
         buffer.shift();
     }
 }
 
+// ✅ 讀取時過濾超過 10 分鐘的訊息，並清理記憶體
 function getChannelBufferMessages(channelId) {
-    return channelBuffers.get(channelId) || [];
+    if (!channelId || !channelBuffers.has(channelId)) return [];
+
+    const now = Date.now();
+    const buffer = channelBuffers.get(channelId);
+
+    // 過濾過期訊息
+    const fresh = buffer.filter(msg => (now - msg.timestamp) < BUFFER_EXPIRE_MS);
+
+    // 若有過期訊息被清除，更新 Map（順便清理記憶體）
+    if (fresh.length !== buffer.length) {
+        if (fresh.length === 0) {
+            channelBuffers.delete(channelId); // 全空就直接刪除 key
+        } else {
+            channelBuffers.set(channelId, fresh);
+        }
+    }
+
+    return fresh;
+}
+
+// ✅ 注入現在時間（台灣時區，24h 格式）
+function getNowString() {
+    return new Date().toLocaleString('zh-TW', {
+        timeZone: 'Asia/Taipei',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+    });
 }
 
 function getChannelBufferText(channelId) {
     const buffer = getChannelBufferMessages(channelId);
-    if (buffer.length === 0) return "無近期對話紀錄。";
-    return buffer.map(msg => `[${msg.name}]: ${msg.text}`).join('\n');
+    const nowStr = getNowString();
+    const header = `【現在時間】${nowStr}`;
+    if (buffer.length === 0) return `${header}\n【近期對話】無近期對話紀錄。`;
+    const messages = buffer.map(msg => `[${msg.name}]: ${msg.text}`).join('\n');
+    return `${header}\n【近期對話】\n${messages}`;
 }
 
 async function fetchImageAsBase64(attachment) {
@@ -178,11 +214,10 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channelId = nu
 
         const chat = model.startChat({ history, generationConfig: GENERATION_CONFIG });
 
-        // 組裝最終送給 AI 的 Prompt
         let finalPrompt = prompt || '請吐槽這張圖片';
         if (channelId) {
             const bufferText = getChannelBufferText(channelId);
-            finalPrompt = `${injectedRule}\n\n【群組近期對話】\n${bufferText}\n\n【當前訊息】\n[${displayName}] 說：${prompt || '請吐槽這張圖片'}`;
+            finalPrompt = `${injectedRule}\n\n${bufferText}\n\n【當前訊息】\n[${displayName}] 說：${prompt || '請吐槽這張圖片'}`;
         }
 
         const messageParts = [];
@@ -194,7 +229,6 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channelId = nu
         const result = await chat.sendMessage(messageParts);
         const response = result.response.text();
 
-        // 寫入個人 history 時，只寫入乾淨的 prompt，避免 Token 爆炸
         const historyText = imageParts.length > 0
             ? `[傳送了 ${imageParts.length} 張圖片] ${prompt || ''}`
             : (prompt || '圖片');
@@ -211,7 +245,7 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channelId = nu
 
 async function getGeminiResponseVoice(userId, prompt) {
     try {
-        const mode = selectMode(userId); // 語音暫時保留簡單模式
+        const mode = selectMode(userId);
         const model = getModel(mode, true);
         const history = getUserHistory(userId);
 
@@ -249,7 +283,7 @@ async function getShortResponse(userId, message, imageParts = [], channelId = nu
         let finalPrompt = shortPrompt;
         if (channelId) {
             const bufferText = getChannelBufferText(channelId);
-            finalPrompt = `${injectedRule}\n\n【群組近期對話】\n${bufferText}\n\n【當前訊息】\n[${displayName}] 說：${shortPrompt}`;
+            finalPrompt = `${injectedRule}\n\n${bufferText}\n\n【當前訊息】\n[${displayName}] 說：${shortPrompt}`;
         }
 
         const chat = model.startChat({
@@ -336,7 +370,6 @@ const slashCommands = [
 
                 const answer = await getGeminiResponse(userId, question, imageParts, channelId, displayName, []);
                 
-                // 記錄 AI 的回應到 Buffer
                 addChannelMessage(channelId, interaction.client.user.id, 'Bot', answer);
 
                 const chunks = splitMessage(answer);
@@ -408,7 +441,6 @@ function setupAICommands(client) {
         const channelId = message.channel.id;
         const displayName = message.member?.displayName || message.author.username;
 
-        // 記錄所有使用者的訊息到 Channel Buffer
         if (content || hasAttachment) {
             const logText = content || '[圖片/檔案]';
             addChannelMessage(channelId, userId, displayName, logText);
@@ -421,7 +453,6 @@ function setupAICommands(client) {
         const mentionedUserIds = message.mentions.users.filter(u => !u.bot).map(u => u.id);
 
         if (isMentioned) {
-            // === Mention 回應邏輯 ===
             let question = content.replace(/<@!?\d+>/g, '').trim();
             if (!question && !hasAttachment) return;
             if (!process.env.GEMINI_API_KEY) return message.channel.send('❌ 未設定 API Key');
@@ -444,7 +475,6 @@ function setupAICommands(client) {
 
                 const answer = await getGeminiResponse(userId, question, imageParts, channelId, displayName, mentionedUserIds);
                 
-                // 記錄 AI 的回應到 Buffer
                 addChannelMessage(channelId, client.user.id, 'Bot', answer);
 
                 if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
@@ -464,7 +494,6 @@ function setupAICommands(client) {
             }
 
         } else {
-            // === 隨機回應邏輯 ===
             if (!process.env.GEMINI_API_KEY) return;
 
             const cleanedContent = content
@@ -491,7 +520,6 @@ function setupAICommands(client) {
 
                     const shortReply = await getShortResponse(userId, cleanedContent, imageParts, channelId, displayName, mentionedUserIds);
                     if (shortReply) {
-                        // 記錄 AI 的回應到 Buffer
                         addChannelMessage(channelId, client.user.id, 'Bot', shortReply);
                         
                         await message.channel.send(shortReply);
