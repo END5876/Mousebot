@@ -51,14 +51,13 @@ function getFileSize(filePath) {
   } catch { return '未知'; }
 }
 
-// ── 根據 filename 取得完整 trackInfo ─────────────────────
 function getTrackInfo(filename) {
   const files = getMusicFiles();
   const found = files.find(f => f.filename === filename);
   if (!found) return null;
   return {
     ...found,
-    title:    found.name,   // ← 補上 title，與 bilibili item 介面一致
+    title:    found.name,
     fileSize: getFileSize(found.filePath),
   };
 }
@@ -95,7 +94,7 @@ function setupLocalMusicEngine(client) {
     getMusicFiles,
   });
 
-  // ── Autocomplete（轉交 unifiedQueue 處理）────────────
+  // ── Autocomplete ──────────────────────────────────────
   client.on('interactionCreate', async interaction => {
     if (!interaction.isAutocomplete()) return;
     handleAutocomplete(interaction);
