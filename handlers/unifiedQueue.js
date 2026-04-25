@@ -162,23 +162,20 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
 
     const loopMode = loopSettings.get(guildId) || 'off';
 
-    // 單曲循環：靜默重播
     if (loopMode === 'one') {
       await _playItem(guildId, item, channel, { silent: true });
       return;
     }
 
-    const queue = queues.get(guildId) || [];
+    const queue    = queues.get(guildId) || [];
     const isLoopAll = loopMode === 'all';
 
-    // 列表循環：把播完的放回隊尾
     if (isLoopAll) queue.push(item);
 
     if (queue.length > 0) {
       const next = queue.shift();
       queues.set(guildId, queue);
 
-      // 列表循環靜默切換，一般播放才通知
       if (!isLoopAll) {
         console.log(`⏭️ [UnifiedQueue] 播放下一首: ${next.title}`);
         channel.send({ embeds: [
@@ -193,7 +190,6 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
         ]}).catch(() => {});
       }
 
-      // 列表循環傳 silent: true，不印開始播放 log
       await _playItem(guildId, next, channel, { silent: isLoopAll });
       await updateControlPanel(guildId, channel);
 
@@ -220,10 +216,8 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
     }
   });
 
-  // ── 更新 nowPlaying ───────────────────────────────────
   nowPlaying.set(guildId, { player, item });
 
-  // ── 根據 type 啟動對應引擎 ────────────────────────────
   try {
     if (item.type === 'bilibili') {
       const engine = _engines.bilibili;
@@ -241,10 +235,8 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
     return;
   }
 
-  // ── 交給 audioManager 接管 subscribe ─────────────────
   setMusicPlayer(guildId, player);
 
-  // 只有非靜默模式才印 log
   if (!silent) {
     console.log(`🎵 [UnifiedQueue] 開始播放: ${item.title} [${item.type}] (${guildId})`);
   }
@@ -314,11 +306,95 @@ async function ensureConnection(interaction) {
 }
 
 // ════════════════════════════════════════════════════════
-//  handlePlay（/play 核心邏輯）
+//  Fisher-Yates 洗牌
 // ════════════════════════════════════════════════════════
-async function handlePlay(interaction, input) {
+function _shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// ════════════════════════════════════════════════════════
+//  handlePlayAll（全部本地音樂批次加入）
+// ════════════════════════════════════════════════════════
+async function _handlePlayAll(interaction, shuffleOpt) {
   const guildId = interaction.guildId;
 
+  // ── 1. 確保語音連線（使用者需在頻道，或機器人已在頻道）──
+  let connection;
+  try {
+    connection = await ensureConnection(interaction);
+  } catch {
+    return interaction.editReply('❌ 加入語音頻道時發生錯誤');
+  }
+  if (!connection) return interaction.editReply('❌ 你必須先加入語音頻道！');
+
+  // ── 2. 取得所有本地音樂 ───────────────────────────────
+  const engine = _engines.local;
+  if (!engine) return interaction.editReply('❌ 本地音樂引擎未就緒');
+
+  let files = engine.getMusicFiles();
+  if (files.length === 0) {
+    return interaction.editReply('❌ music 資料夾內沒有可播放的音訊檔案！');
+  }
+
+  // ── 3. 洗牌（若選擇隨機）────────────────────────────
+  if (shuffleOpt === 'yes') files = _shuffle(files);
+
+  // ── 4. 批次加入佇列 ───────────────────────────────────
+  let addedCount = 0;
+  for (const file of files) {
+    const item = {
+      ...file,
+      title:    file.name,
+      fileSize: (() => { try { const s = require('fs').statSync(file.filePath); return (s.size/1024/1024).toFixed(2)+' MB'; } catch { return '未知'; } })(),
+      type:     'local',
+    };
+    await enqueue(guildId, item, interaction.channel);
+    addedCount++;
+  }
+
+  // ── 5. 回覆結果 Embed ─────────────────────────────────
+  const orderLabel   = shuffleOpt === 'yes' ? '🔀 隨機排序' : '📋 依檔名順序';
+  const previewLines = files
+    .slice(0, 10)
+    .map((f, i) => `\`${i + 1}.\` ${f.name}`)
+    .join('\n');
+  const moreText = files.length > 10
+    ? `\n*...以及另外 ${files.length - 10} 首*`
+    : '';
+
+  const embed = new EmbedBuilder()
+    .setColor(0x1DB954)
+    .setTitle('📋 已將所有本地音樂加入佇列')
+    .addFields(
+      { name: '✅ 加入數量', value: `${addedCount} 首`,  inline: true },
+      { name: '🔢 排序方式', value: orderLabel,           inline: true },
+      { name: '📄 播放順序預覽（前 10 首）', value: previewLines + moreText },
+    )
+    .setFooter({ text: `由 ${interaction.user.tag} 加入` })
+    .setTimestamp();
+
+  await interaction.editReply({ embeds: [embed] });
+  await updateControlPanel(guildId, interaction.channel);
+  console.log(`✅ [UnifiedQueue] localAll: ${addedCount} 首已加入佇列 (${guildId})`);
+}
+
+// ════════════════════════════════════════════════════════
+//  handlePlay（/play 核心邏輯）
+// ════════════════════════════════════════════════════════
+async function handlePlay(interaction, input, shuffleOpt = 'no') {
+  const guildId = interaction.guildId;
+
+  // ── 特殊值：全部本地音樂 ──────────────────────────────
+  if (input === '__ALL_LOCAL__') {
+    return _handlePlayAll(interaction, shuffleOpt);
+  }
+
+  // ── 以下為原本邏輯（單首播放）────────────────────────
   let connection;
   try {
     connection = await ensureConnection(interaction);
@@ -372,7 +448,6 @@ async function handlePlay(interaction, input) {
         ...(result.queued ? [{ name: '佇列位置', value: `第 ${result.position} 首`, inline: true }] : []),
       ];
 
-  // ── 建立回覆 Embed ────────────────────────────────────
   const replyEmbed = new EmbedBuilder()
     .setColor(0x1DB954)
     .setTitle(result.queued ? '➕ 已加入佇列' : '▶️ 開始播放')
@@ -396,6 +471,7 @@ function handleAutocomplete(interaction) {
   if (interaction.commandName !== 'play') return false;
   const focused = interaction.options.getFocused().toLowerCase();
 
+  // URL 輸入時不顯示本地選項
   if (focused.startsWith('http')) {
     interaction.respond([]).catch(() => {});
     return true;
@@ -404,15 +480,26 @@ function handleAutocomplete(interaction) {
   const engine = _engines.local;
   if (!engine) { interaction.respond([]).catch(() => {}); return true; }
 
-  const choices = engine.getMusicFiles()
+  // ── 固定選項：全部本地音樂（永遠顯示在最前面）──────
+  const ALL_LOCAL_CHOICE = {
+    name:  '📂 ▶ 全部本地音樂（一次加入所有檔案）',
+    value: '__ALL_LOCAL__',
+  };
+
+  const fileChoices = engine.getMusicFiles()
     .filter(f =>
       f.name.toLowerCase().includes(focused) ||
       f.filename.toLowerCase().includes(focused)
     )
-    .slice(0, 25)
+    .slice(0, 24)           // 留 1 個位置給固定選項，共 25 上限
     .map(f => ({ name: `📁 ${f.name}`, value: f.filename }));
 
-  interaction.respond(choices).catch(() => {});
+  // 只有在搜尋關鍵字不是 URL 時才插入固定選項
+  const choices = focused === '' || '__ALL_LOCAL__'.includes(focused) || '全部'.includes(focused)
+    ? [ALL_LOCAL_CHOICE, ...fileChoices]
+    : fileChoices;
+
+  interaction.respond(choices.slice(0, 25)).catch(() => {});
   return true;
 }
 
@@ -534,13 +621,25 @@ function setupUnifiedCommands(client) {
       .setDescription('播放 Bilibili / YouTube 影片，或本地音訊檔案')
       .addStringOption(opt =>
         opt.setName('input')
-          .setDescription('影片網址 或 本地檔名（輸入關鍵字可搜尋本地檔案）')
+          .setDescription('影片網址 或 本地檔名（輸入關鍵字可搜尋；選「全部本地音樂」一次加入所有）')
           .setRequired(true)
           .setAutocomplete(true)
+      )
+      // ── 新增：shuffle 選項（只在選全部時有效）────────
+      .addStringOption(opt =>
+        opt.setName('shuffle')
+          .setDescription('全部加入時的排序方式（單首播放時忽略此選項）')
+          .setRequired(false)
+          .addChoices(
+            { name: '📋 依檔名順序（預設）', value: 'no'  },
+            { name: '🔀 隨機排序',           value: 'yes' },
+          )
       ),
     async execute(interaction) {
       await interaction.deferReply();
-      await handlePlay(interaction, interaction.options.getString('input'));
+      const input      = interaction.options.getString('input');
+      const shuffleOpt = interaction.options.getString('shuffle') ?? 'no';
+      await handlePlay(interaction, input, shuffleOpt);
     },
   });
 
