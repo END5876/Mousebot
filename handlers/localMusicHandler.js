@@ -66,7 +66,7 @@ function getTrackInfo(filename) {
 // ════════════════════════════════════════════════════════
 //  playStream（由 unifiedQueue 呼叫）
 // ════════════════════════════════════════════════════════
-function playStream(guildId, item, player) {
+function playStream(guildId, item, player, { silent = false } = {}) {
   if (!fs.existsSync(item.filePath)) {
     console.error(`❌ [LocalMusic] 找不到檔案: ${item.filePath}`);
     player.emit('error', new Error(`找不到檔案: ${item.filename}`));
@@ -79,9 +79,11 @@ function playStream(guildId, item, player) {
   });
   resource.volume.setVolume(0.5);
   player.play(resource);
-  console.log(`🎵 [LocalMusic] 播放: ${item.filename} (${guildId})`);
+  
+  if (!silent) {
+    console.log(`🎵 [LocalMusic] 播放: ${item.filename} (${guildId})`);
+  }
 }
-
 // ════════════════════════════════════════════════════════
 //  setupLocalMusicEngine
 // ════════════════════════════════════════════════════════

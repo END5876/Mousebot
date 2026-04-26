@@ -104,8 +104,9 @@ function stopSilenceLayer(guildId) {
  * @param {string} guildId
  * @param {AudioPlayer} player  - 已 play(resource) 的播放器
  * @param {Function} [onEnd]    - 播放結束回調
+ * @param {boolean} [silent]    - 是否靜默執行 (不印 Log)
  */
-function setMusicPlayer(guildId, player, onEnd) {
+function setMusicPlayer(guildId, player, onEnd, silent = false) {
   const state = getState(guildId);
 
   // 清掉舊的音樂播放器
@@ -119,7 +120,8 @@ function setMusicPlayer(guildId, player, onEnd) {
       delete state.players.music;
       if (state.activeLayer === 'music') {
         // 退回靜音層（如果有的話）
-        _fallbackToSilence(guildId);
+        // 註：請確保 _fallbackToSilence 函式存在於你的檔案中
+        if (typeof _fallbackToSilence === 'function') _fallbackToSilence(guildId);
       }
       onEnd?.();
     }
@@ -127,7 +129,7 @@ function setMusicPlayer(guildId, player, onEnd) {
 
   // TTS 播放中 → 音樂先暫停等待
   if (state.activeLayer === 'tts') {
-    console.log(`⏸️ [AudioManager] TTS 播放中，音樂等待 (${guildId})`);
+    if (!silent) console.log(`⏸️ [AudioManager] TTS 播放中，音樂等待 (${guildId})`);
     state.musicPaused = true;
     // 不 subscribe，等 TTS 結束後再接手
     return;
@@ -136,7 +138,10 @@ function setMusicPlayer(guildId, player, onEnd) {
   _subscribe(guildId, player);
   state.activeLayer = 'music';
   state.musicPaused = false;
-  console.log(`🎵 [AudioManager] 音樂層啟動 (${guildId})`);
+  
+  if (!silent) {
+    console.log(`🎵 [AudioManager] 音樂層啟動 (${guildId})`);
+  }
 }
 
 function stopMusicLayer(guildId) {

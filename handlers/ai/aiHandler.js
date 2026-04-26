@@ -1,7 +1,7 @@
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
 const { SlashCommandBuilder } = require('discord.js');
 const { GENERATION_CONFIG } = require('../../config/aiSettings');
-const { selectMode, getModeName, determineGroupStrategy } = require('./modeSelector');
+const { selectMode, getModeName } = require('./modeSelector');
 const developerMode = require('./modes/developerMode');
 const guguMode = require('./modes/gugugagaMode');
 const { playTTS } = require('../ttsHandler');
@@ -18,7 +18,6 @@ const MODEL_NAME = "gemini-2.5-flash-lite";
 const RANDOM_REPLY_CHANCE = 0.15;
 const MAX_IMAGE_SIZE_MB = 7;
 const TTS_MAX_LENGTH = 1000;
-const BUFFER_EXPIRE_MS = 10 * 60 * 1000; // 10 分鐘
 
 // 初始化 API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -78,7 +77,7 @@ function getModel(mode, isVoice = false) {
     });
 }
 
-// --- 記憶體管理 (個人歷史) ---
+// --- 記憶體管理 ---
 const userChats = new Map();
 
 function getUserHistory(userId) {
@@ -97,65 +96,6 @@ function updateUserHistory(userId, role, text) {
 
 function clearUserHistory(userId) {
     userChats.delete(userId);
-}
-
-// --- 記憶體管理 (群組 Buffer) ---
-const channelBuffers = new Map();
-const MAX_BUFFER_SIZE = 15;
-
-// ✅ 加上 timestamp
-function addChannelMessage(channelId, userId, name, text) {
-    if (!channelId) return;
-    if (!channelBuffers.has(channelId)) channelBuffers.set(channelId, []);
-    const buffer = channelBuffers.get(channelId);
-    buffer.push({ userId, name, text, timestamp: Date.now() });
-    if (buffer.length > MAX_BUFFER_SIZE) {
-        buffer.shift();
-    }
-}
-
-// ✅ 讀取時過濾超過 10 分鐘的訊息，並清理記憶體
-function getChannelBufferMessages(channelId) {
-    if (!channelId || !channelBuffers.has(channelId)) return [];
-
-    const now = Date.now();
-    const buffer = channelBuffers.get(channelId);
-
-    // 過濾過期訊息
-    const fresh = buffer.filter(msg => (now - msg.timestamp) < BUFFER_EXPIRE_MS);
-
-    // 若有過期訊息被清除，更新 Map（順便清理記憶體）
-    if (fresh.length !== buffer.length) {
-        if (fresh.length === 0) {
-            channelBuffers.delete(channelId); // 全空就直接刪除 key
-        } else {
-            channelBuffers.set(channelId, fresh);
-        }
-    }
-
-    return fresh;
-}
-
-// ✅ 注入現在時間（台灣時區，24h 格式）
-function getNowString() {
-    return new Date().toLocaleString('zh-TW', {
-        timeZone: 'Asia/Taipei',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false
-    });
-}
-
-function getChannelBufferText(channelId) {
-    const buffer = getChannelBufferMessages(channelId);
-    const nowStr = getNowString();
-    const header = `【現在時間】${nowStr}`;
-    if (buffer.length === 0) return `${header}\n【近期對話】無近期對話紀錄。`;
-    const messages = buffer.map(msg => `[${msg.name}]: ${msg.text}`).join('\n');
-    return `${header}\n【近期對話】\n${messages}`;
 }
 
 async function fetchImageAsBase64(attachment) {
@@ -177,10 +117,17 @@ async function fetchImageAsBase64(attachment) {
     }
 }
 
+function getUserMode(userId, message) {
+    const mode = selectMode(userId, message);
+    console.log(`[Mode] User ${userId} -> ${getModeName(mode)}`);
+    return mode;
+}
+
 async function speakWithTTS(source, text, guildId) {
     if (!guildId) return;
     if (!isAITTSEnabled(guildId)) return;
 
+    // source 可能是 message 或 interaction
     const voiceChannel = source.member?.voice?.channel;
     if (!voiceChannel) {
         console.log(`🔇 [TTS] 使用者不在語音頻道，跳過朗讀`);
@@ -200,38 +147,28 @@ async function speakWithTTS(source, text, guildId) {
     }
 }
 
-// --- 核心 AI 邏輯 ---
+// --- 核心 AI 邏輯（不變）---
 
-async function getGeminiResponse(userId, prompt, imageParts = [], channelId = null, displayName = 'User', mentionedUserIds = []) {
+async function getGeminiResponse(userId, prompt, imageParts = []) {
     try {
-        const recentMessages = getChannelBufferMessages(channelId);
-        const { finalMode, injectedRule } = determineGroupStrategy(userId, mentionedUserIds, recentMessages);
-        
-        console.log(`[Mode] Channel ${channelId} / User ${userId} -> ${getModeName(finalMode)}`);
-        
-        const model = getModel(finalMode);
+        const mode = getUserMode(userId, prompt);
+        const model = getModel(mode);
         const history = getUserHistory(userId);
 
         const chat = model.startChat({ history, generationConfig: GENERATION_CONFIG });
-
-        let finalPrompt = prompt || '請吐槽這張圖片';
-        if (channelId) {
-            const bufferText = getChannelBufferText(channelId);
-            finalPrompt = `${injectedRule}\n\n${bufferText}\n\n【當前訊息】\n[${displayName}] 說：${prompt || '請吐槽這張圖片'}`;
-        }
 
         const messageParts = [];
         for (const img of imageParts) {
             messageParts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } });
         }
-        messageParts.push({ text: finalPrompt });
+        messageParts.push({ text: prompt || '請吐槽這張圖片' });
 
         const result = await chat.sendMessage(messageParts);
         const response = result.response.text();
 
         const historyText = imageParts.length > 0
             ? `[傳送了 ${imageParts.length} 張圖片] ${prompt || ''}`
-            : (prompt || '圖片');
+            : prompt;
 
         updateUserHistory(userId, 'user', historyText);
         updateUserHistory(userId, 'model', response);
@@ -245,7 +182,7 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channelId = nu
 
 async function getGeminiResponseVoice(userId, prompt) {
     try {
-        const mode = selectMode(userId);
+        const mode = getUserMode(userId, prompt);
         const model = getModel(mode, true);
         const history = getUserHistory(userId);
 
@@ -268,23 +205,15 @@ async function getGeminiResponseVoice(userId, prompt) {
     }
 }
 
-async function getShortResponse(userId, message, imageParts = [], channelId = null, displayName = 'User', mentionedUserIds = []) {
+async function getShortResponse(userId, message, imageParts = []) {
     try {
-        const recentMessages = getChannelBufferMessages(channelId);
-        const { finalMode, injectedRule } = determineGroupStrategy(userId, mentionedUserIds, recentMessages);
-        
-        const model = getModel(finalMode);
+        const mode = getUserMode(userId, message);
+        const model = getModel(mode);
         const history = getUserHistory(userId);
 
         const shortPrompt = imageParts.length > 0 && !message
             ? `請用大約10~200個字回應或吐槽這張圖片`
             : `請用大約10~200字回應或吐槽訊息：「${message}」`;
-
-        let finalPrompt = shortPrompt;
-        if (channelId) {
-            const bufferText = getChannelBufferText(channelId);
-            finalPrompt = `${injectedRule}\n\n${bufferText}\n\n【當前訊息】\n[${displayName}] 說：${shortPrompt}`;
-        }
 
         const chat = model.startChat({
             history,
@@ -295,7 +224,7 @@ async function getShortResponse(userId, message, imageParts = [], channelId = nu
         for (const img of imageParts) {
             messageParts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } });
         }
-        messageParts.push({ text: finalPrompt });
+        messageParts.push({ text: shortPrompt });
 
         const result = await chat.sendMessage(messageParts);
         return result.response.text().trim();
@@ -327,6 +256,8 @@ function splitMessage(text, maxLength = 1900) {
 // ════════════════════════════════════════════════════════
 
 const slashCommands = [
+
+    // ── /ai ── 詢問 AI ──────────────────────────────────
     {
         data: new SlashCommandBuilder()
             .setName('ai')
@@ -348,15 +279,12 @@ const slashCommands = [
             }
 
             const userId = interaction.user.id;
-            const channelId = interaction.channelId;
             const guildId = interaction.guildId;
-            const displayName = interaction.member?.displayName || interaction.user.username;
             const question = interaction.options.getString('question');
             const attachment = interaction.options.getAttachment('image');
 
-            const recentMessages = getChannelBufferMessages(channelId);
-            const { finalMode } = determineGroupStrategy(userId, [], recentMessages);
-            const modeModule = MODE_MAP[finalMode];
+            const mode = getUserMode(userId, question);
+            const modeModule = MODE_MAP[mode];
             const thinkingText = modeModule.getThinkingMessage();
 
             await interaction.reply({ content: thinkingText });
@@ -368,13 +296,13 @@ const slashCommands = [
                     if (imgData) imageParts.push(imgData);
                 }
 
-                const answer = await getGeminiResponse(userId, question, imageParts, channelId, displayName, []);
-                
-                addChannelMessage(channelId, interaction.client.user.id, 'Bot', answer);
-
+                const answer = await getGeminiResponse(userId, question, imageParts);
                 const chunks = splitMessage(answer);
 
+                // 編輯第一則（取代 thinking 訊息）
                 await interaction.editReply({ content: chunks[0] });
+
+                // 超過 2000 字的後續分段
                 for (let i = 1; i < chunks.length; i++) {
                     await interaction.followUp({ content: chunks[i] });
                 }
@@ -387,6 +315,8 @@ const slashCommands = [
             }
         }
     },
+
+    // ── /clearai ── 清除 AI 記憶 ────────────────────────
     {
         data: new SlashCommandBuilder()
             .setName('clearai')
@@ -394,7 +324,7 @@ const slashCommands = [
 
         async execute(interaction) {
             const userId = interaction.user.id;
-            const mode = selectMode(userId);
+            const mode = selectMode(userId, '');
             const modeModule = MODE_MAP[mode];
             const clearMsg = modeModule.getClearMemoryMessage();
 
@@ -402,6 +332,8 @@ const slashCommands = [
             await interaction.reply({ content: clearMsg });
         }
     },
+
+    // ── /aitts ── AI 回覆朗讀開關 ───────────────────────
     {
         data: new SlashCommandBuilder()
             .setName('aitts')
@@ -427,42 +359,33 @@ const slashCommands = [
 
 function setupAICommands(client) {
 
+    // ── 註冊 Slash Commands 到 client.commands ──────────
     for (const cmd of slashCommands) {
         client.commands.set(cmd.data.name, cmd);
     }
 
+    // ── 保留：Mention 回應 + 隨機回應（messageCreate）──
     client.on('messageCreate', async message => {
         if (message.author.bot) return;
 
-        const content = message.content?.trim() || '';
         const hasAttachment = message.attachments.size > 0;
-        
-        const userId = message.author.id;
-        const channelId = message.channel.id;
-        const displayName = message.member?.displayName || message.author.username;
-
-        if (content || hasAttachment) {
-            const logText = content || '[圖片/檔案]';
-            addChannelMessage(channelId, userId, displayName, logText);
-        }
-
+        const content = message.content?.trim() || '';
         if (!content && !hasAttachment) return;
 
+        const userId = message.author.id;
         const guildId = message.guild?.id;
         const isMentioned = message.mentions.has(client.user);
-        const mentionedUserIds = message.mentions.users.filter(u => !u.bot).map(u => u.id);
 
         if (isMentioned) {
+            // === Mention 回應邏輯 ===
             let question = content.replace(/<@!?\d+>/g, '').trim();
             if (!question && !hasAttachment) return;
             if (!process.env.GEMINI_API_KEY) return message.channel.send('❌ 未設定 API Key');
 
             let thinkingMsg = null;
             try {
-                const recentMessages = getChannelBufferMessages(channelId);
-                const { finalMode } = determineGroupStrategy(userId, mentionedUserIds, recentMessages);
-                const modeModule = MODE_MAP[finalMode];
-                
+                const mode = getUserMode(userId, question || '圖片');
+                const modeModule = MODE_MAP[mode];
                 thinkingMsg = await message.channel.send(modeModule.getThinkingMessage());
 
                 const imageParts = [];
@@ -473,10 +396,7 @@ function setupAICommands(client) {
                     }
                 }
 
-                const answer = await getGeminiResponse(userId, question, imageParts, channelId, displayName, mentionedUserIds);
-                
-                addChannelMessage(channelId, client.user.id, 'Bot', answer);
-
+                const answer = await getGeminiResponse(userId, question, imageParts);
                 if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
 
                 const chunks = splitMessage(answer);
@@ -488,12 +408,13 @@ function setupAICommands(client) {
 
             } catch (error) {
                 if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
-                const mode = selectMode(userId);
+                const mode = selectMode(userId, question || '圖片');
                 const modeModule = MODE_MAP[mode];
                 message.channel.send(modeModule.getErrorMessage(error));
             }
 
         } else {
+            // === 隨機回應邏輯 ===
             if (!process.env.GEMINI_API_KEY) return;
 
             const cleanedContent = content
@@ -518,10 +439,8 @@ function setupAICommands(client) {
                         }
                     }
 
-                    const shortReply = await getShortResponse(userId, cleanedContent, imageParts, channelId, displayName, mentionedUserIds);
+                    const shortReply = await getShortResponse(userId, cleanedContent, imageParts);
                     if (shortReply) {
-                        addChannelMessage(channelId, client.user.id, 'Bot', shortReply);
-                        
                         await message.channel.send(shortReply);
                         await speakWithTTS(message, shortReply, guildId);
                     }

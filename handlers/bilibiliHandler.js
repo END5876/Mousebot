@@ -222,11 +222,13 @@ async function getInfo(url) {
 //  playStream（由 unifiedQueue 呼叫）
 //  內含重試機制，失敗時透過 player.emit('error') 通知上層
 // ════════════════════════════════════════════════════════
-async function playStream(guildId, item, player, retryCount = 0) {
+async function playStream(guildId, item, player, { retryCount = 0, silent = false } = {}) {
   cleanupProcess(guildId);
 
   try {
-    console.log(`🎵 [Bilibili] 串流: ${item.title} (重試: ${retryCount}/${MAX_RETRIES})`);
+    if (!silent) {
+      console.log(`🎵 [Bilibili] 串流: ${item.title} (重試: ${retryCount}/${MAX_RETRIES})`);
+    }
 
     const ytdlp = spawn(ytdlpPath, buildYtdlpArgs(item.url), {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -240,7 +242,7 @@ async function playStream(guildId, item, player, retryCount = 0) {
     ytdlp.stderr.on('data', data => {
       const err = data.toString();
       if (!err.includes('Deleting original file')) {
-        console.error('yt-dlp stderr:', err);
+        if (!silent) console.error('yt-dlp stderr:', err); 
         errorOutput += err;
         if (!err.includes('unable to write data') && !err.includes('Broken pipe') && !err.includes('Invalid argument')) {
           hasError = true;
@@ -250,9 +252,11 @@ async function playStream(guildId, item, player, retryCount = 0) {
 
     ytdlp.on('error', err => { hasError = true; errorOutput = err.message; });
     ytdlp.on('close', (code, signal) => {
-      console.log(`yt-dlp 進程結束 (code: ${code}, signal: ${signal}, 數據已接收: ${dataReceived})`);
+      if (!silent) {
+        console.log(`yt-dlp 進程結束 (code: ${code}, signal: ${signal}, 數據已接收: ${dataReceived})`);
+      }
       if (code !== 0 && !dataReceived && hasError) {
-        _handleStreamError(guildId, item, player, retryCount, errorOutput);
+        _handleStreamError(guildId, item, player, retryCount, errorOutput, silent);
       }
     });
 
@@ -261,35 +265,40 @@ async function playStream(guildId, item, player, retryCount = 0) {
       inlineVolume: true,
     });
     resource.volume.setVolume(0.5);
-    resource.playStream?.on('error', err => { console.error('音頻流錯誤:', err); });
+    resource.playStream?.on('error', err => { 
+      if (!silent) console.error('音頻流錯誤:', err); 
+    });
 
     player.play(resource);
     errorCounts.set(guildId, 0);
 
   } catch (err) {
-    console.error('❌ [Bilibili] playStream 錯誤:', err);
-    _handleStreamError(guildId, item, player, retryCount, err.message);
+    if (!silent) console.error('❌ [Bilibili] playStream 錯誤:', err);
+    _handleStreamError(guildId, item, player, retryCount, err.message, silent);
   }
 }
 
 // ── 重試 / 跳過邏輯 ──────────────────────────────────────
-function _handleStreamError(guildId, item, player, retryCount, errorMessage) {
+function _handleStreamError(guildId, item, player, retryCount, errorMessage, silent = false) {
   const currentErrors = (errorCounts.get(guildId) || 0) + 1;
   errorCounts.set(guildId, currentErrors);
-  console.error(`❌ [Bilibili] 串流錯誤 (${currentErrors}/${MAX_CONSECUTIVE_ERRORS}): ${errorMessage}`);
+  
+  if (!silent) {
+    console.error(`❌ [Bilibili] 串流錯誤 (${currentErrors}/${MAX_CONSECUTIVE_ERRORS}): ${errorMessage}`);
+  }
 
   if (currentErrors >= MAX_CONSECUTIVE_ERRORS) {
-    console.error('❌ [Bilibili] 連續錯誤過多，停止播放');
+    if (!silent) console.error('❌ [Bilibili] 連續錯誤過多，停止播放');
     player.emit('error', new Error(`連續發生 ${currentErrors} 次錯誤，已停止播放`));
     stopAll(guildId);
     return;
   }
 
   if (retryCount < MAX_RETRIES) {
-    console.log(`⏳ [Bilibili] ${RETRY_DELAY / 1000} 秒後重試 (${retryCount + 1}/${MAX_RETRIES})...`);
-    setTimeout(() => playStream(guildId, item, player, retryCount + 1), RETRY_DELAY);
+    if (!silent) console.log(`⏳ [Bilibili] ${RETRY_DELAY / 1000} 秒後重試 (${retryCount + 1}/${MAX_RETRIES})...`);
+    setTimeout(() => playStream(guildId, item, player, { retryCount: retryCount + 1, silent }), RETRY_DELAY);
   } else {
-    console.error('❌ [Bilibili] 重試次數已用盡，通知上層跳過');
+    if (!silent) console.error('❌ [Bilibili] 重試次數已用盡，通知上層跳過');
     // 觸發 player error → unifiedQueue 的 error handler 會處理跳過
     player.emit('error', new Error(`播放失敗（已重試 ${MAX_RETRIES} 次）：${errorMessage.substring(0, 100)}`));
   }
