@@ -147,6 +147,8 @@ function stopAll(guildId) {
 // ════════════════════════════════════════════════════════
 //  核心播放
 // ════════════════════════════════════════════════════════
+// unifiedQueue.js
+
 async function _playItem(guildId, item, channel, { silent = false } = {}) {
   const connection = connections.get(guildId) || getVoiceConnection(guildId);
   if (!connection) {
@@ -223,11 +225,13 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
     if (item.type === 'bilibili') {
       const engine = _engines.bilibili;
       if (!engine) throw new Error('bilibili engine 未注入');
-      await engine.playStream(guildId, item, player);
+      // 傳入 { silent }
+      await engine.playStream(guildId, item, player, { silent });
     } else {
       const engine = _engines.local;
       if (!engine) throw new Error('local engine 未注入');
-      engine.playStream(guildId, item, player);
+      // 傳入 { silent }
+      engine.playStream(guildId, item, player, { silent });
     }
   } catch (err) {
     console.error(`❌ [UnifiedQueue] 引擎啟動失敗:`, err.message);
@@ -236,12 +240,14 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
     return;
   }
 
-  setMusicPlayer(guildId, player);
+  // 將 silent 作為第四個參數傳入 (第三個 callback 參數保留為 null/undefined)
+  setMusicPlayer(guildId, player, undefined, silent);
 
   if (!silent) {
     console.log(`🎵 [UnifiedQueue] 開始播放: ${item.title} [${item.type}] (${guildId})`);
   }
 }
+
 
 // ════════════════════════════════════════════════════════
 //  公開：加入佇列 / 立即播放
