@@ -309,7 +309,7 @@ function buildModelChoices() {
   return Object.entries(TTS_MODELS)
     .slice(0, 25)
     .map(([key, m]) => ({
-      name:  `${m.name} (${key})`.slice(0, 100),
+      name:  m.name.slice(0, 100),
       value: key,
     }));
 }
