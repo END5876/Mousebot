@@ -50,16 +50,16 @@ function _buildEmbed(guildId) {
   if (!np) return null;
 
   let loopText = '❌ 關閉';
-  if (loopMode === 'one') loopText = '\U0001F502 單曲循環';
-  if (loopMode === 'all') loopText = '\U0001F501 列表循環';
+  if (loopMode === 'one') loopText = '🔂 單曲循環';
+  if (loopMode === 'all') loopText = '🔁 列表循環';
 
   const { item } = np;
 
   const embed = new EmbedBuilder()
     .setColor(0x1DB954)
-    .setTitle('\U0001F3B5 正在播放')
+    .setTitle('🎵 正在播放')
     .setTimestamp()
-    .setFooter({ text: '\U0001F4CB 使用下方按鈕控制播放' });
+    .setFooter({ text: '📋 使用下方按鈕控制播放' });
 
   if (item.type === 'bilibili') {
     embed
@@ -73,10 +73,12 @@ function _buildEmbed(guildId) {
     if (item.thumbnail) embed.setThumbnail(item.thumbnail);
   } else {
     embed
-      .setDescription(`\U0001F3A7 **${item.title}**`)
+      .setDescription(`🎧 **${item.title}**`)
       .addFields(
-        { name: '循環模式', value: loopText,             inline: true },
-        { name: '佇列',     value: `${queue.length} 首`, inline: true },
+        { name: '檔案',     value: item.filename,           inline: true },
+        { name: '大小',     value: item.fileSize || '未知', inline: true },
+        { name: '循環模式', value: loopText,                inline: true },
+        { name: '佇列',     value: `${queue.length} 首`,    inline: true },
       );
   }
 
@@ -93,13 +95,13 @@ function _buildButtons(guildId) {
       .setCustomId('uq_stop').setLabel('停止').setEmoji('⏹️')
       .setStyle(ButtonStyle.Danger),
     new ButtonBuilder()
-      .setCustomId('uq_loop_one').setLabel('單曲循環').setEmoji('\U0001F502')
+      .setCustomId('uq_loop_one').setLabel('單曲循環').setEmoji('🔂')
       .setStyle(loopMode === 'one' ? ButtonStyle.Success : ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId('uq_loop_all').setLabel('列表循環').setEmoji('\U0001F501')
+      .setCustomId('uq_loop_all').setLabel('列表循環').setEmoji('🔁')
       .setStyle(loopMode === 'all' ? ButtonStyle.Success : ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId('uq_queue').setLabel('佇列').setEmoji('\U0001F4CB')
+      .setCustomId('uq_queue').setLabel('佇列').setEmoji('📋')
       .setStyle(ButtonStyle.Secondary),
   );
 }
@@ -185,7 +187,7 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
             .setTitle('⏭️ 正在播放下一首')
             .setDescription(next.type === 'bilibili'
               ? `[${next.title}](${next.url})`
-              : `\U0001F3A7 **${next.title}**`)
+              : `🎧 **${next.title}**`)
             .addFields({ name: '剩餘佇列', value: `${queue.length} 首`, inline: true })
             .setThumbnail(next.thumbnail || null)
         ]}).catch(() => {});
@@ -242,7 +244,7 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
   setMusicPlayer(guildId, player, undefined, silent);
 
   if (!silent) {
-    console.log(`\U0001F3B5 [UnifiedQueue] 開始播放: ${item.title} [${item.type}] (${guildId})`);
+    console.log(`🎵 [UnifiedQueue] 開始播放: ${item.title} [${item.type}] (${guildId})`);
   }
 }
 
@@ -350,14 +352,15 @@ async function _handlePlayAll(interaction, shuffleOpt) {
   for (const file of files) {
     const item = {
       ...file,
-      title: file.name,
-      type:  'local',
+      title:    file.name,
+      fileSize: (() => { try { const s = require('fs').statSync(file.filePath); return (s.size/1024/1024).toFixed(2)+' MB'; } catch { return '未知'; } })(),
+      type:     'local',
     };
     await enqueue(guildId, item, interaction.channel);
     addedCount++;
   }
 
-  const orderLabel   = shuffleOpt === 'yes' ? '\U0001F500 隨機排序' : '\U0001F4CB 依檔名順序';
+  const orderLabel   = shuffleOpt === 'yes' ? '🔀 隨機排序' : '📋 依檔名順序';
   const previewLines = files
     .slice(0, 10)
     .map((f, i) => `\`${i + 1}.\` ${f.name}`)
@@ -368,11 +371,11 @@ async function _handlePlayAll(interaction, shuffleOpt) {
 
   const embed = new EmbedBuilder()
     .setColor(0x1DB954)
-    .setTitle('\U0001F4CB 已將所有本地音樂加入佇列')
+    .setTitle('📋 已將所有本地音樂加入佇列')
     .addFields(
       { name: '✅ 加入數量', value: `${addedCount} 首`,  inline: true },
-      { name: '\U0001F522 排序方式', value: orderLabel,           inline: true },
-      { name: '\U0001F4C4 播放順序預覽（前 10 首）', value: previewLines + moreText },
+      { name: '🔢 排序方式', value: orderLabel,           inline: true },
+      { name: '📄 播放順序預覽（前 10 首）', value: previewLines + moreText },
     )
     .setFooter({ text: `由 ${interaction.user.tag} 加入` })
     .setTimestamp();
@@ -409,7 +412,7 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
     if (!engine) return interaction.editReply('❌ 串流引擎未就緒');
 
     await interaction.editReply({ embeds: [
-      new EmbedBuilder().setColor(0x1DB954).setDescription('\U0001F50D 正在獲取影片資訊...')
+      new EmbedBuilder().setColor(0x1DB954).setDescription('🔍 正在獲取影片資訊...')
     ]});
 
     try {
@@ -431,7 +434,7 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
 
   const descText = item.type === 'bilibili'
     ? `[${item.title}](${item.url})`
-    : `\U0001F3A7 **${item.title}**`;
+    : `🎧 **${item.title}**`;
 
   const fields = item.type === 'bilibili'
     ? [
@@ -440,6 +443,8 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
         ...(result.queued ? [{ name: '佇列位置', value: `第 ${result.position} 首`, inline: true }] : []),
       ]
     : [
+        { name: '檔案', value: item.filename,           inline: true },
+        { name: '大小', value: item.fileSize || '未知', inline: true },
         ...(result.queued ? [{ name: '佇列位置', value: `第 ${result.position} 首`, inline: true }] : []),
       ];
 
@@ -447,10 +452,9 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
     .setColor(0x1DB954)
     .setTitle(result.queued ? '➕ 已加入佇列' : '▶️ 開始播放')
     .setDescription(descText)
+    .addFields(...fields)
     .setThumbnail(item.thumbnail || null)
     .setTimestamp();
-
-  if (fields.length > 0) replyEmbed.addFields(...fields);
 
   if (!result.queued) {
     replyEmbed.setFooter({ text: '使用下方按鈕控制播放' });
@@ -476,7 +480,7 @@ function handleAutocomplete(interaction) {
   if (!engine) { interaction.respond([]).catch(() => {}); return true; }
 
   const ALL_LOCAL_CHOICE = {
-    name:  '\U0001F4C2 ▶ 全部本地音樂（一次加入所有檔案）',
+    name:  '📂 ▶ 全部本地音樂（一次加入所有檔案）',
     value: '__ALL_LOCAL__',
   };
 
@@ -486,7 +490,7 @@ function handleAutocomplete(interaction) {
       f.filename.toLowerCase().includes(focused)
     )
     .slice(0, 24)
-    .map(f => ({ name: `\U0001F4C1 ${f.name}`, value: f.filename }));
+    .map(f => ({ name: `📁 ${f.name}`, value: f.filename }));
 
   const choices = focused === '' || '__ALL_LOCAL__'.includes(focused) || '全部'.includes(focused)
     ? [ALL_LOCAL_CHOICE, ...fileChoices]
@@ -543,7 +547,7 @@ function setupUnifiedCommands(client) {
           const next = cur === 'one' ? 'off' : 'one';
           loopSettings.set(guildId, next);
           await interaction.reply({
-            content: next === 'one' ? '\U0001F502 單曲循環已開啟' : '❌ 循環已關閉',
+            content: next === 'one' ? '🔂 單曲循環已開啟' : '❌ 循環已關閉',
             flags:   MessageFlags.Ephemeral,
           });
           await updateControlPanel(guildId, interaction.channel);
@@ -555,7 +559,7 @@ function setupUnifiedCommands(client) {
           const next = cur === 'all' ? 'off' : 'all';
           loopSettings.set(guildId, next);
           await interaction.reply({
-            content: next === 'all' ? '\U0001F501 列表循環已開啟' : '❌ 循環已關閉',
+            content: next === 'all' ? '🔁 列表循環已開啟' : '❌ 循環已關閉',
             flags:   MessageFlags.Ephemeral,
           });
           await updateControlPanel(guildId, interaction.channel);
@@ -566,15 +570,15 @@ function setupUnifiedCommands(client) {
           const queueList = queues.get(guildId) || [];
           const loopMode  = loopSettings.get(guildId) || 'off';
           let loopText = '❌ 關閉';
-          if (loopMode === 'one') loopText = '\U0001F502 單曲循環';
-          if (loopMode === 'all') loopText = '\U0001F501 列表循環';
+          if (loopMode === 'one') loopText = '🔂 單曲循環';
+          if (loopMode === 'all') loopText = '🔁 列表循環';
 
           const embed = new EmbedBuilder()
             .setColor(0x1DB954)
-            .setTitle('\U0001F3B5 播放佇列')
+            .setTitle('🎵 播放佇列')
             .addFields(
               {
-                name:  '\U0001F3A7 正在播放',
+                name:  '🎧 正在播放',
                 value: np.item.type === 'bilibili'
                   ? `[${np.item.title}](${np.item.url})`
                   : `**${np.item.title}**`,
@@ -592,7 +596,7 @@ function setupUnifiedCommands(client) {
                 : `${i + 1}. **${t.title}**`
             ).join('\n');
             embed.addFields({
-              name:   '\U0001F4CB 佇列',
+              name:   '📋 佇列',
               value:  listText.length > 1024 ? listText.slice(0, 1021) + '...' : listText,
               inline: false,
             });
@@ -625,8 +629,8 @@ function setupUnifiedCommands(client) {
           .setDescription('全部加入時的排序方式（單首播放時忽略此選項）')
           .setRequired(false)
           .addChoices(
-            { name: '\U0001F4CB 依檔名順序（預設）', value: 'no'  },
-            { name: '\U0001F500 隨機排序',           value: 'yes' },
+            { name: '📋 依檔名順序（預設）', value: 'no'  },
+            { name: '🔀 隨機排序',           value: 'yes' },
           )
       ),
     async execute(interaction) {
@@ -684,7 +688,7 @@ function setupUnifiedCommands(client) {
       const next = cur === 'off' ? 'one' : cur === 'one' ? 'all' : 'off';
       loopSettings.set(interaction.guildId, next);
 
-      const loopText    = next === 'one' ? '\U0001F502 單曲循環已開啟' : next === 'all' ? '\U0001F501 列表循環已開啟' : '❌ 循環已關閉';
+      const loopText    = next === 'one' ? '🔂 單曲循環已開啟' : next === 'all' ? '🔁 列表循環已開啟' : '❌ 循環已關閉';
       const description = next === 'one' ? '當前歌曲將會不斷重複播放' : next === 'all' ? '播放完所有歌曲後將重新開始' : '播放完當前歌曲後繼續播放佇列';
 
       await interaction.reply({ embeds: [
@@ -720,20 +724,20 @@ function setupUnifiedCommands(client) {
       }
 
       let loopText = '❌ 關閉';
-      if (loopMode === 'one') loopText = '\U0001F502 單曲循環';
-      if (loopMode === 'all') loopText = '\U0001F501 列表循環';
+      if (loopMode === 'one') loopText = '🔂 單曲循環';
+      if (loopMode === 'all') loopText = '🔁 列表循環';
 
       const embed = new EmbedBuilder()
         .setColor(0x1DB954)
-        .setTitle('\U0001F3B5 播放佇列')
+        .setTitle('🎵 播放佇列')
         .setTimestamp();
 
       if (np) {
         embed.addFields({
-          name:  '\U0001F3A7 正在播放',
+          name:  '🎧 正在播放',
           value: np.item.type === 'bilibili'
             ? `[${np.item.title}](${np.item.url})\n作者: ${np.item.author || '未知'}`
-            : `**${np.item.title}**`,
+            : `**${np.item.title}**\n檔案: ${np.item.filename}`,
           inline: false,
         });
       }
@@ -746,7 +750,7 @@ function setupUnifiedCommands(client) {
             : `${i + 1}. **${t.title}**`
         ).join('\n');
         embed.addFields({
-          name:   `\U0001F4CB 佇列 (${queueList.length} 首)`,
+          name:   `📋 佇列 (${queueList.length} 首)`,
           value:  listText.length > 1024 ? listText.slice(0, 1021) + '...' : listText,
           inline: false,
         });
@@ -768,7 +772,7 @@ function setupUnifiedCommands(client) {
       }
       const count = queue.length;
       queues.set(interaction.guildId, []);
-      await interaction.reply({ content: `\U0001F5D1️ 已清空佇列 (${count} 首)` });
+      await interaction.reply({ content: `🗑️ 已清空佇列 (${count} 首)` });
     },
   });
 
