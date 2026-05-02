@@ -15,7 +15,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   SlashCommandBuilder,
-  MessageFlags,              // ✅ 新增
+  MessageFlags,
 } = require('discord.js');
 
 const { setMusicPlayer, stopMusicLayer, startSilenceLayer } = require('./audioManager');
@@ -33,18 +33,18 @@ function registerEngine(type, engine) {
 // ════════════════════════════════════════════════════════
 //  Guild 狀態
 // ════════════════════════════════════════════════════════
-const queues       = new Map();
-const nowPlaying   = new Map();
+const queues = new Map();
+const nowPlaying = new Map();
 const loopSettings = new Map();
-const controlMsgs  = new Map();
-const connections  = new Map();
+const controlMsgs = new Map();
+const connections = new Map();
 
 // ════════════════════════════════════════════════════════
 //  控制面板
 // ════════════════════════════════════════════════════════
 function _buildEmbed(guildId) {
-  const np       = nowPlaying.get(guildId);
-  const queue    = queues.get(guildId) || [];
+  const np = nowPlaying.get(guildId);
+  const queue = queues.get(guildId) || [];
   const loopMode = loopSettings.get(guildId) || 'off';
 
   if (!np) return null;
@@ -65,20 +65,19 @@ function _buildEmbed(guildId) {
     embed
       .setDescription(`[${item.title}](${item.url})`)
       .addFields(
-        { name: '作者',     value: item.author   || '未知', inline: true },
-        { name: '時長',     value: item.duration || '未知', inline: true },
-        { name: '循環模式', value: loopText,                inline: true },
-        { name: '佇列',     value: `${queue.length} 首`,    inline: true },
+        { name: '作者', value: item.author || '未知', inline: true },
+        { name: '時長', value: item.duration || '未知', inline: true },
+        { name: '循環模式', value: loopText, inline: true },
+        { name: '佇列', value: `${queue.length} 首`, inline: true },
       );
     if (item.thumbnail) embed.setThumbnail(item.thumbnail);
   } else {
+    // local：不顯示副檔名 / 檔案大小
     embed
       .setDescription(`🎧 **${item.title}**`)
       .addFields(
-        { name: '檔案',     value: item.filename,           inline: true },
-        { name: '大小',     value: item.fileSize || '未知', inline: true },
-        { name: '循環模式', value: loopText,                inline: true },
-        { name: '佇列',     value: `${queue.length} 首`,    inline: true },
+        { name: '循環模式', value: loopText, inline: true },
+        { name: '佇列', value: `${queue.length} 首`, inline: true },
       );
   }
 
@@ -89,19 +88,29 @@ function _buildButtons(guildId) {
   const loopMode = loopSettings.get(guildId) || 'off';
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId('uq_skip').setLabel('跳過').setEmoji('⏭️')
+      .setCustomId('uq_skip')
+      .setLabel('跳過')
+      .setEmoji('⏭️')
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
-      .setCustomId('uq_stop').setLabel('停止').setEmoji('⏹️')
+      .setCustomId('uq_stop')
+      .setLabel('停止')
+      .setEmoji('⏹️')
       .setStyle(ButtonStyle.Danger),
     new ButtonBuilder()
-      .setCustomId('uq_loop_one').setLabel('單曲循環').setEmoji('🔂')
+      .setCustomId('uq_loop_one')
+      .setLabel('單曲循環')
+      .setEmoji('🔂')
       .setStyle(loopMode === 'one' ? ButtonStyle.Success : ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId('uq_loop_all').setLabel('列表循環').setEmoji('🔁')
+      .setCustomId('uq_loop_all')
+      .setLabel('列表循環')
+      .setEmoji('🔁')
       .setStyle(loopMode === 'all' ? ButtonStyle.Success : ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId('uq_queue').setLabel('佇列').setEmoji('📋')
+      .setCustomId('uq_queue')
+      .setLabel('佇列')
+      .setEmoji('📋')
       .setStyle(ButtonStyle.Secondary),
   );
 }
@@ -147,8 +156,6 @@ function stopAll(guildId) {
 // ════════════════════════════════════════════════════════
 //  核心播放
 // ════════════════════════════════════════════════════════
-// unifiedQueue.js
-
 async function _playItem(guildId, item, channel, { silent = false } = {}) {
   const connection = connections.get(guildId) || getVoiceConnection(guildId);
   if (!connection) {
@@ -170,7 +177,7 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
       return;
     }
 
-    const queue    = queues.get(guildId) || [];
+    const queue = queues.get(guildId) || [];
     const isLoopAll = loopMode === 'all';
 
     if (isLoopAll) queue.push(item);
@@ -181,21 +188,24 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
 
       if (!isLoopAll) {
         console.log(`⏭️ [UnifiedQueue] 播放下一首: ${next.title}`);
-        channel.send({ embeds: [
-          new EmbedBuilder()
-            .setColor(0x1DB954)
-            .setTitle('⏭️ 正在播放下一首')
-            .setDescription(next.type === 'bilibili'
+
+        const nextEmbed = new EmbedBuilder()
+          .setColor(0x1DB954)
+          .setTitle('⏭️ 正在播放下一首')
+          .setDescription(
+            next.type === 'bilibili'
               ? `[${next.title}](${next.url})`
-              : `🎧 **${next.title}**`)
-            .addFields({ name: '剩餘佇列', value: `${queue.length} 首`, inline: true })
-            .setThumbnail(next.thumbnail || null)
-        ]}).catch(() => {});
+              : `🎧 **${next.title}**`
+          )
+          .addFields({ name: '剩餘佇列', value: `${queue.length} 首`, inline: true });
+
+        if (next.thumbnail) nextEmbed.setThumbnail(next.thumbnail);
+
+        channel.send({ embeds: [nextEmbed] }).catch(() => {});
       }
 
       await _playItem(guildId, next, channel, { silent: isLoopAll });
       await updateControlPanel(guildId, channel);
-
     } else {
       console.log('✅ [UnifiedQueue] 播放完畢，佇列為空');
       stopAll(guildId);
@@ -225,29 +235,26 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
     if (item.type === 'bilibili') {
       const engine = _engines.bilibili;
       if (!engine) throw new Error('bilibili engine 未注入');
-      // 傳入 { silent }
       await engine.playStream(guildId, item, player, { silent });
     } else {
       const engine = _engines.local;
       if (!engine) throw new Error('local engine 未注入');
-      // 傳入 { silent }
       engine.playStream(guildId, item, player, { silent });
     }
   } catch (err) {
-    console.error(`❌ [UnifiedQueue] 引擎啟動失敗:`, err.message);
+    console.error('❌ [UnifiedQueue] 引擎啟動失敗:', err.message);
     channel.send(`❌ 無法播放 **${item.title}**：${err.message}`).catch(() => {});
     nowPlaying.delete(guildId);
     return;
   }
 
-  // 將 silent 作為第四個參數傳入 (第三個 callback 參數保留為 null/undefined)
+  // 將 silent 作為第四個參數傳入
   setMusicPlayer(guildId, player, undefined, silent);
 
   if (!silent) {
     console.log(`🎵 [UnifiedQueue] 開始播放: ${item.title} [${item.type}] (${guildId})`);
   }
 }
-
 
 // ════════════════════════════════════════════════════════
 //  公開：加入佇列 / 立即播放
@@ -282,11 +289,11 @@ async function ensureConnection(interaction) {
   if (!voiceChannel) return null;
 
   connection = joinVoiceChannel({
-    channelId:      voiceChannel.id,
+    channelId: voiceChannel.id,
     guildId,
     adapterCreator: interaction.guild.voiceAdapterCreator,
-    selfDeaf:       false,
-    selfMute:       false,
+    selfDeaf: false,
+    selfMute: false,
   });
 
   await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
@@ -297,7 +304,7 @@ async function ensureConnection(interaction) {
     try {
       await Promise.race([
         entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-        entersState(connection, VoiceConnectionStatus.Connecting,  5_000),
+        entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
       ]);
     } catch {
       console.warn(`⚠️ [UnifiedQueue] 語音連線斷開 (${guildId})`);
@@ -352,15 +359,14 @@ async function _handlePlayAll(interaction, shuffleOpt) {
   for (const file of files) {
     const item = {
       ...file,
-      title:    file.name,
-      fileSize: (() => { try { const s = require('fs').statSync(file.filePath); return (s.size/1024/1024).toFixed(2)+' MB'; } catch { return '未知'; } })(),
-      type:     'local',
+      title: file.name, // 已在 localMusicHandler 清理
+      type: 'local',
     };
     await enqueue(guildId, item, interaction.channel);
     addedCount++;
   }
 
-  const orderLabel   = shuffleOpt === 'yes' ? '🔀 隨機排序' : '📋 依檔名順序';
+  const orderLabel = shuffleOpt === 'yes' ? '🔀 隨機排序' : '📋 依檔名順序';
   const previewLines = files
     .slice(0, 10)
     .map((f, i) => `\`${i + 1}.\` ${f.name}`)
@@ -373,8 +379,8 @@ async function _handlePlayAll(interaction, shuffleOpt) {
     .setColor(0x1DB954)
     .setTitle('📋 已將所有本地音樂加入佇列')
     .addFields(
-      { name: '✅ 加入數量', value: `${addedCount} 首`,  inline: true },
-      { name: '🔢 排序方式', value: orderLabel,           inline: true },
+      { name: '✅ 加入數量', value: `${addedCount} 首`, inline: true },
+      { name: '🔢 排序方式', value: orderLabel, inline: true },
       { name: '📄 播放順序預覽（前 10 首）', value: previewLines + moreText },
     )
     .setFooter({ text: `由 ${interaction.user.tag} 加入` })
@@ -411,9 +417,13 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
     const engine = _engines.bilibili;
     if (!engine) return interaction.editReply('❌ 串流引擎未就緒');
 
-    await interaction.editReply({ embeds: [
-      new EmbedBuilder().setColor(0x1DB954).setDescription('🔍 正在獲取影片資訊...')
-    ]});
+    await interaction.editReply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0x1DB954)
+          .setDescription('🔍 正在獲取影片資訊...')
+      ]
+    });
 
     try {
       item = await engine.getInfo(input);
@@ -438,13 +448,11 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
 
   const fields = item.type === 'bilibili'
     ? [
-        { name: '作者', value: item.author   || '未知', inline: true },
+        { name: '作者', value: item.author || '未知', inline: true },
         { name: '時長', value: item.duration || '未知', inline: true },
         ...(result.queued ? [{ name: '佇列位置', value: `第 ${result.position} 首`, inline: true }] : []),
       ]
     : [
-        { name: '檔案', value: item.filename,           inline: true },
-        { name: '大小', value: item.fileSize || '未知', inline: true },
         ...(result.queued ? [{ name: '佇列位置', value: `第 ${result.position} 首`, inline: true }] : []),
       ];
 
@@ -452,9 +460,15 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
     .setColor(0x1DB954)
     .setTitle(result.queued ? '➕ 已加入佇列' : '▶️ 開始播放')
     .setDescription(descText)
-    .addFields(...fields)
-    .setThumbnail(item.thumbnail || null)
     .setTimestamp();
+
+  if (fields.length > 0) {
+    replyEmbed.addFields(...fields);
+  }
+
+  if (item.thumbnail) {
+    replyEmbed.setThumbnail(item.thumbnail);
+  }
 
   if (!result.queued) {
     replyEmbed.setFooter({ text: '使用下方按鈕控制播放' });
@@ -477,10 +491,13 @@ function handleAutocomplete(interaction) {
   }
 
   const engine = _engines.local;
-  if (!engine) { interaction.respond([]).catch(() => {}); return true; }
+  if (!engine) {
+    interaction.respond([]).catch(() => {});
+    return true;
+  }
 
   const ALL_LOCAL_CHOICE = {
-    name:  '📂 ▶ 全部本地音樂（一次加入所有檔案）',
+    name: '📂 ▶ 全部本地音樂（一次加入所有檔案）',
     value: '__ALL_LOCAL__',
   };
 
@@ -504,7 +521,6 @@ function handleAutocomplete(interaction) {
 //  setupUnifiedCommands
 // ════════════════════════════════════════════════════════
 function setupUnifiedCommands(client) {
-
   client.on('interactionCreate', async interaction => {
     if (interaction.isAutocomplete()) {
       handleAutocomplete(interaction);
@@ -515,16 +531,14 @@ function setupUnifiedCommands(client) {
     if (!interaction.customId.startsWith('uq_')) return;
 
     const guildId = interaction.guildId;
-    const np      = nowPlaying.get(guildId);
+    const np = nowPlaying.get(guildId);
 
     if (!np) {
-      // ✅ 使用 flags 取代 ephemeral
       return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
     }
 
     try {
       switch (interaction.customId) {
-
         case 'uq_skip': {
           const queue = queues.get(guildId) || [];
           if (queue.length === 0) {
@@ -543,24 +557,24 @@ function setupUnifiedCommands(client) {
           break;
 
         case 'uq_loop_one': {
-          const cur  = loopSettings.get(guildId);
+          const cur = loopSettings.get(guildId);
           const next = cur === 'one' ? 'off' : 'one';
           loopSettings.set(guildId, next);
           await interaction.reply({
             content: next === 'one' ? '🔂 單曲循環已開啟' : '❌ 循環已關閉',
-            flags:   MessageFlags.Ephemeral,
+            flags: MessageFlags.Ephemeral,
           });
           await updateControlPanel(guildId, interaction.channel);
           break;
         }
 
         case 'uq_loop_all': {
-          const cur  = loopSettings.get(guildId);
+          const cur = loopSettings.get(guildId);
           const next = cur === 'all' ? 'off' : 'all';
           loopSettings.set(guildId, next);
           await interaction.reply({
             content: next === 'all' ? '🔁 列表循環已開啟' : '❌ 循環已關閉',
-            flags:   MessageFlags.Ephemeral,
+            flags: MessageFlags.Ephemeral,
           });
           await updateControlPanel(guildId, interaction.channel);
           break;
@@ -568,7 +582,7 @@ function setupUnifiedCommands(client) {
 
         case 'uq_queue': {
           const queueList = queues.get(guildId) || [];
-          const loopMode  = loopSettings.get(guildId) || 'off';
+          const loopMode = loopSettings.get(guildId) || 'off';
           let loopText = '❌ 關閉';
           if (loopMode === 'one') loopText = '🔂 單曲循環';
           if (loopMode === 'all') loopText = '🔁 列表循環';
@@ -578,13 +592,13 @@ function setupUnifiedCommands(client) {
             .setTitle('🎵 播放佇列')
             .addFields(
               {
-                name:  '🎧 正在播放',
+                name: '🎧 正在播放',
                 value: np.item.type === 'bilibili'
                   ? `[${np.item.title}](${np.item.url})`
                   : `**${np.item.title}**`,
                 inline: false,
               },
-              { name: '循環模式', value: loopText,                 inline: true },
+              { name: '循環模式', value: loopText, inline: true },
               { name: '佇列數量', value: `${queueList.length} 首`, inline: true },
             )
             .setTimestamp();
@@ -596,13 +610,12 @@ function setupUnifiedCommands(client) {
                 : `${i + 1}. **${t.title}**`
             ).join('\n');
             embed.addFields({
-              name:   '📋 佇列',
-              value:  listText.length > 1024 ? listText.slice(0, 1021) + '...' : listText,
+              name: '📋 佇列',
+              value: listText.length > 1024 ? listText.slice(0, 1021) + '...' : listText,
               inline: false,
             });
           }
 
-          // ✅ 使用 flags 取代 ephemeral
           await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
           break;
         }
@@ -629,13 +642,13 @@ function setupUnifiedCommands(client) {
           .setDescription('全部加入時的排序方式（單首播放時忽略此選項）')
           .setRequired(false)
           .addChoices(
-            { name: '📋 依檔名順序（預設）', value: 'no'  },
-            { name: '🔀 隨機排序',           value: 'yes' },
+            { name: '📋 依檔名順序（預設）', value: 'no' },
+            { name: '🔀 隨機排序', value: 'yes' },
           )
       ),
     async execute(interaction) {
       await interaction.deferReply();
-      const input      = interaction.options.getString('input');
+      const input = interaction.options.getString('input');
       const shuffleOpt = interaction.options.getString('shuffle') ?? 'no';
       await handlePlay(interaction, input, shuffleOpt);
     },
@@ -648,7 +661,6 @@ function setupUnifiedCommands(client) {
       .setDescription('停止播放並清空佇列'),
     async execute(interaction) {
       if (!nowPlaying.has(interaction.guildId)) {
-        // ✅ 使用 flags 取代 ephemeral
         return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
       }
       stopAll(interaction.guildId);
@@ -684,27 +696,29 @@ function setupUnifiedCommands(client) {
       const np = nowPlaying.get(interaction.guildId);
       if (!np) return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
 
-      const cur  = loopSettings.get(interaction.guildId) || 'off';
+      const cur = loopSettings.get(interaction.guildId) || 'off';
       const next = cur === 'off' ? 'one' : cur === 'one' ? 'all' : 'off';
       loopSettings.set(interaction.guildId, next);
 
-      const loopText    = next === 'one' ? '🔂 單曲循環已開啟' : next === 'all' ? '🔁 列表循環已開啟' : '❌ 循環已關閉';
+      const loopText = next === 'one' ? '🔂 單曲循環已開啟' : next === 'all' ? '🔁 列表循環已開啟' : '❌ 循環已關閉';
       const description = next === 'one' ? '當前歌曲將會不斷重複播放' : next === 'all' ? '播放完所有歌曲後將重新開始' : '播放完當前歌曲後繼續播放佇列';
 
-      await interaction.reply({ embeds: [
-        new EmbedBuilder()
-          .setColor(next === 'off' ? 0xFF0000 : 0x1DB954)
-          .setTitle(loopText)
-          .setDescription(description)
-          .addFields({
-            name:  '正在播放',
-            value: np.item.type === 'bilibili'
-              ? `[${np.item.title}](${np.item.url})`
-              : `**${np.item.title}**`,
-            inline: false,
-          })
-          .setTimestamp()
-      ]});
+      await interaction.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(next === 'off' ? 0xFF0000 : 0x1DB954)
+            .setTitle(loopText)
+            .setDescription(description)
+            .addFields({
+              name: '正在播放',
+              value: np.item.type === 'bilibili'
+                ? `[${np.item.title}](${np.item.url})`
+                : `**${np.item.title}**`,
+              inline: false,
+            })
+            .setTimestamp()
+        ]
+      });
       await updateControlPanel(interaction.guildId, interaction.channel);
     },
   });
@@ -715,9 +729,9 @@ function setupUnifiedCommands(client) {
       .setName('queue')
       .setDescription('查看播放佇列'),
     async execute(interaction) {
-      const np        = nowPlaying.get(interaction.guildId);
+      const np = nowPlaying.get(interaction.guildId);
       const queueList = queues.get(interaction.guildId) || [];
-      const loopMode  = loopSettings.get(interaction.guildId) || 'off';
+      const loopMode = loopSettings.get(interaction.guildId) || 'off';
 
       if (!np && queueList.length === 0) {
         return interaction.reply({ content: '❌ 目前沒有播放音樂且佇列為空', flags: MessageFlags.Ephemeral });
@@ -734,10 +748,10 @@ function setupUnifiedCommands(client) {
 
       if (np) {
         embed.addFields({
-          name:  '🎧 正在播放',
+          name: '🎧 正在播放',
           value: np.item.type === 'bilibili'
             ? `[${np.item.title}](${np.item.url})\n作者: ${np.item.author || '未知'}`
-            : `**${np.item.title}**\n檔案: ${np.item.filename}`,
+            : `**${np.item.title}**`,
           inline: false,
         });
       }
@@ -750,8 +764,8 @@ function setupUnifiedCommands(client) {
             : `${i + 1}. **${t.title}**`
         ).join('\n');
         embed.addFields({
-          name:   `📋 佇列 (${queueList.length} 首)`,
-          value:  listText.length > 1024 ? listText.slice(0, 1021) + '...' : listText,
+          name: `📋 佇列 (${queueList.length} 首)`,
+          value: listText.length > 1024 ? listText.slice(0, 1021) + '...' : listText,
           inline: false,
         });
       }
@@ -795,7 +809,7 @@ function setupUnifiedCommands(client) {
 // ════════════════════════════════════════════════════════
 //  查詢
 // ════════════════════════════════════════════════════════
-function isPlaying(guildId)     { return nowPlaying.has(guildId); }
+function isPlaying(guildId) { return nowPlaying.has(guildId); }
 function getNowPlaying(guildId) { return nowPlaying.get(guildId)?.item ?? null; }
 
 module.exports = {
