@@ -1,13 +1,4 @@
 module.exports = {
-    // 指令前綴
-    PREFIX: '!',
-
-    // 特殊用戶設定
-    SPECIAL_USERS: [
-        '598054316510806017',  // END5876
-        '932536588389466162'   // 機械鳥氣
-    ],
-
     // 自訂回應設定
     customResponses: {
         // 完全匹配的訊息
@@ -48,11 +39,6 @@ module.exports = {
             '欸欸欸': '干嘛...',
             'chen-endfield-arknights-qianyu-silly':'https://tenor.com/view/chen-endfield-arknights-qianyu-silly-gif-2603914693282121266'
         }
-    },
-
-    // 工具函數
-    isSpecialUser(userId) {
-        return this.SPECIAL_USERS.includes(userId);
     },
 
     getRandom(max) {
