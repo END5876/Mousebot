@@ -12,9 +12,9 @@ const { setupAutoJoinCommands } = require('./handlers/autoJoinHandler');
 const { setupTTSCommands }      = require('./handlers/ttsHandler');
 
 // ── 重構後的音樂模組 ───────────────────────────────────────
-const { setupUnifiedCommands }  = require('./handlers/unifiedQueue');
-const { setupBilibiliEngine }   = require('./handlers/bilibiliHandler');
-const { setupLocalMusicEngine } = require('./handlers/localMusicHandler');
+const { setupUnifiedCommands }   = require('./handlers/musicplayer/unifiedQueue');
+const { setupOnlineMusicEngine } = require('./handlers/musicplayer/onlineMusicHandler'); // ✅ 只留新名稱
+const { setupLocalMusicEngine }  = require('./handlers/musicplayer/localMusicHandler');  // ✅ 補回這行
 
 // ── 創建客戶端 ─────────────────────────────────────────────
 const client = new Client({
@@ -89,9 +89,9 @@ client.once('clientReady', async () => {
 
   // ── 音樂引擎初始化（需 async，在 ready 後執行）──────────
   // 順序重要：先注入引擎，再載入統一指令
-  await setupBilibiliEngine();     // 1. 注入 bilibili 引擎（含 yt-dlp 檢查）
-  setupLocalMusicEngine(client);   // 2. 注入 local 引擎 + /locallist 指令
-  setupUnifiedCommands(client);    // 3. 載入所有統一音樂指令
+  await setupOnlineMusicEngine(); // 1. 注入 online 引擎（含 yt-dlp 檢查）
+  setupLocalMusicEngine(client);  // 2. 注入 local 引擎 + /locallist 指令
+  setupUnifiedCommands(client);   // 3. 載入所有統一音樂指令
 
   console.log(`⚡ 已載入 ${client.commands.size} 個 Slash Commands`);
 
