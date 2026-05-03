@@ -1,6 +1,7 @@
 FROM node:22-slim
 
 # ── 系統依賴 ────────────────────────────────────────────
+# 將 make / g++ 與其他套件合併安裝，最後統一 purge，避免 apt cache 失效問題
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -8,11 +9,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libopus-dev \
     libsndfile1 \
+    libgomp1 \
     make \
     g++ \
     wget \
     ca-certificates \
     supervisor \
+    && apt-get purge -y make g++ \
+    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Python 虛擬環境（避免 break-system-packages 問題） ──
@@ -75,11 +79,8 @@ stderr_logfile_maxbytes=0\n\
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-# ── 移除編譯工具（省空間） ──────────────────────────────
-RUN apt-get purge -y make g++ && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
-
-# ── 複製專案檔案 ────────────────────────────────────────
+# ── 複製專案檔案（node_modules 由 .dockerignore 排除）──
 COPY . .
 
 # ── 啟動 ────────────────────────────────────────────────
-CMD ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
