@@ -130,7 +130,7 @@ async function getSteamFreeGames() {
 function buildMessage(game) {
   const embed = new EmbedBuilder()
     .setAuthor({
-      name: 'Steam 限時免費活動',
+      name: 'Steam 乞丐超人',
       iconURL: 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/83/Steam_icon_logo.svg/512px-Steam_icon_logo.svg.png'
     })
     .setTitle(`🎉 ${game.name}`)
@@ -148,7 +148,7 @@ function buildMessage(game) {
     .setFooter({ text: 'Steam 限免通知 · Mousebot' });
 
   const button = new ButtonBuilder()
-    .setLabel('🔗 立即前往領取')
+    .setLabel('🔗 立即領取')
     .setURL(game.url)
     .setStyle(ButtonStyle.Link);
 
