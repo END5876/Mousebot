@@ -10,11 +10,12 @@ const { setupAICommands }       = require('./handlers/ai/aiHandler');
 const { setupGuguGenerator }    = require('./handlers/ai/gugugagaGenerator');
 const { setupAutoJoinCommands } = require('./handlers/autoJoinHandler');
 const { setupTTSCommands }      = require('./handlers/ttsHandler');
+const { setupSteamFreeNotifier } = require('./handlers/steamFreeHandler');
 
 // ── 重構後的音樂模組 ───────────────────────────────────────
 const { setupUnifiedCommands }   = require('./handlers/musicplayer/unifiedQueue');
-const { setupOnlineMusicEngine } = require('./handlers/musicplayer/onlineMusicHandler'); // ✅ 只留新名稱
-const { setupLocalMusicEngine }  = require('./handlers/musicplayer/localMusicHandler');  // ✅ 補回這行
+const { setupOnlineMusicEngine } = require('./handlers/musicplayer/onlineMusicHandler');
+const { setupLocalMusicEngine }  = require('./handlers/musicplayer/localMusicHandler');
 
 // ── 創建客戶端 ─────────────────────────────────────────────
 const client = new Client({
@@ -38,6 +39,7 @@ setupAICommands(client);
 setupGuguGenerator(client);
 setupAutoJoinCommands(client);
 setupTTSCommands(client);
+setupSteamFreeNotifier(client);
 
 // ── Slash Command 互動處理 ─────────────────────────────────
 client.on('interactionCreate', async interaction => {
