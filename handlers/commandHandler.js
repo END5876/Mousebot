@@ -1,10 +1,7 @@
 const { EmbedBuilder, SlashCommandBuilder } = require('discord.js');
 const { getRandom } = require('../config/settings');
 
-// 有 !say 權限的使用者 ID
-const SAY_AUTHORIZED_ID = '598054316510806017';
-// 「有什麼了不起」豁免的使用者 ID
-const LBQI_EXEMPT_ID    = '932536588389466162';
+const SAY_AUTHORIZED_ID = process.env.SAY_AUTHORIZED_ID;
 
 function setupBasicCommands(client) {
 
@@ -18,7 +15,6 @@ function setupBasicCommands(client) {
         // 「有什麼了不起」觸發
         if (
             content.includes('有什麼了不起') &&
-            message.author.id !== LBQI_EXEMPT_ID &&
             content !== '裊器'
         ) {
             const target = content.replace('有什麼了不起', '').trim();
@@ -143,8 +139,6 @@ function setupBasicCommands(client) {
             }
 
             const sayText = interaction.options.getString('text');
-
-            // Slash Command 無法刪除觸發訊息，改用 ephemeral 確認
             await interaction.reply({ content: `✅ 已發送`, ephemeral: true });
             await interaction.channel.send(sayText);
             console.log(`💬 Say 指令: ${sayText}`);
