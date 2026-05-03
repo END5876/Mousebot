@@ -18,7 +18,7 @@ const {
   MessageFlags,
 } = require('discord.js');
 
-const { setMusicPlayer, stopMusicLayer, startSilenceLayer } = require('./audioManager');
+const { setMusicPlayer, stopMusicLayer, startSilenceLayer } = require('../audioManager');
 
 // ════════════════════════════════════════════════════════
 //  引擎注入（由各 handler 在 setup 時呼叫）
