@@ -19,7 +19,8 @@ const RANDOM_REPLY_CHANCE = 0.15;
 const MAX_IMAGE_SIZE_MB = 7;
 const TTS_MAX_LENGTH = 1000;
 const HISTORY_FETCH_LIMIT = 50;
-const HISTORY_USER_LIMIT = 3;
+const HISTORY_USER_LIMIT = 8;        //8 筆
+const HISTORY_TIME_LIMIT_MS = 3 * 60 * 1000; //3 分鐘門檻
 
 // 初始化 API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -80,28 +81,34 @@ function getModel(mode, isVoice = false) {
 }
 
 // ════════════════════════════════════════════════════════
-//  從頻道抓取該使用者最近 3 筆發言，組成 Gemini history
+//  從頻道抓取該使用者最近 8 筆發言（3 分鐘內），組成 Gemini history
 // ════════════════════════════════════════════════════════
 
 async function fetchUserChannelHistory(channel, userId, currentMessageId) {
     try {
         const fetched = await channel.messages.fetch({ limit: HISTORY_FETCH_LIMIT });
 
+        // 找出當下訊息的時間戳（用來計算時間差）
+        const currentMsg = fetched.get(currentMessageId);
+        const currentTimestamp = currentMsg?.createdTimestamp ?? Date.now();
+
         const userMessages = fetched
             .filter(msg =>
                 msg.author.id === userId &&
                 msg.id !== currentMessageId &&
-                msg.content?.trim().length > 0
+                msg.content?.trim().length > 0 &&
+                // 只保留距離當下訊息 3 分鐘以內的發言
+                (currentTimestamp - msg.createdTimestamp) <= HISTORY_TIME_LIMIT_MS
             )
             .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-            .last(HISTORY_USER_LIMIT);
+            .last(HISTORY_USER_LIMIT); // 最多取 8 筆
 
         const history = userMessages.map(msg => ({
             role: 'user',
             parts: [{ text: msg.content.trim() }]
         }));
 
-        console.log(`[History] 載入 ${history.length} 筆 ${userId} 的頻道發言`);
+        console.log(`[History] 載入 ${history.length} 筆 ${userId} 的頻道發言（3分鐘內）`);
         return history;
 
     } catch (err) {
