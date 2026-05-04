@@ -8,6 +8,7 @@ const MAX_DESC_LENGTH = 250;       // 描述最大字元數
 const MAX_GAMES_PER_REPLY = 10;    // /steamfree 指令最多顯示幾款
 const MAX_AGE_DAYS = 90;           // notifiedGames 保留天數
 const CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 分鐘
+const LOG_INTERVAL_MS = 24 * 60 * 60 * 1000; // 每天 log 一次
 
 // ── 已通知過的 AppID 存檔設定 ────────────────────────────
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'steam_cache');
@@ -203,6 +204,17 @@ function setupSteamFreeNotifier(client) {
     return;
   }
 
+  // ── 每日 Log 節流控制 ──────────────────────────────────
+  let lastLogTime = 0;
+
+  function dailyLog(message) {
+    const now = Date.now();
+    if (now - lastLogTime >= LOG_INTERVAL_MS) {
+      lastLogTime = now;
+      console.log(message);
+    }
+  }
+
   async function checkAndNotify() {
     // 優先從快取取得，若無則嘗試 fetch
     let channel = client.channels.cache.get(NOTIFY_CHANNEL_ID);
@@ -215,7 +227,9 @@ function setupSteamFreeNotifier(client) {
       }
     }
 
-    console.log(`[SteamFree] 定時檢查中... (${new Date().toLocaleString('zh-TW')})`);
+    // 每天只 log 一次定時檢查訊息
+    dailyLog(`[SteamFree] 定時檢查中... (${new Date().toLocaleString('zh-TW')})`);
+
     const games = await getSteamFreeGames();
     let hasNewGames = false;
 
