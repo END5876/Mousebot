@@ -19,8 +19,8 @@ const RANDOM_REPLY_CHANCE = 0.15;
 const MAX_IMAGE_SIZE_MB = 7;
 const TTS_MAX_LENGTH = 1000;
 const HISTORY_FETCH_LIMIT = 50;
-const HISTORY_USER_LIMIT = 8;        //8 筆
-const HISTORY_TIME_LIMIT_MS = 3 * 60 * 1000; //3 分鐘門檻
+const HISTORY_PAIR_LIMIT = 8;                  // user + bot 對話共 8 筆
+const HISTORY_TIME_LIMIT_MS = 3 * 60 * 1000;  // 3 分鐘門檻
 
 // 初始化 API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -81,34 +81,36 @@ function getModel(mode, isVoice = false) {
 }
 
 // ════════════════════════════════════════════════════════
-//  從頻道抓取該使用者最近 8 筆發言（3 分鐘內），組成 Gemini history
+//  從頻道抓取使用者 + Bot 的對話紀錄（最多 8 筆，3 分鐘內）
+//  組成 Gemini 需要的 user / model 交替 history
 // ════════════════════════════════════════════════════════
 
-async function fetchUserChannelHistory(channel, userId, currentMessageId) {
+async function fetchUserChannelHistory(channel, userId, currentMessageId, botId) {
     try {
         const fetched = await channel.messages.fetch({ limit: HISTORY_FETCH_LIMIT });
 
-        // 找出當下訊息的時間戳（用來計算時間差）
+        // 取得當下訊息的時間戳作為基準
         const currentMsg = fetched.get(currentMessageId);
         const currentTimestamp = currentMsg?.createdTimestamp ?? Date.now();
 
-        const userMessages = fetched
+        // 篩選：只保留「觸發使用者」或「Bot」的訊息，且在 3 分鐘內
+        const relevantMessages = fetched
             .filter(msg =>
-                msg.author.id === userId &&
                 msg.id !== currentMessageId &&
                 msg.content?.trim().length > 0 &&
-                // 只保留距離當下訊息 3 分鐘以內的發言
-                (currentTimestamp - msg.createdTimestamp) <= HISTORY_TIME_LIMIT_MS
+                (currentTimestamp - msg.createdTimestamp) <= HISTORY_TIME_LIMIT_MS &&
+                (msg.author.id === userId || msg.author.id === botId)
             )
-            .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-            .last(HISTORY_USER_LIMIT); // 最多取 8 筆
+            .sort((a, b) => a.createdTimestamp - b.createdTimestamp) // 舊 → 新
+            .last(HISTORY_PAIR_LIMIT); // 最多取 8 筆
 
-        const history = userMessages.map(msg => ({
-            role: 'user',
+        // 轉換成 Gemini history 格式（user / model 交替）
+        const history = relevantMessages.map(msg => ({
+            role: msg.author.id === botId ? 'model' : 'user',
             parts: [{ text: msg.content.trim() }]
         }));
 
-        console.log(`[History] 載入 ${history.length} 筆 ${userId} 的頻道發言（3分鐘內）`);
+        console.log(`[History] 載入 ${history.length} 筆對話紀錄（user + bot，3分鐘內）`);
         return history;
 
     } catch (err) {
@@ -173,13 +175,13 @@ async function speakWithTTS(source, text, guildId) {
 //  核心 AI 邏輯
 // ════════════════════════════════════════════════════════
 
-async function getGeminiResponse(userId, prompt, imageParts = [], channel = null, messageId = null) {
+async function getGeminiResponse(userId, prompt, imageParts = [], channel = null, messageId = null, botId = null) {
     try {
         const mode = getUserMode(userId, prompt);
         const model = getModel(mode);
 
         const history = channel
-            ? await fetchUserChannelHistory(channel, userId, messageId)
+            ? await fetchUserChannelHistory(channel, userId, messageId, botId)
             : [];
 
         const chat = model.startChat({ history, generationConfig: GENERATION_CONFIG });
@@ -200,13 +202,13 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
     }
 }
 
-async function getGeminiResponseVoice(userId, prompt, channel = null, messageId = null) {
+async function getGeminiResponseVoice(userId, prompt, channel = null, messageId = null, botId = null) {
     try {
         const mode = getUserMode(userId, prompt);
         const model = getModel(mode, true);
 
         const history = channel
-            ? await fetchUserChannelHistory(channel, userId, messageId)
+            ? await fetchUserChannelHistory(channel, userId, messageId, botId)
             : [];
 
         const chat = model.startChat({
@@ -225,13 +227,13 @@ async function getGeminiResponseVoice(userId, prompt, channel = null, messageId 
     }
 }
 
-async function getShortResponse(userId, message, imageParts = [], channel = null, messageId = null) {
+async function getShortResponse(userId, message, imageParts = [], channel = null, messageId = null, botId = null) {
     try {
         const mode = getUserMode(userId, message);
         const model = getModel(mode);
 
         const history = channel
-            ? await fetchUserChannelHistory(channel, userId, messageId)
+            ? await fetchUserChannelHistory(channel, userId, messageId, botId)
             : [];
 
         const shortPrompt = imageParts.length > 0 && !message
@@ -303,6 +305,7 @@ const slashCommands = [
 
             const userId = interaction.user.id;
             const guildId = interaction.guildId;
+            const botId = interaction.client.user.id;
             const question = interaction.options.getString('question');
             const attachment = interaction.options.getAttachment('image');
 
@@ -319,7 +322,7 @@ const slashCommands = [
                     if (imgData) imageParts.push(imgData);
                 }
 
-                const answer = await getGeminiResponse(userId, question, imageParts, interaction.channel, null);
+                const answer = await getGeminiResponse(userId, question, imageParts, interaction.channel, null, botId);
                 const chunks = splitMessage(answer);
 
                 await interaction.editReply({ content: chunks[0] });
@@ -390,6 +393,7 @@ function setupAICommands(client) {
 
         const userId = message.author.id;
         const guildId = message.guild?.id;
+        const botId = client.user.id; // ✅ 取得 Bot 自己的 ID
         const channel = message.channel;
         const messageId = message.id;
         const isMentioned = message.mentions.has(client.user);
@@ -413,7 +417,8 @@ function setupAICommands(client) {
                     }
                 }
 
-                const answer = await getGeminiResponse(userId, question, imageParts, channel, messageId);
+                // ✅ 傳入 botId
+                const answer = await getGeminiResponse(userId, question, imageParts, channel, messageId, botId);
                 if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
 
                 const chunks = splitMessage(answer);
@@ -455,7 +460,8 @@ function setupAICommands(client) {
                         }
                     }
 
-                    const shortReply = await getShortResponse(userId, cleanedContent, imageParts, channel, messageId);
+                    // ✅ 傳入 botId
+                    const shortReply = await getShortResponse(userId, cleanedContent, imageParts, channel, messageId, botId);
                     if (shortReply) {
                         await message.channel.send(shortReply);
                         await speakWithTTS(message, shortReply, guildId);
