@@ -18,9 +18,9 @@ const MODEL_NAME = "gemini-2.5-flash-lite";
 const RANDOM_REPLY_CHANCE = 0.15;
 const MAX_IMAGE_SIZE_MB = 7;
 const TTS_MAX_LENGTH = 1000;
-const HISTORY_FETCH_LIMIT = 50;
-const HISTORY_PAIR_LIMIT = 8;                  // user + bot 對話共 8 筆
-const HISTORY_TIME_LIMIT_MS = 3 * 60 * 1000;  // 3 分鐘門檻
+const HISTORY_FETCH_LIMIT = 30;
+const HISTORY_PAIR_LIMIT = 10;
+const HISTORY_TIME_LIMIT_MS = 3 * 60 * 1000;
 
 // 初始化 API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -28,8 +28,20 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // --- AI TTS 開關（每個 Guild 獨立）---
 const aiTTSEnabled = new Map();
 
+// --- 使用者記憶清除時間戳 ---
+const memoryClearedAt = new Map();
+
 function isAITTSEnabled(guildId) {
     return aiTTSEnabled.get(guildId) ?? true;
+}
+
+function clearUserMemory(userId) {
+    memoryClearedAt.set(userId, Date.now());
+    console.log(`[Memory] 已清除使用者 ${userId} 的對話記憶`);
+}
+
+function getMemoryClearTime(userId) {
+    return memoryClearedAt.get(userId) ?? 0;
 }
 
 // 模式映射表
@@ -81,37 +93,121 @@ function getModel(mode, isVoice = false) {
 }
 
 // ════════════════════════════════════════════════════════
-//  從頻道抓取使用者 + Bot 的對話紀錄（最多 8 筆，3 分鐘內）
-//  組成 Gemini 需要的 user / model 交替 history
+//  共用函式：將 attachments 轉成 imageParts
 // ════════════════════════════════════════════════════════
+async function processAttachments(attachments) {
+    const imageParts = [];
+    if (!attachments || attachments.size === 0) return imageParts;
 
+    for (const [, attachment] of attachments) {
+        const imgData = await fetchImageAsBase64(attachment);
+        if (imgData) {
+            imageParts.push({
+                mimeType: imgData.mimeType,
+                data: imgData.base64
+            });
+        }
+    }
+    return imageParts;
+}
+
+// ════════════════════════════════════════════════════════
+//  合併連續相同 role 的訊息（解決 Gemini 角色交替錯誤）
+// ════════════════════════════════════════════════════════
+function mergeConsecutiveRoles(history) {
+    if (!history || history.length === 0) return [];
+
+    const merged = [];
+    let current = { ...history[0] };
+
+    for (let i = 1; i < history.length; i++) {
+        const next = history[i];
+
+        if (next.role === current.role) {
+            // 同一個角色 → 合併 parts
+            current.parts = [...current.parts, ...next.parts];
+        } else {
+            merged.push(current);
+            current = { ...next };
+        }
+    }
+
+    merged.push(current);
+    return merged;
+}
+
+// ════════════════════════════════════════════════════════
+//  從頻道抓取使用者 + Bot 的對話紀錄（已完整處理角色問題）
+// ════════════════════════════════════════════════════════
 async function fetchUserChannelHistory(channel, userId, currentMessageId, botId) {
     try {
         const fetched = await channel.messages.fetch({ limit: HISTORY_FETCH_LIMIT });
-
-        // 取得當下訊息的時間戳作為基準
         const currentMsg = fetched.get(currentMessageId);
         const currentTimestamp = currentMsg?.createdTimestamp ?? Date.now();
+        const clearTime = getMemoryClearTime(userId);
 
-        // 篩選：只保留「觸發使用者」或「Bot」的訊息，且在 3 分鐘內
-        const relevantMessages = fetched
+        // 過濾訊息
+        let relevantMessages = fetched
             .filter(msg =>
                 msg.id !== currentMessageId &&
-                msg.content?.trim().length > 0 &&
                 (currentTimestamp - msg.createdTimestamp) <= HISTORY_TIME_LIMIT_MS &&
-                (msg.author.id === userId || msg.author.id === botId)
+                msg.createdTimestamp > clearTime &&
+                (msg.author.id === userId || msg.author.id === botId) &&
+                (msg.content?.trim().length > 0 || msg.attachments.size > 0)
             )
-            .sort((a, b) => a.createdTimestamp - b.createdTimestamp) // 舊 → 新
-            .last(HISTORY_PAIR_LIMIT); // 最多取 8 筆
+            .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 
-        // 轉換成 Gemini history 格式（user / model 交替）
-        const history = relevantMessages.map(msg => ({
-            role: msg.author.id === botId ? 'model' : 'user',
-            parts: [{ text: msg.content.trim() }]
-        }));
+        // 移除開頭的 model 訊息
+        while (relevantMessages.size > 0) {
+            const first = relevantMessages.first();
+            if (first.author.id === botId) {
+                relevantMessages = relevantMessages.filter(m => m.id !== first.id);
+            } else {
+                break;
+            }
+        }
 
-        console.log(`[History] 載入 ${history.length} 筆對話紀錄（user + bot，3分鐘內）`);
-        return history;
+        // 只取最後 N 筆
+        relevantMessages = relevantMessages.last(HISTORY_PAIR_LIMIT);
+
+        // 建立初步 history
+        const history = [];
+        for (const msg of relevantMessages.values()) {
+            const parts = [];
+
+            // 處理圖片
+            if (msg.attachments.size > 0) {
+                const imgParts = await processAttachments(msg.attachments);
+                imgParts.forEach(img => {
+                    parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } });
+                });
+            }
+
+            // 處理文字
+            if (msg.content?.trim().length > 0) {
+                parts.push({ text: msg.content.trim() });
+            }
+
+            if (parts.length === 0) {
+                parts.push({ text: '[使用者傳了一張無法讀取的圖片]' });
+            }
+
+            history.push({
+                role: msg.author.id === botId ? 'model' : 'user',
+                parts
+            });
+        }
+
+        // 【核心修正】合併連續相同 role 的訊息
+        let finalHistory = mergeConsecutiveRoles(history);
+
+        // 再次確保第一筆是 user（保險機制）
+        while (finalHistory.length > 0 && finalHistory[0].role === 'model') {
+            finalHistory.shift();
+        }
+
+        console.log(`[History] 載入 ${finalHistory.length} 筆對話紀錄（已合併連續角色）`);
+        return finalHistory;
 
     } catch (err) {
         console.error('[History] 抓取頻道歷史失敗：', err.message);
@@ -122,7 +218,6 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
 // ════════════════════════════════════════════════════════
 //  工具函式
 // ════════════════════════════════════════════════════════
-
 async function fetchImageAsBase64(attachment) {
     const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
     if (attachment.size > sizeLimit) return null;
@@ -174,7 +269,6 @@ async function speakWithTTS(source, text, guildId) {
 // ════════════════════════════════════════════════════════
 //  核心 AI 邏輯
 // ════════════════════════════════════════════════════════
-
 async function getGeminiResponse(userId, prompt, imageParts = [], channel = null, messageId = null, botId = null) {
     try {
         const mode = getUserMode(userId, prompt);
@@ -186,16 +280,13 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
 
         const chat = model.startChat({ history, generationConfig: GENERATION_CONFIG });
 
-        const messageParts = [];
-        for (const img of imageParts) {
-            messageParts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } });
-        }
-        messageParts.push({ text: prompt || '請吐槽這張圖片' });
+        const messageParts = [
+            ...imageParts.map(img => ({ inlineData: img })),
+            { text: prompt || '請吐槽這張圖片' }
+        ];
 
         const result = await chat.sendMessage(messageParts);
-        const response = result.response.text();
-
-        return response;
+        return result.response.text();
     } catch (error) {
         console.error(`Gemini Error (${MODEL_NAME}):`, error.message);
         throw error;
@@ -245,11 +336,10 @@ async function getShortResponse(userId, message, imageParts = [], channel = null
             generationConfig: { ...GENERATION_CONFIG, maxOutputTokens: 300 },
         });
 
-        const messageParts = [];
-        for (const img of imageParts) {
-            messageParts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } });
-        }
-        messageParts.push({ text: shortPrompt });
+        const messageParts = [
+            ...imageParts.map(img => ({ inlineData: img })),
+            { text: shortPrompt }
+        ];
 
         const result = await chat.sendMessage(messageParts);
         return result.response.text().trim();
@@ -262,14 +352,15 @@ async function getShortResponse(userId, message, imageParts = [], channel = null
 function splitMessage(text, maxLength = 1900) {
     if (text.length <= maxLength) return [text];
     const chunks = [];
-    while (text.length > 0) {
-        let chunk = text.slice(0, maxLength);
+    let remaining = text;
+    while (remaining.length > 0) {
+        let chunk = remaining.slice(0, maxLength);
         const lastNewLine = chunk.lastIndexOf('\n');
         if (lastNewLine > maxLength * 0.8) {
-            chunk = text.slice(0, lastNewLine);
-            text = text.slice(lastNewLine + 1);
+            chunk = remaining.slice(0, lastNewLine);
+            remaining = remaining.slice(lastNewLine + 1);
         } else {
-            text = text.slice(maxLength);
+            remaining = remaining.slice(maxLength);
         }
         chunks.push(chunk);
     }
@@ -279,23 +370,17 @@ function splitMessage(text, maxLength = 1900) {
 // ════════════════════════════════════════════════════════
 //  Slash Command 定義
 // ════════════════════════════════════════════════════════
-
 const slashCommands = [
-
     // ── /ai ──
     {
         data: new SlashCommandBuilder()
             .setName('ai')
             .setDescription('詢問 AI 問題')
             .addStringOption(opt =>
-                opt.setName('question')
-                    .setDescription('你想問的問題')
-                    .setRequired(true)
+                opt.setName('question').setDescription('你想問的問題').setRequired(true)
             )
             .addAttachmentOption(opt =>
-                opt.setName('image')
-                    .setDescription('附上圖片（選填）')
-                    .setRequired(false)
+                opt.setName('image').setDescription('附上圖片（選填）').setRequired(false)
             ),
 
         async execute(interaction) {
@@ -316,13 +401,12 @@ const slashCommands = [
             await interaction.reply({ content: thinkingText });
 
             try {
-                const imageParts = [];
+                let imageParts = [];
                 if (attachment) {
-                    const imgData = await fetchImageAsBase64(attachment);
-                    if (imgData) imageParts.push(imgData);
+                    imageParts = await processAttachments(new Map([[attachment.id, attachment]]));
                 }
 
-                const answer = await getGeminiResponse(userId, question, imageParts, interaction.channel, null, botId);
+                const answer = await getGeminiResponse(userId, question, imageParts, interaction.channel, interaction.id, botId);
                 const chunks = splitMessage(answer);
 
                 await interaction.editReply({ content: chunks[0] });
@@ -331,7 +415,6 @@ const slashCommands = [
                 }
 
                 await speakWithTTS(interaction, answer, guildId);
-
             } catch (error) {
                 const errorMsg = modeModule.getErrorMessage(error);
                 await interaction.editReply({ content: errorMsg });
@@ -349,6 +432,9 @@ const slashCommands = [
             const userId = interaction.user.id;
             const mode = selectMode(userId, '');
             const modeModule = MODE_MAP[mode];
+
+            clearUserMemory(userId);
+
             const clearMsg = modeModule.getClearMemoryMessage();
             await interaction.reply({ content: clearMsg });
         }
@@ -377,9 +463,7 @@ const slashCommands = [
 // ════════════════════════════════════════════════════════
 //  setupAICommands
 // ════════════════════════════════════════════════════════
-
 function setupAICommands(client) {
-
     for (const cmd of slashCommands) {
         client.commands.set(cmd.data.name, cmd);
     }
@@ -393,7 +477,7 @@ function setupAICommands(client) {
 
         const userId = message.author.id;
         const guildId = message.guild?.id;
-        const botId = client.user.id; // ✅ 取得 Bot 自己的 ID
+        const botId = client.user.id;
         const channel = message.channel;
         const messageId = message.id;
         const isMentioned = message.mentions.has(client.user);
@@ -409,15 +493,8 @@ function setupAICommands(client) {
                 const modeModule = MODE_MAP[mode];
                 thinkingMsg = await message.channel.send(modeModule.getThinkingMessage());
 
-                const imageParts = [];
-                if (hasAttachment) {
-                    for (const [, attachment] of message.attachments) {
-                        const imgData = await fetchImageAsBase64(attachment);
-                        if (imgData) imageParts.push(imgData);
-                    }
-                }
+                const imageParts = await processAttachments(message.attachments);
 
-                // ✅ 傳入 botId
                 const answer = await getGeminiResponse(userId, question, imageParts, channel, messageId, botId);
                 if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
 
@@ -427,7 +504,6 @@ function setupAICommands(client) {
                 }
 
                 await speakWithTTS(message, answer, guildId);
-
             } catch (error) {
                 if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
                 const mode = selectMode(userId, question || '圖片');
@@ -452,15 +528,7 @@ function setupAICommands(client) {
 
             if (Math.random() < RANDOM_REPLY_CHANCE) {
                 try {
-                    const imageParts = [];
-                    if (hasAttachment) {
-                        for (const [, attachment] of message.attachments) {
-                            const imgData = await fetchImageAsBase64(attachment);
-                            if (imgData) imageParts.push(imgData);
-                        }
-                    }
-
-                    // ✅ 傳入 botId
+                    const imageParts = await processAttachments(message.attachments);
                     const shortReply = await getShortResponse(userId, cleanedContent, imageParts, channel, messageId, botId);
                     if (shortReply) {
                         await message.channel.send(shortReply);
