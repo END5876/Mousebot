@@ -20,7 +20,7 @@ const MAX_IMAGE_SIZE_MB = 7;
 const TTS_MAX_LENGTH = 1000;
 const HISTORY_FETCH_LIMIT = 30;
 const HISTORY_PAIR_LIMIT = 10;
-const HISTORY_TIME_LIMIT_MS = 10 * 60 * 1000; // ✅ 修改 1：3 分鐘 → 10 分鐘
+const HISTORY_TIME_LIMIT_MS = 10 * 60 * 1000;
 
 // 初始化 API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -31,9 +31,22 @@ const aiTTSEnabled = new Map();
 // --- 使用者記憶清除時間戳 ---
 const memoryClearedAt = new Map();
 
-// ✅ 修改 3：圖片快取（url → { base64, mimeType, cachedAt }）
+// 圖片快取（url → { base64, mimeType, cachedAt }）
 const imageCache = new Map();
 const IMAGE_CACHE_TTL_MS = 10 * 60 * 1000; // 快取 10 分鐘
+
+// 差別待遇快取（紀錄 MessageId → Mode + 對象 ID + 對象名稱）
+const botMessageCache = new Map();
+const MAX_MODE_CACHE_SIZE = 1000;
+
+function recordBotMessageContext(messageId, mode, userId, userName) {
+    if (!messageId || !mode) return;
+    if (botMessageCache.size >= MAX_MODE_CACHE_SIZE) {
+        const firstKey = botMessageCache.keys().next().value;
+        botMessageCache.delete(firstKey);
+    }
+    botMessageCache.set(messageId, { mode, userId, userName });
+}
 
 function isAITTSEnabled(guildId) {
     return aiTTSEnabled.get(guildId) ?? true;
@@ -97,7 +110,7 @@ function getModel(mode, isVoice = false) {
 }
 
 // ════════════════════════════════════════════════════════
-//  ✅ 修改 3：帶快取的圖片下載函式
+//  帶快取的圖片下載函式
 // ════════════════════════════════════════════════════════
 async function fetchImageAsBase64(attachment) {
     const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
@@ -131,7 +144,7 @@ async function fetchImageAsBase64(attachment) {
 }
 
 // ════════════════════════════════════════════════════════
-//  ✅ 修改 3：定期清除過期圖片快取（每 10 分鐘執行一次）
+//  定期清除過期圖片快取（每 10 分鐘執行一次）
 // ════════════════════════════════════════════════════════
 setInterval(() => {
     const now = Date.now();
@@ -189,25 +202,19 @@ function mergeConsecutiveRoles(history) {
 }
 
 // ════════════════════════════════════════════════════════
-//  ✅ 修改 1：判斷 Bot 訊息是否屬於指定使用者的對話
-//  Discord 的 message.reference 指向被回覆的訊息 ID
+//  判斷 Bot 訊息是否屬於指定使用者的對話
 // ════════════════════════════════════════════════════════
 function isBotReplyToUser(msg, userId, fetchedMessages) {
-    // 若 Bot 訊息有 reference（即是回覆某則訊息）
     if (msg.reference?.messageId) {
         const refMsg = fetchedMessages.get(msg.reference.messageId);
-        // 被回覆的訊息是該使用者 → 屬於此對話
         if (refMsg && refMsg.author.id === userId) return true;
-        // 被回覆的訊息不存在或不是該使用者 → 排除
         if (!refMsg || refMsg.author.id !== userId) return false;
     }
-    // Bot 訊息沒有 reference（主動發送，非回覆）→ 視為屬於對話
-    // （例如 mention 觸發後 Bot 直接 send，不帶 reference）
     return true;
 }
 
 // ════════════════════════════════════════════════════════
-//  從頻道抓取使用者 + Bot 的對話紀錄（已完整處理角色問題）
+//  從頻道抓取使用者 + Bot 的對話紀錄
 // ════════════════════════════════════════════════════════
 async function fetchUserChannelHistory(channel, userId, currentMessageId, botId) {
     try {
@@ -216,7 +223,6 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
         const currentTimestamp = currentMsg?.createdTimestamp ?? Date.now();
         const clearTime = getMemoryClearTime(userId);
 
-        // ✅ 修改 1：過濾時加入 Bot 訊息的對象檢查
         let relevantMessages = fetched
             .filter(msg => {
                 if (msg.id === currentMessageId) return false;
@@ -226,7 +232,6 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
 
                 if (msg.author.id === userId) return true;
 
-                // Bot 訊息：額外確認是回覆該使用者的
                 if (msg.author.id === botId) {
                     return isBotReplyToUser(msg, userId, fetched);
                 }
@@ -235,7 +240,6 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
             })
             .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 
-        // 移除開頭的 model 訊息
         while (relevantMessages.size > 0) {
             const first = relevantMessages.first();
             if (first.author.id === botId) {
@@ -245,10 +249,8 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
             }
         }
 
-        // 只取最後 N 筆
         relevantMessages = relevantMessages.last(HISTORY_PAIR_LIMIT);
 
-        // 建立初步 history
         const history = [];
         for (const msg of relevantMessages.values()) {
             const parts = [];
@@ -274,10 +276,8 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
             });
         }
 
-        // 合併連續相同 role 的訊息
         let finalHistory = mergeConsecutiveRoles(history);
 
-        // 再次確保第一筆是 user
         while (finalHistory.length > 0 && finalHistory[0].role === 'model') {
             finalHistory.shift();
         }
@@ -289,6 +289,81 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
         console.error('[History] 抓取頻道歷史失敗：', err.message);
         return [];
     }
+}
+
+// ════════════════════════════════════════════════════════
+//  ✅ 取得引用訊息並建立帶有「差別待遇」邏輯的 Prompt
+// ════════════════════════════════════════════════════════
+async function fetchReferencedMessage(message) {
+    if (!message.reference?.messageId) return null;
+    try {
+        const refMsg = await message.channel.messages.fetch(message.reference.messageId);
+        return refMsg ?? null;
+    } catch {
+        return null;
+    }
+}
+
+async function buildMessagePartsWithReference(message, question, imageParts, botId, currentMode, currentUserId) {
+    const parts = [];
+    const refMsg = await fetchReferencedMessage(message);
+
+    if (refMsg) {
+        const refAuthor = refMsg.author.username;
+        const refContent = refMsg.content?.trim();
+        const isSelf = refMsg.author.id === botId; 
+        let refText = '';
+        
+        if (isSelf) {
+            const cachedContext = botMessageCache.get(refMsg.id);
+            const currentModeName = getModeName(currentMode) || currentMode;
+
+            if (cachedContext) {
+                const { mode: refMode, userId: refTargetId, userName: refTargetName } = cachedContext;
+                const refModeName = getModeName(refMode) || refMode;
+
+                if (refTargetId !== currentUserId) {
+                    // 差別待遇分支：回覆了 Bot 對「別人」說的話
+                    refText = `（系統提示：當前使用者回覆了你之前對另一位專屬用戶「${refTargetName}」說的話。當時你對 ${refTargetName} 的專屬態度是「${refModeName}」：`;
+                    if (refContent) refText += `「${refContent}」`;
+                    refText += `）\n（請注意：你對不同人有不同的態度。請用你現在對待【當前使用者】的專屬態度（「${currentModeName}」）來回應他，可以展現出你的差別待遇）\n`;
+                } else if (refMode !== currentMode) {
+                    // 同一人，但態度變了
+                    refText = `（系統提示：使用者回覆了你之前對他說的話。當時你是用「${refModeName}」的態度對他，但現在你對他的態度是「${currentModeName}」：`;
+                    if (refContent) refText += `「${refContent}」`;
+                    refText += `）\n（請用現在的態度回應他）\n`;
+                } else {
+                    // 同一人，態度一樣
+                    refText = `（系統提示：使用者回覆了你之前對他說的話：`;
+                    if (refContent) refText += `「${refContent}」`;
+                    refText += `）\n`;
+                }
+            } else {
+                // 找不到快取
+                refText = `（系統提示：使用者回覆了你之前說過的話：`;
+                if (refContent) refText += `「${refContent}」`;
+                refText += `）\n`;
+            }
+        } else {
+            // 別人說的話
+            refText = `（系統提示：使用者回覆了 ${refAuthor} 說的話：`;
+            if (refContent) refText += `「${refContent}」`;
+            refText += `）\n`;
+        }
+
+        if (refMsg.attachments.size > 0) {
+            const refImageParts = await processAttachments(refMsg.attachments);
+            refImageParts.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } }));
+            refText += refContent ? ' [附帶圖片]' : ' [一張圖片]';
+        }
+
+        parts.push({ text: refText });
+    }
+
+    imageParts.forEach(img => parts.push({ inlineData: img }));
+    parts.push({ text: question || '請吐槽這張圖片' });
+
+    return parts;
 }
 
 // ════════════════════════════════════════════════════════
@@ -326,9 +401,10 @@ async function speakWithTTS(source, text, guildId) {
 // ════════════════════════════════════════════════════════
 //  核心 AI 邏輯
 // ════════════════════════════════════════════════════════
-async function getGeminiResponse(userId, prompt, imageParts = [], channel = null, messageId = null, botId = null) {
+// 加入 message 與 mode 參數
+async function getGeminiResponse(userId, prompt, imageParts = [], channel = null, messageId = null, botId = null, message = null, mode = null) {
     try {
-        const mode = getUserMode(userId, prompt);
+        if (!mode) mode = getUserMode(userId, prompt);
         const model = getModel(mode);
 
         const history = channel
@@ -337,10 +413,13 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
 
         const chat = model.startChat({ history, generationConfig: GENERATION_CONFIG });
 
-        const messageParts = [
-            ...imageParts.map(img => ({ inlineData: img })),
-            { text: prompt || '請吐槽這張圖片' }
-        ];
+        // 使用差別待遇邏輯組合 Prompt
+        const messageParts = message
+            ? await buildMessagePartsWithReference(message, prompt, imageParts, botId, mode, userId)
+            : [
+                ...imageParts.map(img => ({ inlineData: img })),
+                { text: prompt || '請吐槽這張圖片' }
+            ];
 
         const result = await chat.sendMessage(messageParts);
         return result.response.text();
@@ -350,9 +429,9 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
     }
 }
 
-async function getGeminiResponseVoice(userId, prompt, channel = null, messageId = null, botId = null) {
+async function getGeminiResponseVoice(userId, prompt, channel = null, messageId = null, botId = null, mode = null) {
     try {
-        const mode = getUserMode(userId, prompt);
+        if (!mode) mode = getUserMode(userId, prompt);
         const model = getModel(mode, true);
 
         const history = channel
@@ -375,28 +454,32 @@ async function getGeminiResponseVoice(userId, prompt, channel = null, messageId 
     }
 }
 
-async function getShortResponse(userId, message, imageParts = [], channel = null, messageId = null, botId = null) {
+// 加入 message 與 mode 參數
+async function getShortResponse(userId, promptText, imageParts = [], channel = null, messageId = null, botId = null, message = null, mode = null) {
     try {
-        const mode = getUserMode(userId, message);
+        if (!mode) mode = getUserMode(userId, promptText);
         const model = getModel(mode);
 
         const history = channel
             ? await fetchUserChannelHistory(channel, userId, messageId, botId)
             : [];
 
-        const shortPrompt = imageParts.length > 0 && !message
+        const shortPrompt = imageParts.length > 0 && !promptText
             ? `請用大約10~200個字回應或吐槽這張圖片`
-            : `請用大約10~200字回應或吐槽訊息：「${message}」`;
+            : `請用大約10~200字回應或吐槽訊息：「${promptText}」`;
 
         const chat = model.startChat({
             history,
             generationConfig: { ...GENERATION_CONFIG, maxOutputTokens: 300 },
         });
 
-        const messageParts = [
-            ...imageParts.map(img => ({ inlineData: img })),
-            { text: shortPrompt }
-        ];
+        // 使用差別待遇邏輯組合 Prompt
+        const messageParts = message
+            ? await buildMessagePartsWithReference(message, shortPrompt, imageParts, botId, mode, userId)
+            : [
+                ...imageParts.map(img => ({ inlineData: img })),
+                { text: shortPrompt }
+            ];
 
         const result = await chat.sendMessage(messageParts);
         return result.response.text().trim();
@@ -446,6 +529,7 @@ const slashCommands = [
             }
 
             const userId = interaction.user.id;
+            const userName = interaction.user.username;
             const guildId = interaction.guildId;
             const botId = interaction.client.user.id;
             const question = interaction.options.getString('question');
@@ -463,12 +547,16 @@ const slashCommands = [
                     imageParts = await processAttachments(new Map([[attachment.id, attachment]]));
                 }
 
-                const answer = await getGeminiResponse(userId, question, imageParts, interaction.channel, interaction.id, botId);
+                const answer = await getGeminiResponse(userId, question, imageParts, interaction.channel, interaction.id, botId, null, mode);
                 const chunks = splitMessage(answer);
 
                 await interaction.editReply({ content: chunks[0] });
+                const replyMsg = await interaction.fetchReply();
+                recordBotMessageContext(replyMsg.id, mode, userId, userName); // ✅ 紀錄對象與模式
+
                 for (let i = 1; i < chunks.length; i++) {
-                    await interaction.followUp({ content: chunks[i] });
+                    const followUpMsg = await interaction.followUp({ content: chunks[i], fetchReply: true });
+                    recordBotMessageContext(followUpMsg.id, mode, userId, userName); // ✅ 紀錄對象與模式
                 }
 
                 await speakWithTTS(interaction, answer, guildId);
@@ -533,6 +621,7 @@ function setupAICommands(client) {
         if (!content && !hasAttachment) return;
 
         const userId = message.author.id;
+        const userName = message.author.username;
         const guildId = message.guild?.id;
         const botId = client.user.id;
         const channel = message.channel;
@@ -552,12 +641,14 @@ function setupAICommands(client) {
 
                 const imageParts = await processAttachments(message.attachments);
 
-                const answer = await getGeminiResponse(userId, question, imageParts, channel, messageId, botId);
+                // ✅ 傳入 message 與 mode
+                const answer = await getGeminiResponse(userId, question, imageParts, channel, messageId, botId, message, mode);
                 if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
 
                 const chunks = splitMessage(answer);
                 for (const chunk of chunks) {
-                    await message.channel.send(chunk);
+                    const sentMsg = await message.channel.send(chunk);
+                    recordBotMessageContext(sentMsg.id, mode, userId, userName); // ✅ 紀錄對象與模式
                 }
 
                 await speakWithTTS(message, answer, guildId);
@@ -585,10 +676,14 @@ function setupAICommands(client) {
 
             if (Math.random() < RANDOM_REPLY_CHANCE) {
                 try {
+                    const mode = getUserMode(userId, cleanedContent);
                     const imageParts = await processAttachments(message.attachments);
-                    const shortReply = await getShortResponse(userId, cleanedContent, imageParts, channel, messageId, botId);
+                    
+                    // ✅ 傳入 message 與 mode
+                    const shortReply = await getShortResponse(userId, cleanedContent, imageParts, channel, messageId, botId, message, mode);
                     if (shortReply) {
-                        await message.channel.send(shortReply);
+                        const sentMsg = await message.channel.send(shortReply);
+                        recordBotMessageContext(sentMsg.id, mode, userId, userName); // ✅ 紀錄對象與模式
                         await speakWithTTS(message, shortReply, guildId);
                     }
                 } catch (error) {
