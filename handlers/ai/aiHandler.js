@@ -20,7 +20,7 @@ const MAX_IMAGE_SIZE_MB = 7;
 const TTS_MAX_LENGTH = 1000;
 const HISTORY_FETCH_LIMIT = 30;
 const HISTORY_PAIR_LIMIT = 10;
-const HISTORY_TIME_LIMIT_MS = 3 * 60 * 1000;
+const HISTORY_TIME_LIMIT_MS = 10 * 60 * 1000; // ✅ 修改 1：3 分鐘 → 10 分鐘
 
 // 初始化 API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -30,6 +30,10 @@ const aiTTSEnabled = new Map();
 
 // --- 使用者記憶清除時間戳 ---
 const memoryClearedAt = new Map();
+
+// ✅ 修改 3：圖片快取（url → { base64, mimeType, cachedAt }）
+const imageCache = new Map();
+const IMAGE_CACHE_TTL_MS = 10 * 60 * 1000; // 快取 10 分鐘
 
 function isAITTSEnabled(guildId) {
     return aiTTSEnabled.get(guildId) ?? true;
@@ -93,6 +97,55 @@ function getModel(mode, isVoice = false) {
 }
 
 // ════════════════════════════════════════════════════════
+//  ✅ 修改 3：帶快取的圖片下載函式
+// ════════════════════════════════════════════════════════
+async function fetchImageAsBase64(attachment) {
+    const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
+    if (attachment.size > sizeLimit) return null;
+
+    const supportedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'];
+    const mimeType = attachment.contentType?.split(';')[0] || 'image/jpeg';
+    if (!supportedTypes.includes(mimeType)) return null;
+
+    // 檢查快取
+    const cached = imageCache.get(attachment.url);
+    if (cached && (Date.now() - cached.cachedAt) < IMAGE_CACHE_TTL_MS) {
+        console.log(`[Image] 快取命中：${attachment.url.slice(0, 60)}...`);
+        return { base64: cached.base64, mimeType: cached.mimeType };
+    }
+
+    try {
+        const response = await fetch(attachment.url);
+        const buffer = await response.arrayBuffer();
+        const base64 = Buffer.from(buffer).toString('base64');
+
+        // 寫入快取
+        imageCache.set(attachment.url, { base64, mimeType, cachedAt: Date.now() });
+        console.log(`[Image] 已下載並快取：${attachment.url.slice(0, 60)}...`);
+
+        return { base64, mimeType };
+    } catch (err) {
+        console.error(`[Image] 下載圖片失敗：`, err.message);
+        return null;
+    }
+}
+
+// ════════════════════════════════════════════════════════
+//  ✅ 修改 3：定期清除過期圖片快取（每 10 分鐘執行一次）
+// ════════════════════════════════════════════════════════
+setInterval(() => {
+    const now = Date.now();
+    let cleared = 0;
+    for (const [url, entry] of imageCache.entries()) {
+        if (now - entry.cachedAt >= IMAGE_CACHE_TTL_MS) {
+            imageCache.delete(url);
+            cleared++;
+        }
+    }
+    if (cleared > 0) console.log(`[Image Cache] 已清除 ${cleared} 筆過期快取`);
+}, IMAGE_CACHE_TTL_MS);
+
+// ════════════════════════════════════════════════════════
 //  共用函式：將 attachments 轉成 imageParts
 // ════════════════════════════════════════════════════════
 async function processAttachments(attachments) {
@@ -124,7 +177,6 @@ function mergeConsecutiveRoles(history) {
         const next = history[i];
 
         if (next.role === current.role) {
-            // 同一個角色 → 合併 parts
             current.parts = [...current.parts, ...next.parts];
         } else {
             merged.push(current);
@@ -137,6 +189,24 @@ function mergeConsecutiveRoles(history) {
 }
 
 // ════════════════════════════════════════════════════════
+//  ✅ 修改 1：判斷 Bot 訊息是否屬於指定使用者的對話
+//  Discord 的 message.reference 指向被回覆的訊息 ID
+// ════════════════════════════════════════════════════════
+function isBotReplyToUser(msg, userId, fetchedMessages) {
+    // 若 Bot 訊息有 reference（即是回覆某則訊息）
+    if (msg.reference?.messageId) {
+        const refMsg = fetchedMessages.get(msg.reference.messageId);
+        // 被回覆的訊息是該使用者 → 屬於此對話
+        if (refMsg && refMsg.author.id === userId) return true;
+        // 被回覆的訊息不存在或不是該使用者 → 排除
+        if (!refMsg || refMsg.author.id !== userId) return false;
+    }
+    // Bot 訊息沒有 reference（主動發送，非回覆）→ 視為屬於對話
+    // （例如 mention 觸發後 Bot 直接 send，不帶 reference）
+    return true;
+}
+
+// ════════════════════════════════════════════════════════
 //  從頻道抓取使用者 + Bot 的對話紀錄（已完整處理角色問題）
 // ════════════════════════════════════════════════════════
 async function fetchUserChannelHistory(channel, userId, currentMessageId, botId) {
@@ -146,15 +216,23 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
         const currentTimestamp = currentMsg?.createdTimestamp ?? Date.now();
         const clearTime = getMemoryClearTime(userId);
 
-        // 過濾訊息
+        // ✅ 修改 1：過濾時加入 Bot 訊息的對象檢查
         let relevantMessages = fetched
-            .filter(msg =>
-                msg.id !== currentMessageId &&
-                (currentTimestamp - msg.createdTimestamp) <= HISTORY_TIME_LIMIT_MS &&
-                msg.createdTimestamp > clearTime &&
-                (msg.author.id === userId || msg.author.id === botId) &&
-                (msg.content?.trim().length > 0 || msg.attachments.size > 0)
-            )
+            .filter(msg => {
+                if (msg.id === currentMessageId) return false;
+                if ((currentTimestamp - msg.createdTimestamp) > HISTORY_TIME_LIMIT_MS) return false;
+                if (msg.createdTimestamp <= clearTime) return false;
+                if (!msg.content?.trim().length && msg.attachments.size === 0) return false;
+
+                if (msg.author.id === userId) return true;
+
+                // Bot 訊息：額外確認是回覆該使用者的
+                if (msg.author.id === botId) {
+                    return isBotReplyToUser(msg, userId, fetched);
+                }
+
+                return false;
+            })
             .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 
         // 移除開頭的 model 訊息
@@ -175,7 +253,6 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
         for (const msg of relevantMessages.values()) {
             const parts = [];
 
-            // 處理圖片
             if (msg.attachments.size > 0) {
                 const imgParts = await processAttachments(msg.attachments);
                 imgParts.forEach(img => {
@@ -183,7 +260,6 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
                 });
             }
 
-            // 處理文字
             if (msg.content?.trim().length > 0) {
                 parts.push({ text: msg.content.trim() });
             }
@@ -198,10 +274,10 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
             });
         }
 
-        // 【核心修正】合併連續相同 role 的訊息
+        // 合併連續相同 role 的訊息
         let finalHistory = mergeConsecutiveRoles(history);
 
-        // 再次確保第一筆是 user（保險機制）
+        // 再次確保第一筆是 user
         while (finalHistory.length > 0 && finalHistory[0].role === 'model') {
             finalHistory.shift();
         }
@@ -218,25 +294,6 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
 // ════════════════════════════════════════════════════════
 //  工具函式
 // ════════════════════════════════════════════════════════
-async function fetchImageAsBase64(attachment) {
-    const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
-    if (attachment.size > sizeLimit) return null;
-
-    const supportedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'];
-    const mimeType = attachment.contentType?.split(';')[0] || 'image/jpeg';
-    if (!supportedTypes.includes(mimeType)) return null;
-
-    try {
-        const response = await fetch(attachment.url);
-        const buffer = await response.arrayBuffer();
-        const base64 = Buffer.from(buffer).toString('base64');
-        return { base64, mimeType };
-    } catch (err) {
-        console.error(`[Image] 下載圖片失敗：`, err.message);
-        return null;
-    }
-}
-
 function getUserMode(userId, message) {
     const mode = selectMode(userId, message);
     console.log(`[Mode] User ${userId} -> ${getModeName(mode)}`);
