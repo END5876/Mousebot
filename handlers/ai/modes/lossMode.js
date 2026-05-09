@@ -89,6 +89,7 @@ function getErrorMessage(error) {
 
 module.exports = {
     LOSS_MODE_PROMPT,
+    shortDescription: '極度毒舌的損友，對任何人都惡言相向、人身攻擊、嘲諷羞辱，完全不留情面',
     getThinkingMessage,
     getClearMemoryMessage,
     getErrorMessage

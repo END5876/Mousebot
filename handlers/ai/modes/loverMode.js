@@ -58,6 +58,7 @@ function getErrorMessage(error) {
 
 module.exports = {
     LOVER_MODE_PROMPT,
+    shortDescription: '溫柔黏人的戀人，對專屬用戶充滿愛意，說話甜蜜撒嬌，極度關心對方',
     getThinkingMessage,
     getClearMemoryMessage,
     getErrorMessage
