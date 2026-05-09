@@ -39,7 +39,7 @@ const IMAGE_CACHE_TTL_MS = 10 * 60 * 1000;
 const botMessageCache = new Map();
 const MAX_MODE_CACHE_SIZE = 1000;
 
-// 頻道歷史快取（新增）
+// 頻道歷史快取
 const historyCache = new Map();
 const HISTORY_CACHE_TTL_MS = 30 * 1000; // 快取 30 秒
 
@@ -95,6 +95,21 @@ function getSystemPrompt(mode) {
     }
     const promptKey = Object.keys(modeModule).find(key => key.endsWith('_PROMPT'));
     return modeModule[promptKey];
+}
+
+// ════════════════════════════════════════════════════════
+//  取得模式的人格描述（優先用 shortDescription，fallback 截取 prompt 前 150 字）
+// ════════════════════════════════════════════════════════
+function getModeDescription(mode) {
+    const modeModule = MODE_MAP[mode];
+    if (!modeModule) return '（未知模式）';
+    if (modeModule.shortDescription) return modeModule.shortDescription;
+
+    // fallback：從 system prompt 截取前 150 字
+    const prompt = getSystemPrompt(mode);
+    if (!prompt) return '（無法取得描述）';
+    const trimmed = prompt.replace(/\n/g, ' ').trim();
+    return trimmed.length > 150 ? trimmed.slice(0, 150) + '...' : trimmed;
 }
 
 function getModel(mode, isVoice = false) {
@@ -160,7 +175,7 @@ setInterval(() => {
     if (cleared > 0) console.log(`[Image Cache] 已清除 ${cleared} 筆過期快取`);
 }, IMAGE_CACHE_TTL_MS);
 
-// 定期清除過期的歷史快取（新增）
+// 定期清除過期的歷史快取
 setInterval(() => {
     const now = Date.now();
     let cleared = 0;
@@ -347,24 +362,35 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
                 const refModeName = getModeName(refMode) || refMode;
 
                 if (refTargetId !== currentUserId) {
-                    refText = `（系統提示：當前使用者回覆了你之前對另一位專屬用戶「${refTargetName}」說的話。當時你對 ${refTargetName} 的專屬態度是「${refModeName}」：`;
-                    if (refContent) refText += `「${refContent}」`;
-                    refText += `）\n（請注意：你對不同人有不同的態度。請用你現在對待【當前使用者】的專屬態度（「${currentModeName}」）來回應他，可以展現出你的差別待遇）\n`;
+                    // ── ① 跨使用者引用：附上 refMode 的人格描述 ──
+                    const refModeDesc = getModeDescription(refMode);
+                    refText = `（系統提示：當前使用者回覆了你之前對另一位專屬用戶「${refTargetName}」說的話。`
+                            + `\n你當時對 ${refTargetName} 的人格是「${refModeName}」，其人格描述為：${refModeDesc}`
+                            + `\n你當時說的話是：「${refContent}」）`
+                            + `\n（請注意：你對不同人有不同的態度。請用你現在對待【當前使用者】的專屬態度「${currentModeName}」來回應他，可以展現出你的差別待遇）\n`;
+
                 } else if (refMode !== currentMode) {
-                    refText = `（系統提示：使用者回覆了你之前對他說的話。當時你是用「${refModeName}」的態度對他，但現在你對他的態度是「${currentModeName}」：`;
-                    if (refContent) refText += `「${refContent}」`;
-                    refText += `）\n（請用現在的態度回應他）\n`;
+                    // ── ② 同人不同模式：附上舊模式的人格描述，強調現在已切換 ──
+                    const refModeDesc = getModeDescription(refMode);
+                    refText = `（系統提示：使用者回覆了你之前對他說的話。`
+                            + `\n你當時的人格是「${refModeName}」，其人格描述為：${refModeDesc}`
+                            + `\n你當時說的話是：「${refContent}」`
+                            + `\n但你現在對他的人格已切換為「${currentModeName}」，請用現在的態度回應他）\n`;
+
                 } else {
+                    // ── ③ 普通引用：同人同模式，不需要額外描述 ──
                     refText = `（系統提示：使用者回覆了你之前對他說的話：`;
                     if (refContent) refText += `「${refContent}」`;
                     refText += `）\n`;
                 }
             } else {
+                // 快取遺失 fallback
                 refText = `（系統提示：使用者回覆了你之前說過的話：`;
                 if (refContent) refText += `「${refContent}」`;
                 refText += `）\n`;
             }
         } else {
+            // 引用的是其他人的訊息
             refText = `（系統提示：使用者回覆了 ${refAuthor} 說的話：`;
             if (refContent) refText += `「${refContent}」`;
             refText += `）\n`;
