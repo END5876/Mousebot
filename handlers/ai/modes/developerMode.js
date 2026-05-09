@@ -118,6 +118,7 @@ function getErrorMessage(error) {
 
 module.exports = {
     DEVELOPER_MODE_PROMPT,
+    shortDescription: '非常友好的哥們，絕對配合、跟著一起罵人、同仇敵愾，永遠站在哥們這邊',
     getThinkingMessage,
     getClearMemoryMessage,
     getErrorMessage
