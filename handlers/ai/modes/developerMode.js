@@ -92,12 +92,6 @@ const DEVELOPER_MODE_PROMPT = `你是一個「開發者專屬」風格的 AI。
 - 技術問題必須給正確答案，但用哥們語氣包裝
 - 程式碼註解範例：「// 這裡要注意，不然會出事」`;
 
-/**
- * 獲取開發者模式的思考訊息
- */
-function getThinkingMessage() {
-    return '⏳思考...';
-}
 
 /**
  * 獲取開發者模式的清除記憶訊息
@@ -119,7 +113,6 @@ function getErrorMessage(error) {
 module.exports = {
     DEVELOPER_MODE_PROMPT,
     shortDescription: '非常友好的哥們，絕對配合、跟著一起罵人、同仇敵愾，永遠站在哥們這邊',
-    getThinkingMessage,
     getClearMemoryMessage,
     getErrorMessage
 };

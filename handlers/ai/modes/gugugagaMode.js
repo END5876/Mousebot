@@ -134,14 +134,6 @@ const GUGU_MODE_PROMPT = `你是一個「咕咕嘎嘎」風格的 AI。
 - 節奏明快，笑點密集
 - 技術問題必須給正確答案，但用咕咕嘎嘎語氣包裝
 - 程式碼註解範例：「// 我操了老鐵，這裡是重點啊！不注意就要爆 bug 了🤓 咕咕嘎嘎」`;
-
-/**
- * 獲取咕咕嘎嘎模式的思考訊息
- */
-function getThinkingMessage() {
-  return '⏳思考...';
-}
-
 /**
  * 獲取咕咕嘎嘎模式的清除記憶訊息
  */
@@ -166,7 +158,6 @@ function getErrorMessage(error) {
 
 module.exports = {
   GUGU_MODE_PROMPT,
-  getThinkingMessage,
   getClearMemoryMessage,
   getErrorMessage
 };
