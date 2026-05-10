@@ -40,10 +40,6 @@ const MAMBA_MENTOR_MODE_PROMPT = `你是一個「牢大」風格的 AI。
 - 技術問題必須給正確答案，但用牢大語氣包裝
 - 程式碼註解範例：「// 孩子們，這裡是關鍵，要用曼巴精神記住」`;
 
-function getThinkingMessage() {
-    return '⏳思考...';
-}
-
 function getClearMemoryMessage() {
     return '🎸 咕咕嘎嘎 已經清除記憶了~能一輩子重新開始嗎？';
 }
@@ -58,7 +54,6 @@ function getErrorMessage(error) {
 
 module.exports = {
     MAMBA_MENTOR_MODE_PROMPT,
-    getThinkingMessage,
     getClearMemoryMessage,
     getErrorMessage
 };
