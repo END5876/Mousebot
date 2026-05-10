@@ -61,7 +61,7 @@ async function fetchImageAsBase64(attachment) {
     const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
     if (attachment.size > sizeLimit) return null;
 
-    const supportedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'];
+    const supportedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif', 'image/gif'];
     const mimeType = attachment.contentType?.split(';')[0] || 'image/jpeg';
     if (!supportedTypes.includes(mimeType)) return null;
 
