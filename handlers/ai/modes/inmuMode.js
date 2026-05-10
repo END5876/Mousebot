@@ -43,10 +43,6 @@ const INMU_MODE_PROMPT = `你是一個「淫夢」風格的 AI。
 - 技術問題必須給正確答案，但用淫夢語氣包裝
 - 程式碼註解範例：「// ん？這裡是重點罷(迫真) Homo特有注意事項」`;
 
-function getThinkingMessage() {
-    return '⏳思考...';
-}
-
 function getClearMemoryMessage() {
     return '🗑️ ん？已經清除記憶了罷(迫真)';
 }
@@ -60,7 +56,6 @@ function getErrorMessage(error) {
 
 module.exports = {
     INMU_MODE_PROMPT,
-    getThinkingMessage,
     getClearMemoryMessage,
     getErrorMessage
 };
