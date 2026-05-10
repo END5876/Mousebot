@@ -14,6 +14,7 @@ const {
     isAITTSEnabled, setAITTSEnabled,
     recordBotMessageContext,
     processAttachments,
+    processCustomEmojis,
     withTyping, speakWithTTS, splitMessage,
 } = require('./aiUtils');
 
@@ -43,17 +44,22 @@ const slashCommands = [
             const userName = interaction.user.username;
             const guildId  = interaction.guildId;
             const botId    = interaction.client.user.id;
-            const question = interaction.options.getString('question');
             const attachment = interaction.options.getAttachment('image');
-            const mode     = getUserMode(userId, question);
+            const mode     = getUserMode(userId, interaction.options.getString('question'));
             const modeModule = MODE_MAP[mode];
 
             await interaction.deferReply();
 
             try {
-                let imageParts = [];
+                // 處理自訂 Emoji（slash command 的 question 欄位也可能含 emoji）
+                const rawQuestion = interaction.options.getString('question');
+                const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
+
+                let attachmentParts = [];
                 if (attachment)
-                    imageParts = await processAttachments(new Map([[attachment.id, attachment]]));
+                    attachmentParts = await processAttachments(new Map([[attachment.id, attachment]]));
+
+                const imageParts = [...emojiParts, ...attachmentParts];
 
                 const answer = await getGeminiResponse(userId, question, imageParts, interaction.channel, interaction.id, botId, null, mode);
                 const chunks = splitMessage(answer);
@@ -101,7 +107,7 @@ const slashCommands = [
 
             const current = isAITTSEnabled(guildId);
             setAITTSEnabled(guildId, !current);
-            const status = !current ? '🔊 已開啟' : '🔇 已關閉';
+            const status = !current ? '\U0001F50A 已開啟' : '\U0001F507 已關閉';
             await interaction.reply({ content: `${status} AI 回覆朗讀功能` });
         }
     },
@@ -132,13 +138,17 @@ function setupAICommands(client) {
 
         // ── @ 提及 ──
         if (isMentioned) {
-            let question = content.replace(/<@!?\d+>/g, '').trim();
-            if (!question && !hasAttachment) return;
+            const rawQuestion = content.replace(/<@!?\d+>/g, '').trim();
+            if (!rawQuestion && !hasAttachment) return;
             if (!process.env.GEMINI_API_KEY) return message.channel.send('❌ 未設定 API Key');
 
             try {
-                const mode = getUserMode(userId, question || '圖片');
-                const imageParts = await processAttachments(message.attachments);
+                const mode = getUserMode(userId, rawQuestion || '圖片');
+
+                // 處理自訂 Emoji：取得清理後文字 + emoji 圖片
+                const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
+                const attachmentParts = await processAttachments(message.attachments);
+                const imageParts = [...emojiParts, ...attachmentParts];
 
                 const answer = await withTyping(message.channel, () =>
                     getGeminiResponse(userId, question, imageParts, channel, messageId, botId, message, mode)
@@ -151,7 +161,7 @@ function setupAICommands(client) {
                 }
                 await speakWithTTS(message, answer, guildId);
             } catch (error) {
-                const mode = selectMode(userId, question || '圖片');
+                const mode = selectMode(userId, content.replace(/<@!?\d+>/g, '').trim() || '圖片');
                 message.channel.send(MODE_MAP[mode].getErrorMessage(error));
             }
 
@@ -159,20 +169,23 @@ function setupAICommands(client) {
         } else {
             if (!process.env.GEMINI_API_KEY) return;
 
-            const cleanedContent = content
+            const rawCleaned = content
                 .replace(/<@!?\d+>/g, '')
                 .replace(/<@&\d+>/g, '')
                 .replace(/<#\d+>/g, '')
                 .trim();
 
-            if (!cleanedContent && !hasAttachment) return;
-            if (/(https?:\/\/[^\s]+)|(www\.[^\s]+)/gi.test(cleanedContent)) return;
-            if (/^!(gugu|m|stt)/.test(cleanedContent)) return;
+            if (!rawCleaned && !hasAttachment) return;
+            if (/(https?:\/\/[^\s]+)|(www\.[^\s]+)/gi.test(rawCleaned)) return;
+            if (/^!(gugu|m|stt)/.test(rawCleaned)) return;
 
             if (Math.random() < RANDOM_REPLY_CHANCE) {
                 try {
+                    // 處理自訂 Emoji：取得清理後文字 + emoji 圖片
+                    const { cleanedText: cleanedContent, emojiParts } = await processCustomEmojis(rawCleaned);
                     const mode = getUserMode(userId, cleanedContent);
-                    const imageParts = await processAttachments(message.attachments);
+                    const attachmentParts = await processAttachments(message.attachments);
+                    const imageParts = [...emojiParts, ...attachmentParts];
 
                     const shortReply = await withTyping(message.channel, () =>
                         getShortResponse(userId, cleanedContent, imageParts, channel, messageId, botId, message, mode)
