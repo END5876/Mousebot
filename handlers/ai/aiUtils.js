@@ -95,6 +95,57 @@ async function processAttachments(attachments) {
 }
 
 // ════════════════════════════════════════════════════════
+//  自訂 Emoji 處理
+// ════════════════════════════════════════════════════════
+
+/**
+ * 從訊息內容中提取所有自訂 Emoji，下載為 base64 圖片
+ * 同時將 <:name:id> / <a:name:id> 替換為 [name表情] 方便 Gemini 理解
+ * @param {string} content - 訊息內容
+ * @returns {{ cleanedText: string, emojiParts: Array<{ mimeType: string, data: string }> }}
+ */
+async function processCustomEmojis(content) {
+    if (!content) return { cleanedText: content ?? '', emojiParts: [] };
+
+    const emojiParts = [];
+    const emojiRegex = /<(a?):(\w+):(\d+)>/g;
+    let match;
+    const seen = new Set();
+
+    while ((match = emojiRegex.exec(content)) !== null) {
+        const [, animated, name, id] = match;
+        if (seen.has(id)) continue;
+        seen.add(id);
+
+        const ext = animated ? 'gif' : 'png';
+        const url = `https://cdn.discordapp.com/emojis/${id}.${ext}`;
+        const mimeType = animated ? 'image/gif' : 'image/png';
+
+        try {
+            const cached = imageCache.get(url);
+            if (cached && (Date.now() - cached.cachedAt) < IMAGE_CACHE_TTL_MS) {
+                console.log(`[Emoji] 快取命中：${name}`);
+                emojiParts.push({ mimeType: cached.mimeType, data: cached.base64 });
+            } else {
+                const response = await fetch(url);
+                const buffer = await response.arrayBuffer();
+                const base64 = Buffer.from(buffer).toString('base64');
+                imageCache.set(url, { base64, mimeType, cachedAt: Date.now() });
+                console.log(`[Emoji] 已下載：${name} (${id})`);
+                emojiParts.push({ mimeType, data: base64 });
+            }
+        } catch (err) {
+            console.warn(`[Emoji] 下載失敗 ${name}:`, err.message);
+        }
+    }
+
+    // 把 <:name:id> / <a:name:id> 替換成 [name表情]，讓文字部分也有語意提示
+    const cleanedText = content.replace(/<a?:(\w+):\d+>/g, '[$1表情]');
+
+    return { cleanedText, emojiParts };
+}
+
+// ════════════════════════════════════════════════════════
 //  定期清除過期快取
 // ════════════════════════════════════════════════════════
 setInterval(() => {
@@ -152,7 +203,7 @@ async function speakWithTTS(source, text, guildId) {
     if (!guildId || !isAITTSEnabled(guildId)) return;
     const voiceChannel = source.member?.voice?.channel;
     if (!voiceChannel) {
-        console.log(`🔇 [TTS] 使用者不在語音頻道，跳過朗讀`);
+        console.log(`\U0001F507 [TTS] 使用者不在語音頻道，跳過朗讀`);
         return;
     }
     const ttsText = text.length > TTS_MAX_LENGTH ? text.slice(0, TTS_MAX_LENGTH) : text;
@@ -161,7 +212,7 @@ async function speakWithTTS(source, text, guildId) {
         if (!result.success) {
             console.warn(`⚠️ [TTS] 朗讀失敗 (reason: ${result.reason})`);
         } else {
-            console.log(`🔊 [TTS] 朗讀中 (engine: ${result.engine}, queued: ${result.queued})`);
+            console.log(`\U0001F50A [TTS] 朗讀中 (engine: ${result.engine}, queued: ${result.queued})`);
         }
     } catch (err) {
         console.error('❌ [TTS] 呼叫 playTTS 發生錯誤:', err.message);
@@ -200,6 +251,8 @@ module.exports = {
     recordBotMessageContext, getBotMessageContext,
     // 圖片
     processAttachments,
+    // 自訂 Emoji
+    processCustomEmojis,
     // 工具
     withTyping, speakWithTTS, splitMessage,
 };
