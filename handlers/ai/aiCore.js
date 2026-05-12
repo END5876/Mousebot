@@ -18,7 +18,7 @@ const {
 // ════════════════════════════════════════════════════════
 //  設定常數
 // ════════════════════════════════════════════════════════
-const MODEL_NAME = "gemini-2.5-flash-lite";
+const MODEL_NAME = "gemini-3.1-flash-lite";
 const HISTORY_FETCH_LIMIT = 30;
 const HISTORY_PAIR_LIMIT = 10;
 const HISTORY_TIME_LIMIT_MS = 10 * 60 * 1000;
