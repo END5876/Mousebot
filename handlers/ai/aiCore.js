@@ -61,16 +61,6 @@ function getSystemPrompt(mode) {
     return modeModule[promptKey];
 }
 
-function getModeDescription(mode) {
-    const modeModule = MODE_MAP[mode];
-    if (!modeModule) return '（未知模式）';
-    if (modeModule.shortDescription) return modeModule.shortDescription;
-    const prompt = getSystemPrompt(mode);
-    if (!prompt) return '（無法取得描述）';
-    const trimmed = prompt.replace(/\n/g, ' ').trim();
-    return trimmed.length > 150 ? trimmed.slice(0, 150) + '...' : trimmed;
-}
-
 function getUserMode(userId, message) {
     const mode = selectMode(userId, message);
     console.log(`[Mode] User ${userId} -> ${getModeName(mode)}`);
@@ -207,38 +197,23 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
 
         if (isSelf) {
             const cachedContext = getBotMessageContext(refMsg.id);
-            const currentModeName = getModeName(currentMode) || currentMode;
+            
+            // 【程式邏輯判斷】：這句話是否屬於「當前的你（同模式且同對象）」？
+            const isSamePersona = cachedContext 
+                ? (cachedContext.mode === currentMode && cachedContext.userId === currentUserId)
+                : true; // 若無快取，預設當作自己
 
-            if (cachedContext) {
-                const { mode: refMode, userId: refTargetId, userName: refTargetName } = cachedContext;
-                const refModeName = getModeName(refMode) || refMode;
-
-                if (refTargetId !== currentUserId) {
-                    const refModeDesc = getModeDescription(refMode);
-                    refText = `（系統提示：當前使用者回覆了你之前對另一位專屬用戶「${refTargetName}」說的話。`
-                            + `\n你當時對 ${refTargetName} 的人格是「${refModeName}」，其人格描述為：${refModeDesc}`
-                            + `\n你當時說的話是：「${refContent}」）`
-                            + `\n（請注意：你對不同人有不同的態度。請用你現在對待【當前使用者】的專屬態度「${currentModeName}」來回應他，可以展現出你的差別待遇）\n`;
-                } else if (refMode !== currentMode) {
-                    const refModeDesc = getModeDescription(refMode);
-                    refText = `（系統提示：使用者回覆了你之前對他說的話。`
-                            + `\n你當時的人格是「${refModeName}」，其人格描述為：${refModeDesc}`
-                            + `\n你當時說的話是：「${refContent}」`
-                            + `\n但你現在對他的人格已切換為「${currentModeName}」，請用現在的態度回應他）\n`;
-                } else {
-                    refText = `（系統提示：使用者回覆了你之前對他說的話：`;
-                    if (refContent) refText += `「${refContent}」`;
-                    refText += `）\n`;
-                }
+            if (!isSamePersona) {
+                // 🛡️ 程式邏輯介入：偵測到跨模式或跨用戶引用
+                // 策略：切斷身份關聯。不使用「你」這個字，將其降級為客觀的「歷史訊息」。
+                refText = `> 引用歷史訊息：\n> 「${refContent}」\n\n`;
             } else {
-                refText = `（系統提示：使用者回覆了你之前說過的話：`;
-                if (refContent) refText += `「${refContent}」`;
-                refText += `）\n`;
+                // 同一個人格，承認是自己說的
+                refText = `> 引用你之前的發言：\n> 「${refContent}」\n\n`;
             }
         } else {
-            refText = `（系統提示：使用者回覆了 ${refAuthor} 說的話：`;
-            if (refContent) refText += `「${refContent}」`;
-            refText += `）\n`;
+            // 引用一般使用者的發言
+            refText = `> 引用 ${refAuthor} 的發言：\n> 「${refContent}」\n\n`;
         }
 
         if (refMsg.attachments.size > 0) {
@@ -250,7 +225,10 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
     }
 
     imageParts.forEach(img => parts.push({ inlineData: img }));
-    parts.push({ text: question || '請吐槽這張圖片' });
+    // 移除預設的「請吐槽這張圖片」，避免干擾鐵哥們等模式的自然對話
+    if (question) {
+        parts.push({ text: question });
+    }
     return parts;
 }
 
@@ -265,7 +243,7 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
         const chat = model.startChat({ history, generationConfig: GENERATION_CONFIG });
         const messageParts = message
             ? await buildMessagePartsWithReference(message, prompt, imageParts, botId, mode, userId)
-            : [...imageParts.map(img => ({ inlineData: img })), { text: prompt || '請吐槽這張圖片' }];
+            : [...imageParts.map(img => ({ inlineData: img })), { text: prompt || '' }]; // 移除預設吐槽文字
         const result = await chat.sendMessage(messageParts);
         return result.response.text();
     } catch (error) {
