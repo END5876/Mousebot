@@ -197,22 +197,24 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
 
         if (isSelf) {
             const cachedContext = getBotMessageContext(refMsg.id);
-            
-            // 【程式邏輯判斷】：這句話是否屬於「當前的你（同模式且同對象）」？
-            const isSamePersona = cachedContext 
-                ? (cachedContext.mode === currentMode && cachedContext.userId === currentUserId)
-                : true; // 若無快取，預設當作自己
 
-            if (!isSamePersona) {
-                // 🛡️ 程式邏輯介入：偵測到跨模式或跨用戶引用
-                // 策略：切斷身份關聯。不使用「你」這個字，將其降級為客觀的「歷史訊息」。
-                refText = `> 引用歷史訊息：\n> 「${refContent}」\n\n`;
+            if (cachedContext) {
+                const { mode: refMode, userId: refTargetId, userName: refTargetName } = cachedContext;
+
+                if (refTargetId !== currentUserId) {
+                    // ✅ 跨用戶引用：明確告訴 AI 這是它自己對「別人」說的
+                    refText = `> 引用你之前對別人（${refTargetName}）說的話：\n> 「${refContent}」\n\n`;
+                } else if (refMode !== currentMode) {
+                    // 同用戶但跨模式
+                    refText = `> 引用你之前對他說的話：\n> 「${refContent}」\n\n`;
+                } else {
+                    // 完全相同情境
+                    refText = `> 引用你之前的發言：\n> 「${refContent}」\n\n`;
+                }
             } else {
-                // 同一個人格，承認是自己說的
                 refText = `> 引用你之前的發言：\n> 「${refContent}」\n\n`;
             }
         } else {
-            // 引用一般使用者的發言
             refText = `> 引用 ${refAuthor} 的發言：\n> 「${refContent}」\n\n`;
         }
 
@@ -225,7 +227,6 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
     }
 
     imageParts.forEach(img => parts.push({ inlineData: img }));
-    // 移除預設的「請吐槽這張圖片」，避免干擾鐵哥們等模式的自然對話
     if (question) {
         parts.push({ text: question });
     }
@@ -243,7 +244,7 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
         const chat = model.startChat({ history, generationConfig: GENERATION_CONFIG });
         const messageParts = message
             ? await buildMessagePartsWithReference(message, prompt, imageParts, botId, mode, userId)
-            : [...imageParts.map(img => ({ inlineData: img })), { text: prompt || '' }]; // 移除預設吐槽文字
+            : [...imageParts.map(img => ({ inlineData: img })), { text: prompt || '' }];
         const result = await chat.sendMessage(messageParts);
         return result.response.text();
     } catch (error) {
