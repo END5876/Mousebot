@@ -48,6 +48,13 @@ const VOICE_MODE_ADDON = `
 5. 在遵守以上規則的前提下，必須完全保持你現在的人格設定與語氣。
 `;
 
+const GENERAL_TEXT_ADDON = `
+
+## 全局回覆長度限制
+- 若為日常閒聊或一般對話，回覆字數請盡量控制在 100 字以內，保持自然、簡短的聊天節奏。
+- 若使用者詢問技術問題、需要詳細解說或撰寫程式碼時，則不受此字數限制，請給出完整的解答。
+`;
+
 // ════════════════════════════════════════════════════════
 //  模式工具函式
 // ════════════════════════════════════════════════════════
@@ -69,7 +76,13 @@ function getUserMode(userId, message) {
 
 function getModel(mode, isVoice = false) {
     let systemPrompt = getSystemPrompt(mode);
+    
+    // 加入全局的文字長度限制
+    systemPrompt += GENERAL_TEXT_ADDON;
+    
+    // 如果是語音模式，再加入語音專屬的限制（會覆蓋前面的設定）
     if (isVoice) systemPrompt += VOICE_MODE_ADDON;
+    
     return genAI.getGenerativeModel({
         model: MODEL_NAME,
         systemInstruction: systemPrompt,
