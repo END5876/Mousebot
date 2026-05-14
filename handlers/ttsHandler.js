@@ -8,7 +8,7 @@ const path = require('path');
 const http = require('http');
 const dns  = require('dns').promises;
 
-// ✅ 改用 audioManager 統一管理 TTS 層
+// udioManager 統一管理 TTS 層
 const { playTTSLayer } = require('./audioManager');
 
 // ── TTS 排隊 Map ─────────────────────────────────────────
@@ -16,7 +16,7 @@ const ttsQueues    = new Map();
 const ttsIsPlaying = new Map();
 const activeModels = new Map();
 
-const TTS_MAX_LENGTH = 1000;
+const TTS_MAX_LENGTH = 3000;
 
 // ── SoVITS 連線設定 ──────────────────────────────────────
 const SOVITS_HOST = process.env.SOVITS_HOST || 'localhost';
