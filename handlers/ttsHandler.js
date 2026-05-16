@@ -1,7 +1,7 @@
 const {
   getVoiceConnection,
 } = require('@discordjs/voice');
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js'); // ✨ 新增 MessageFlags
 const { execSync, spawn } = require('child_process');
 const fs   = require('fs');
 const path = require('path');
@@ -12,9 +12,10 @@ const dns  = require('dns').promises;
 const { playTTSLayer } = require('./audioManager');
 
 // ── TTS 排隊 Map ─────────────────────────────────────────
-const ttsQueues    = new Map();
-const ttsIsPlaying = new Map();
-const activeModels = new Map();
+const ttsQueues        = new Map();
+const ttsIsPlaying     = new Map();
+const activeModels     = new Map();
+const activeEdgeVoices = new Map();
 
 const TTS_MAX_LENGTH = 3000;
 
@@ -93,9 +94,31 @@ async function resolveSoVITSHost() {
 }
 
 // ════════════════════════════════════════════════════════
-//  edge-tts fallback
+//  edge-tts 聲音設定
 // ════════════════════════════════════════════════════════
-const VOICE_MAP    = { zh: 'zh-TW-YunJheNeural', en: 'zh-TW-YunJheNeural', ja: 'ja-JP-KeitaNeural' };
+const EDGE_VOICE_CHOICES = [
+  { name: '🇹🇼 中文 - 雲哲 (男)',   value: 'zh-TW-YunJheNeural'    },
+  { name: '🇹🇼 中文 - 曉臻 (女)',   value: 'zh-TW-HsiaoChenNeural' },
+  { name: '🇹🇼 中文 - 曉雨 (女)',   value: 'zh-TW-HsiaoYuNeural'   },
+  { name: '🇨🇳 中文 - 雲希 (男)',   value: 'zh-CN-YunxiNeural'     },
+  { name: '🇨🇳 中文 - 曉小 (女)',   value: 'zh-CN-XiaoxiaoNeural'  },
+  { name: '🇨🇳 中文 - 曉伊 (女)',   value: 'zh-CN-XiaoyiNeural'    },
+  { name: '🇯🇵 日文 - Keita (男)',  value: 'ja-JP-KeitaNeural'     },
+  { name: '🇯🇵 日文 - Nanami (女)', value: 'ja-JP-NanamiNeural'    },
+  { name: '🇺🇸 英文 - Guy (男)',    value: 'en-US-GuyNeural'       },
+  { name: '🇺🇸 英文 - Jenny (女)',  value: 'en-US-JennyNeural'     },
+  { name: '🇺🇸 英文 - Aria (女)',   value: 'en-US-AriaNeural'      },
+  { name: '🇬🇧 英文 - Ryan (男)',   value: 'en-GB-RyanNeural'      },
+  { name: '🇬🇧 英文 - Sonia (女)',  value: 'en-GB-SoniaNeural'     },
+  { name: '🇰🇷 韓文 - InJoon (男)', value: 'ko-KR-InJoonNeural'    },
+  { name: '🇰🇷 韓文 - SunHi (女)',  value: 'ko-KR-SunHiNeural'     },
+];
+
+const VOICE_MAP     = {
+  zh: 'zh-TW-YunJheNeural',
+  en: 'en-US-GuyNeural',
+  ja: 'ja-JP-KeitaNeural',
+};
 const DEFAULT_VOICE = 'zh-TW-YunJheNeural';
 
 function detectLanguage(text) {
@@ -105,7 +128,12 @@ function detectLanguage(text) {
   return 'zh';
 }
 
-function resolveVoice(text) { return VOICE_MAP[detectLanguage(text)] ?? DEFAULT_VOICE; }
+function resolveVoice(text, guildId = null) {
+  if (guildId && activeEdgeVoices.has(guildId)) {
+    return activeEdgeVoices.get(guildId);
+  }
+  return VOICE_MAP[detectLanguage(text)] ?? DEFAULT_VOICE;
+}
 
 let hasEdgeTTS = false;
 function checkEdgeTTS() {
@@ -217,7 +245,7 @@ async function generateTTS(text, filename, guildId) {
     console.warn(`⚠️ [SoVITS] 失敗 (${err.message})，切換至 edge-tts`);
   }
   if (!hasEdgeTTS) throw new Error('SoVITS 不可用且 edge-tts 未安裝');
-  const voice    = resolveVoice(text);
+  const voice    = resolveVoice(text, guildId);
   const edgeFile = filename.replace(/\.\w+$/, '_edge.mp3');
   await generateEdgeTTS(text, edgeFile, voice);
   console.log(`✅ [edge-tts] 生成成功: ${text.slice(0, 20)}...`);
@@ -227,7 +255,7 @@ async function generateTTS(text, filename, guildId) {
 function safeUnlink(f) { try { fs.unlinkSync(f); } catch {} }
 
 // ════════════════════════════════════════════════════════
-//  佇列處理（改用 audioManager.playTTSLayer）
+//  佇列處理
 // ════════════════════════════════════════════════════════
 async function processQueue(guildId) {
   const queue = ttsQueues.get(guildId);
@@ -302,8 +330,7 @@ function stopTTS(guildId) {
 }
 
 // ════════════════════════════════════════════════════════
-//  buildModelChoices — 從 TTS_MODELS 動態產生 choices 陣列
-//  Discord 限制：最多 25 個 choices，name/value 上限 100 字元
+//  buildModelChoices
 // ════════════════════════════════════════════════════════
 function buildModelChoices() {
   return Object.entries(TTS_MODELS)
@@ -330,11 +357,9 @@ function setupTTSCommands(client) {
     console.log(`✅ [DNS] 預解析完成: ${SOVITS_HOST} → ${ip}`);
   });
 
-  // ── 動態產生模型 choices ──────────────────────────────
   const modelChoices = buildModelChoices();
   const hasModels    = modelChoices.length > 0;
 
-  // ── 建構指令 Builder ─────────────────────────────────
   const builder = new SlashCommandBuilder()
     .setName('tts')
     .setDescription('GPT-SoVITS 語音合成功能')
@@ -356,26 +381,31 @@ function setupTTSCommands(client) {
         .setDescription('停止 TTS 並清空排隊')
     )
 
-    // /tts model — key 改為下拉選單
+    // /tts model
     .addSubcommand(sub => {
-      sub.setName('model').setDescription('切換 TTS 模型');
-
+      sub.setName('model').setDescription('切換 SoVITS TTS 模型');
       sub.addStringOption(o => {
         o.setName('key')
           .setDescription('選擇要切換的模型')
           .setRequired(true);
-
-        if (hasModels) {
-          o.addChoices(...modelChoices);
-        }
-
+        if (hasModels) o.addChoices(...modelChoices);
         return o;
       });
-
       return sub;
-    });
+    })
 
-  // ── 注入 client.commands ─────────────────────────────
+    // /tts edgevoice
+    .addSubcommand(sub =>
+      sub.setName('edgevoice')
+        .setDescription('切換 edge-tts fallback 聲音（SoVITS 離線時使用）')
+        .addStringOption(opt =>
+          opt.setName('voice')
+            .setDescription('選擇聲音')
+            .setRequired(true)
+            .addChoices(...EDGE_VOICE_CHOICES)
+        )
+    );
+
   client.commands.set('tts', {
     data: builder,
 
@@ -384,7 +414,10 @@ function setupTTSCommands(client) {
       const guildId = interaction.guildId;
 
       if (!guildId) {
-        return interaction.reply({ content: '❌ 此指令只能在伺服器中使用', ephemeral: true });
+        return interaction.reply({
+          content: '❌ 此指令只能在伺服器中使用',
+          flags: MessageFlags.Ephemeral,  // ✅
+        });
       }
 
       // ── /tts say ───────────────────────────────────────
@@ -394,13 +427,16 @@ function setupTTSCommands(client) {
         if (text.length > TTS_MAX_LENGTH) {
           return interaction.reply({
             content: `❌ 太長！上限 ${TTS_MAX_LENGTH} 字（目前 ${text.length} 字）`,
-            ephemeral: true
+            flags: MessageFlags.Ephemeral,  // ✅
           });
         }
 
         const connection = getVoiceConnection(guildId);
         if (!connection) {
-          return interaction.reply({ content: '❌ Bot 不在語音頻道！請先使用 `/join` 加入', ephemeral: true });
+          return interaction.reply({
+            content: '❌ Bot 不在語音頻道！請先使用 `/join` 加入',
+            flags: MessageFlags.Ephemeral,  // ✅
+          });
         }
 
         await interaction.deferReply();
@@ -427,7 +463,7 @@ function setupTTSCommands(client) {
         const stopped = stopTTS(guildId);
         await interaction.reply({
           content: stopped ? '⏹️ 已停止 TTS 並清空排隊' : '❌ 目前沒有 TTS 在播放',
-          ephemeral: !stopped
+          flags: stopped ? undefined : MessageFlags.Ephemeral,  // ✅
         });
       }
 
@@ -439,7 +475,7 @@ function setupTTSCommands(client) {
           const available = Object.keys(TTS_MODELS).map(k => `\`${k}\``).join(', ');
           return interaction.reply({
             content: `❌ 找不到模型 \`${key}\`\n可用：${available}`,
-            ephemeral: true
+            flags: MessageFlags.Ephemeral,  // ✅
           });
         }
 
@@ -455,10 +491,33 @@ function setupTTSCommands(client) {
           await interaction.editReply({ content: `❌ 切換失敗：${err.message}` });
         }
       }
+
+      // ── /tts edgevoice ─────────────────────────────────
+      else if (sub === 'edgevoice') {
+        if (!hasEdgeTTS) {
+          return interaction.reply({
+            content: '❌ edge-tts 未安裝，無法設定聲音',
+            flags: MessageFlags.Ephemeral,  // ✅
+          });
+        }
+
+        const voice      = interaction.options.getString('voice');
+        const voiceLabel = EDGE_VOICE_CHOICES.find(v => v.value === voice)?.name ?? voice;
+
+        activeEdgeVoices.set(guildId, voice);
+        console.log(`🎙️ [edge-tts][${guildId}] 切換聲音 → ${voice}`);
+
+        await interaction.reply({
+          content:
+            `✅ edge-tts 聲音已切換為 **${voiceLabel}**\n` +
+            `> \`${voice}\`\n` +
+            `> ⚠️ 此設定僅在 SoVITS 離線時的 fallback 生效`,
+        });
+      }
     }
   });
 
-  console.log('✅ TTS Slash Commands 已載入（/tts say / stop / model）');
+  console.log('✅ TTS Slash Commands 已載入（/tts say / stop / model / edgevoice）');
 }
 
 module.exports = { setupTTSCommands, playTTS, stopTTS };
