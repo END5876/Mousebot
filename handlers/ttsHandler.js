@@ -17,7 +17,7 @@ const ttsIsPlaying     = new Map();
 const activeModels     = new Map();
 const activeEdgeVoices = new Map();
 
-const TTS_MAX_LENGTH = 3000;
+const TTS_MAX_LENGTH = 1000;
 
 // ── SoVITS 連線設定 ──────────────────────────────────────
 const SOVITS_HOST = process.env.SOVITS_HOST || 'localhost';
