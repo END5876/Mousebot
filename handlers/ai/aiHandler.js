@@ -51,7 +51,6 @@ const slashCommands = [
             await interaction.deferReply();
 
             try {
-                // 處理自訂 Emoji（slash command 的 question 欄位也可能含 emoji）
                 const rawQuestion = interaction.options.getString('question');
                 const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
 
@@ -64,8 +63,8 @@ const slashCommands = [
                 const answer = await getGeminiResponse(userId, question, imageParts, interaction.channel, interaction.id, botId, null, mode);
                 const chunks = splitMessage(answer);
 
-                await interaction.editReply({ content: chunks[0] });
-                const replyMsg = await interaction.fetchReply();
+                // 優化：直接接收 editReply 的回傳值，移除不必要的 fetchReply()
+                const replyMsg = await interaction.editReply({ content: chunks[0] });
                 recordBotMessageContext(replyMsg.id, mode, userId, userName);
 
                 for (let i = 1; i < chunks.length; i++) {
@@ -107,7 +106,7 @@ const slashCommands = [
 
             const current = isAITTSEnabled(guildId);
             setAITTSEnabled(guildId, !current);
-            const status = !current ? '\U0001F50A 已開啟' : '\U0001F507 已關閉';
+            const status = !current ? '🔊 已開啟' : '🔇 已關閉';
             await interaction.reply({ content: `${status} AI 回覆朗讀功能` });
         }
     },
@@ -145,7 +144,6 @@ function setupAICommands(client) {
             try {
                 const mode = getUserMode(userId, rawQuestion || '圖片');
 
-                // 處理自訂 Emoji：取得清理後文字 + emoji 圖片
                 const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
                 const attachmentParts = await processAttachments(message.attachments);
                 const imageParts = [...emojiParts, ...attachmentParts];
@@ -181,7 +179,6 @@ function setupAICommands(client) {
 
             if (Math.random() < RANDOM_REPLY_CHANCE) {
                 try {
-                    // 處理自訂 Emoji：取得清理後文字 + emoji 圖片
                     const { cleanedText: cleanedContent, emojiParts } = await processCustomEmojis(rawCleaned);
                     const mode = getUserMode(userId, cleanedContent);
                     const attachmentParts = await processAttachments(message.attachments);

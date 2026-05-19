@@ -58,14 +58,19 @@ const GENERAL_TEXT_ADDON = `
 // ════════════════════════════════════════════════════════
 //  模式工具函式
 // ════════════════════════════════════════════════════════
+const promptCache = {};
+
 function getSystemPrompt(mode) {
+    if (promptCache[mode]) return promptCache[mode];
+
     const modeModule = MODE_MAP[mode];
     if (!modeModule) {
         console.error(`Unknown mode: ${mode}`);
         return lossMode.LOSS_MODE_PROMPT;
     }
     const promptKey = Object.keys(modeModule).find(key => key.endsWith('_PROMPT'));
-    return modeModule[promptKey];
+    promptCache[mode] = modeModule[promptKey];
+    return promptCache[mode];
 }
 
 function getUserMode(userId, message) {
@@ -77,10 +82,7 @@ function getUserMode(userId, message) {
 function getModel(mode, isVoice = false) {
     let systemPrompt = getSystemPrompt(mode);
     
-    // 加入全局的文字長度限制
     systemPrompt += GENERAL_TEXT_ADDON;
-    
-    // 如果是語音模式，再加入語音專屬的限制（會覆蓋前面的設定）
     if (isVoice) systemPrompt += VOICE_MODE_ADDON;
     
     return genAI.getGenerativeModel({
@@ -178,7 +180,14 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
         }
 
         let finalHistory = mergeConsecutiveRoles(history);
-        while (finalHistory.length > 0 && finalHistory[0].role === 'model') finalHistory.shift();
+        
+        // 優化：直接尋找第一個 user，避免多次 shift 造成效能浪費
+        const firstUserIndex = finalHistory.findIndex(msg => msg.role === 'user');
+        if (firstUserIndex > 0) {
+            finalHistory = finalHistory.slice(firstUserIndex);
+        } else if (firstUserIndex === -1) {
+            finalHistory = [];
+        }
 
         console.log(`[History] 載入 ${finalHistory.length} 筆對話紀錄`);
         return finalHistory;
@@ -215,13 +224,10 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
                 const { mode: refMode, userId: refTargetId, userName: refTargetName } = cachedContext;
 
                 if (refTargetId !== currentUserId) {
-                    // ✅ 跨用戶引用：明確告訴 AI 這是它自己對「別人」說的
                     refText = `> 引用你之前對別人（${refTargetName}）說的話：\n> 「${refContent}」\n\n`;
                 } else if (refMode !== currentMode) {
-                    // 同用戶但跨模式
                     refText = `> 引用你之前對他說的話：\n> 「${refContent}」\n\n`;
                 } else {
-                    // 完全相同情境
                     refText = `> 引用你之前的發言：\n> 「${refContent}」\n\n`;
                 }
             } else {
