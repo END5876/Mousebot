@@ -63,7 +63,6 @@ const slashCommands = [
                 const answer = await getGeminiResponse(userId, question, imageParts, interaction.channel, interaction.id, botId, null, mode);
                 const chunks = splitMessage(answer);
 
-                // 優化：直接接收 editReply 的回傳值，移除不必要的 fetchReply()
                 const replyMsg = await interaction.editReply({ content: chunks[0] });
                 recordBotMessageContext(replyMsg.id, mode, userId, userName);
 
@@ -135,10 +134,37 @@ function setupAICommands(client) {
         const messageId = message.id;
         const isMentioned = message.mentions.has(client.user);
 
+        // 忽略包含 mention 其他人（非機器人）的訊息 ──
+        const mentionedUsers = message.mentions.users;
+        const mentionedRoles = message.mentions.roles;
+        const hasOtherMention =
+            mentionedUsers.some(u => u.id !== botId) ||
+            mentionedRoles.size > 0;
+
+        if (hasOtherMention) return;
+
         // ── @ 提及 ──
         if (isMentioned) {
             const rawQuestion = content.replace(/<@!?\d+>/g, '').trim();
-            if (!rawQuestion && !hasAttachment) return;
+
+            // 只 mention 機器人、無內容也無附件 → 回應「怎麼了」類訊息 ──
+            if (!rawQuestion && !hasAttachment) {
+                if (!process.env.GEMINI_API_KEY) return;
+                try {
+                    const mode = getUserMode(userId, '');
+                    const greetPrompt = '使用者只 @ 了你，沒有說任何話。請根據你的人格設定，用 10 字以內回應「怎麼了」的意思。';
+                    const answer = await withTyping(message.channel, () =>
+                        getGeminiResponse(userId, greetPrompt, [], channel, messageId, botId, null, mode)
+                    );
+                    const sentMsg = await message.channel.send(answer);
+                    recordBotMessageContext(sentMsg.id, mode, userId, userName);
+                    await speakWithTTS(message, answer, guildId);
+                } catch (error) {
+                    console.error('Greet reply error:', error.message);
+                }
+                return;
+            }
+
             if (!process.env.GEMINI_API_KEY) return message.channel.send('❌ 未設定 API Key');
 
             try {
