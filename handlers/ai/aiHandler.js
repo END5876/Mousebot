@@ -100,7 +100,7 @@ async function handleMentionMessage(message, client, context) {
     if (!rawQuestion && !hasAttachment) {
         try {
             const mode = getUserMode(userId, '');
-            const greetPrompt = '使用者只 @ 了你，沒有說任何話。請根據你的人格設定，用 10 字以內回應「怎麼了」的意思。';
+            const greetPrompt = '使用者只 @ 了你，沒有說任何話。請用 10 字以內回應';
             const answer = await withTyping(channel, () => getGeminiResponse(userId, greetPrompt, [], channel, message.id, botId, null, mode));
             const sentMsg = await channel.send(answer);
             recordBotMessageContext(sentMsg.id, mode, userId, userName);
