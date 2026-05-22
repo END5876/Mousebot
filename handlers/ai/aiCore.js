@@ -13,6 +13,7 @@ const {
     historyCache, HISTORY_CACHE_TTL_MS,
     getMemoryClearTime, getBotMessageContext,
     processAttachments,
+    processImageUrls, // 🌟 新增引入這個
 } = require('./aiUtils');
 
 // ════════════════════════════════════════════════════════
@@ -237,11 +238,23 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
             refText = `> 引用 ${refAuthor} 的發言：\n> 「${refContent}」\n\n`;
         }
 
+        // 處理實體附件
         if (refMsg.attachments.size > 0) {
             const refImageParts = await processAttachments(refMsg.attachments);
             refImageParts.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } }));
             refText += refContent ? ' [附帶圖片]' : ' [一張圖片]';
         }
+
+        // 🌟 新增：解析引用訊息中的網址圖片
+        if (refContent) {
+            const refUrlImageParts = await processImageUrls(refContent);
+            refUrlImageParts.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } }));
+            // 如果有抓到網址圖片，且剛剛沒有實體附件，就補上提示文字
+            if (refUrlImageParts.length > 0 && refMsg.attachments.size === 0) {
+                refText += ' [附帶網址圖片]';
+            }
+        }
+
         parts.push({ text: refText });
     }
 
