@@ -56,7 +56,7 @@ function getBotMessageContext(messageId) {
 }
 
 // ════════════════════════════════════════════════════════
-//  圖片處理 (🌟 已加入 sharp 壓縮邏輯)
+//  圖片處理 (🌟 已加入靜態圖與 GIF 壓縮邏輯)
 // ════════════════════════════════════════════════════════
 async function fetchImageAsBase64(attachment) {
     const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
@@ -78,16 +78,20 @@ async function fetchImageAsBase64(attachment) {
         let buffer = Buffer.from(arrayBuffer);
         let finalMimeType = originalMimeType;
 
-        // 🌟 圖片壓縮邏輯：排除 GIF 以免破壞動圖結構
-        if (originalMimeType !== 'image/gif') {
+        if (originalMimeType === 'image/gif') {
+            // 🌟 GIF 專屬壓縮邏輯：保留動畫，但縮小解析度至最大 512x512
+            buffer = await sharp(buffer, { animated: true })
+                .resize({ width: 512, height: 512, fit: 'inside', withoutEnlargement: true })
+                .gif() 
+                .toBuffer();
+            finalMimeType = 'image/gif';
+        } else {
+            // 🌟 靜態圖片壓縮邏輯：最大 1024x1024，轉為 WebP (80% 畫質)
             buffer = await sharp(buffer)
-                // 限制最大長寬為 1024x1024，保持比例，且不放大原本就小的圖片
                 .resize({ width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true })
-                // 轉換為 webp 格式，品質設為 80 (平衡畫質與檔案大小)
                 .webp({ quality: 80 }) 
                 .toBuffer();
-            
-            finalMimeType = 'image/webp'; // 更新 MIME Type 為 webp
+            finalMimeType = 'image/webp';
         }
 
         const base64 = buffer.toString('base64');
