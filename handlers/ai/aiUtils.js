@@ -1,4 +1,5 @@
 const { playTTS } = require('../ttsHandler');
+const sharp = require('sharp'); // 🌟 引入 sharp 進行圖片壓縮
 
 // ════════════════════════════════════════════════════════
 //  設定常數
@@ -55,15 +56,15 @@ function getBotMessageContext(messageId) {
 }
 
 // ════════════════════════════════════════════════════════
-//  圖片處理
+//  圖片處理 (🌟 已加入 sharp 壓縮邏輯)
 // ════════════════════════════════════════════════════════
 async function fetchImageAsBase64(attachment) {
     const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
     if (attachment.size > sizeLimit) return null;
 
     const supportedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif', 'image/gif'];
-    const mimeType = attachment.contentType?.split(';')[0] || 'image/jpeg';
-    if (!supportedTypes.includes(mimeType)) return null;
+    const originalMimeType = attachment.contentType?.split(';')[0] || 'image/jpeg';
+    if (!supportedTypes.includes(originalMimeType)) return null;
 
     const cached = imageCache.get(attachment.url);
     if (cached && (Date.now() - cached.cachedAt) < IMAGE_CACHE_TTL_MS) {
@@ -73,13 +74,28 @@ async function fetchImageAsBase64(attachment) {
 
     try {
         const response = await fetch(attachment.url);
-        const buffer = await response.arrayBuffer();
-        const base64 = Buffer.from(buffer).toString('base64');
-        imageCache.set(attachment.url, { base64, mimeType, cachedAt: Date.now() });
-        console.log(`[Image] 已下載並快取：${attachment.url.slice(0, 60)}...`);
-        return { base64, mimeType };
+        const arrayBuffer = await response.arrayBuffer();
+        let buffer = Buffer.from(arrayBuffer);
+        let finalMimeType = originalMimeType;
+
+        // 🌟 圖片壓縮邏輯：排除 GIF 以免破壞動圖結構
+        if (originalMimeType !== 'image/gif') {
+            buffer = await sharp(buffer)
+                // 限制最大長寬為 1024x1024，保持比例，且不放大原本就小的圖片
+                .resize({ width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true })
+                // 轉換為 webp 格式，品質設為 80 (平衡畫質與檔案大小)
+                .webp({ quality: 80 }) 
+                .toBuffer();
+            
+            finalMimeType = 'image/webp'; // 更新 MIME Type 為 webp
+        }
+
+        const base64 = buffer.toString('base64');
+        imageCache.set(attachment.url, { base64, mimeType: finalMimeType, cachedAt: Date.now() });
+        console.log(`[Image] 已下載並壓縮快取：${attachment.url.slice(0, 60)}...`);
+        return { base64, mimeType: finalMimeType };
     } catch (err) {
-        console.error(`[Image] 下載圖片失敗：`, err.message);
+        console.error(`[Image] 下載或壓縮圖片失敗：`, err.message);
         return null;
     }
 }
