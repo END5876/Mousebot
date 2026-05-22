@@ -15,6 +15,7 @@ const {
     recordBotMessageContext,
     processAttachments,
     processCustomEmojis,
+    processImageUrls, // 🌟 引入新函數
     withTyping, speakWithTTS, splitMessage,
 } = require('./aiUtils');
 
@@ -53,12 +54,13 @@ const slashCommands = [
             try {
                 const rawQuestion = interaction.options.getString('question');
                 const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
+                const urlImageParts = await processImageUrls(question); // 🌟 解析網址圖片
 
                 let attachmentParts = [];
                 if (attachment)
                     attachmentParts = await processAttachments(new Map([[attachment.id, attachment]]));
 
-                const imageParts = [...emojiParts, ...attachmentParts];
+                const imageParts = [...emojiParts, ...urlImageParts, ...attachmentParts];
 
                 const answer = await getGeminiResponse(userId, question, imageParts, interaction.channel, interaction.id, botId, null, mode);
                 const chunks = splitMessage(answer);
@@ -124,7 +126,10 @@ function setupAICommands(client) {
 
         const hasAttachment = message.attachments.size > 0;
         const content = message.content?.trim() || '';
-        if (!content && !hasAttachment) return;
+        
+        // 🌟 修正：檢查是否包含圖片網址，排除括號與大於符號
+        const hasLikelyImageLink = /(https?:\/\/[^\s)\]>]+.*\.(png|jpg|jpeg|webp|heic|heif|gif)(\?.*)?)|(cdn\.discordapp\.com\/attachments\/)/i.test(content);
+        if (!content && !hasAttachment && !hasLikelyImageLink) return;
 
         const userId   = message.author.id;
         const userName = message.author.username;
@@ -147,8 +152,8 @@ function setupAICommands(client) {
         if (isMentioned) {
             const rawQuestion = content.replace(/<@!?\d+>/g, '').trim();
 
-            // 只 mention 機器人、無內容也無附件 → 回應「怎麼了」類訊息 ──
-            if (!rawQuestion && !hasAttachment) {
+            // 只 mention 機器人、無內容也無附件、無圖片網址 → 回應「怎麼了」類訊息 ──
+            if (!rawQuestion && !hasAttachment && !hasLikelyImageLink) {
                 if (!process.env.GEMINI_API_KEY) return;
                 try {
                     const mode = getUserMode(userId, '');
@@ -171,8 +176,9 @@ function setupAICommands(client) {
                 const mode = getUserMode(userId, rawQuestion || '圖片');
 
                 const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
+                const urlImageParts = await processImageUrls(question); // 🌟 解析網址圖片
                 const attachmentParts = await processAttachments(message.attachments);
-                const imageParts = [...emojiParts, ...attachmentParts];
+                const imageParts = [...emojiParts, ...urlImageParts, ...attachmentParts];
 
                 const answer = await withTyping(message.channel, () =>
                     getGeminiResponse(userId, question, imageParts, channel, messageId, botId, message, mode)
@@ -200,15 +206,21 @@ function setupAICommands(client) {
                 .trim();
 
             if (!rawCleaned && !hasAttachment) return;
-            if (/(https?:\/\/[^\s]+)|(www\.[^\s]+)/gi.test(rawCleaned)) return;
+            
+            // 🌟 修正：如果包含網址，檢查是否為圖片網址，若不是圖片網址則忽略（避免對一般連結隨機回覆）
+            if (/(https?:\/\/[^\s)\]>]+)|(www\.[^\s)\]>]+)/gi.test(rawCleaned)) {
+                if (!hasLikelyImageLink) return;
+            }
+            
             if (/^!(gugu|m|stt)/.test(rawCleaned)) return;
 
             if (Math.random() < RANDOM_REPLY_CHANCE) {
                 try {
                     const { cleanedText: cleanedContent, emojiParts } = await processCustomEmojis(rawCleaned);
+                    const urlImageParts = await processImageUrls(cleanedContent); // 🌟 解析網址圖片
                     const mode = getUserMode(userId, cleanedContent);
                     const attachmentParts = await processAttachments(message.attachments);
-                    const imageParts = [...emojiParts, ...attachmentParts];
+                    const imageParts = [...emojiParts, ...urlImageParts, ...attachmentParts];
 
                     const shortReply = await withTyping(message.channel, () =>
                         getShortResponse(userId, cleanedContent, imageParts, channel, messageId, botId, message, mode)

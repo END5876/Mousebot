@@ -4,7 +4,7 @@ const sharp = require('sharp'); // 🌟 引入 sharp 進行圖片壓縮
 // ════════════════════════════════════════════════════════
 //  設定常數
 // ════════════════════════════════════════════════════════
-const MAX_IMAGE_SIZE_MB = 7;
+const MAX_IMAGE_SIZE_MB = 30;
 const TTS_MAX_LENGTH = 1000;
 const IMAGE_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_MODE_CACHE_SIZE = 1000;
@@ -56,37 +56,39 @@ function getBotMessageContext(messageId) {
 }
 
 // ════════════════════════════════════════════════════════
-//  圖片處理 (🌟 已加入靜態圖與 GIF 壓縮邏輯)
+//  圖片處理 (🌟 支援網址解析與靜態圖/GIF 壓縮邏輯)
 // ════════════════════════════════════════════════════════
-async function fetchImageAsBase64(attachment) {
-    const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
-    if (attachment.size > sizeLimit) return null;
-
-    const supportedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif', 'image/gif'];
-    const originalMimeType = attachment.contentType?.split(';')[0] || 'image/jpeg';
-    if (!supportedTypes.includes(originalMimeType)) return null;
-
-    const cached = imageCache.get(attachment.url);
+async function fetchImageUrlAsBase64(url) {
+    const cached = imageCache.get(url);
     if (cached && (Date.now() - cached.cachedAt) < IMAGE_CACHE_TTL_MS) {
-        console.log(`[Image] 快取命中：${attachment.url.slice(0, 60)}...`);
+        console.log(`[Image] 快取命中：${url.slice(0, 60)}...`);
         return { base64: cached.base64, mimeType: cached.mimeType };
     }
 
     try {
-        const response = await fetch(attachment.url);
+        const response = await fetch(url);
+        if (!response.ok) return null;
+
+        const contentType = response.headers.get('content-type') || '';
+        const supportedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif', 'image/gif'];
+        const originalMimeType = contentType.split(';')[0] || 'image/jpeg';
+
+        if (!supportedTypes.includes(originalMimeType)) return null;
+
         const arrayBuffer = await response.arrayBuffer();
+        const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
+        if (arrayBuffer.byteLength > sizeLimit) return null;
+
         let buffer = Buffer.from(arrayBuffer);
         let finalMimeType = originalMimeType;
 
         if (originalMimeType === 'image/gif') {
-            // 🌟 GIF 專屬壓縮邏輯：保留動畫，但縮小解析度至最大 512x512
             buffer = await sharp(buffer, { animated: true })
                 .resize({ width: 512, height: 512, fit: 'inside', withoutEnlargement: true })
                 .gif() 
                 .toBuffer();
             finalMimeType = 'image/gif';
         } else {
-            // 🌟 靜態圖片壓縮邏輯：最大 1024x1024，轉為 WebP (80% 畫質)
             buffer = await sharp(buffer)
                 .resize({ width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true })
                 .webp({ quality: 80 }) 
@@ -95,13 +97,24 @@ async function fetchImageAsBase64(attachment) {
         }
 
         const base64 = buffer.toString('base64');
-        imageCache.set(attachment.url, { base64, mimeType: finalMimeType, cachedAt: Date.now() });
-        console.log(`[Image] 已下載並壓縮快取：${attachment.url.slice(0, 60)}...`);
+        imageCache.set(url, { base64, mimeType: finalMimeType, cachedAt: Date.now() });
+        console.log(`[Image] 已下載並壓縮快取：${url.slice(0, 60)}...`);
         return { base64, mimeType: finalMimeType };
     } catch (err) {
         console.error(`[Image] 下載或壓縮圖片失敗：`, err.message);
         return null;
     }
+}
+
+async function fetchImageAsBase64(attachment) {
+    const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
+    if (attachment.size && attachment.size > sizeLimit) return null;
+
+    const supportedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif', 'image/gif'];
+    const originalMimeType = attachment.contentType?.split(';')[0] || 'image/jpeg';
+    if (originalMimeType && !supportedTypes.includes(originalMimeType)) return null;
+
+    return await fetchImageUrlAsBase64(attachment.url);
 }
 
 async function processAttachments(attachments) {
@@ -110,6 +123,34 @@ async function processAttachments(attachments) {
     for (const [, attachment] of attachments) {
         const imgData = await fetchImageAsBase64(attachment);
         if (imgData) imageParts.push({ mimeType: imgData.mimeType, data: imgData.base64 });
+    }
+    return imageParts;
+}
+
+async function processImageUrls(content) {
+    if (!content) return [];
+    
+    // 🌟 修正：排除 Markdown 括號 )、] 以及 Discord 隱藏預覽的 >
+    const urlRegex = /(https?:\/\/[^\s)\]>]+)/g;
+    const urls = content.match(urlRegex) || [];
+    const imageParts = [];
+    const seen = new Set();
+    
+    for (const url of urls) {
+        if (seen.has(url)) continue;
+        seen.add(url);
+        
+        // 簡單判斷是否可能為圖片網址 (包含 Discord CDN 附件網址)
+        const isLikelyImage = /\.(png|jpg|jpeg|webp|heic|heif|gif)(?:\?.*)?$/i.test(url) || url.includes('cdn.discordapp.com/attachments/');
+        if (isLikelyImage) {
+            const imgData = await fetchImageUrlAsBase64(url);
+            if (imgData) {
+                imageParts.push({ mimeType: imgData.mimeType, data: imgData.base64 });
+            } else {
+                // 🌟 新增：如果下載失敗，偷偷塞一句話給 AI 知道
+                imageParts.push({ text: '[系統提示：使用者傳送的圖片網址無法讀取或檔案過大]' });
+            }
+        }
     }
     return imageParts;
 }
@@ -137,12 +178,6 @@ async function fetchAndCacheEmoji(url, mimeType, name, id) {
     }
 }
 
-/**
- * 從訊息內容中提取所有自訂 Emoji，下載為 base64 圖片
- * 同時將 <:name:id> / <a:name:id> 替換為 [name表情] 方便 Gemini 理解
- * @param {string} content - 訊息內容
- * @returns {{ cleanedText: string, emojiParts: Array<{ mimeType: string, data: string }> }}
- */
 async function processCustomEmojis(content) {
     if (!content) return { cleanedText: '', emojiParts: [] };
 
@@ -150,7 +185,6 @@ async function processCustomEmojis(content) {
     const seen = new Set();
     const promises = [];
 
-    // 一次性完成替換與資料收集
     const cleanedText = content.replace(/<(a?):(\w+):(\d+)>/g, (match, animated, name, id) => {
         if (!seen.has(id)) {
             seen.add(id);
@@ -162,7 +196,6 @@ async function processCustomEmojis(content) {
         return `[${name}表情]`;
     });
 
-    // 等待所有 emoji 下載完成
     const results = await Promise.all(promises);
     results.forEach(res => { if (res) emojiParts.push(res); });
 
@@ -269,5 +302,6 @@ module.exports = {
     recordBotMessageContext, getBotMessageContext,
     processAttachments,
     processCustomEmojis,
+    processImageUrls, // 🌟 匯出新函數
     withTyping, speakWithTTS, splitMessage,
 };
