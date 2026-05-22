@@ -106,7 +106,7 @@ async function getSteamFreeGames() {
       const resolvedUrl = await getFinalUrl(game.open_giveaway_url);
       const steamAppId = extractSteamAppId(resolvedUrl);
 
-      if (!steamAppId) console.warn(`⚠️ [SteamFree] 無法解析 Steam AppID：${game.title} → ${resolvedUrl}`);
+      // 已移除 console.warn，無法解析 Steam AppID 時直接忽略並使用原網址
 
       const steamUrl = steamAppId ? `https://store.steampowered.com/app/${steamAppId}/` : game.open_giveaway_url;
       const twInfo = await getSteamTWInfo(steamAppId);
