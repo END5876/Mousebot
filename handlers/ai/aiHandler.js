@@ -1,5 +1,11 @@
-const { SlashCommandBuilder } = require('discord.js');
-const { selectMode } = require('./modeSelector');
+const { SlashCommandBuilder, MessageFlags, PermissionFlagsBits } = require('discord.js');
+const {
+    selectMode,
+    getModeName,
+    setUserMode,
+    getUserModeOverride,
+    AVAILABLE_MODES,
+} = require('./modeSelector');
 
 const {
     MODE_MAP,
@@ -15,16 +21,18 @@ const {
     recordBotMessageContext,
     processAttachments,
     processCustomEmojis,
-    processImageUrls, // 🌟 引入新函數
+    processImageUrls,
     withTyping, speakWithTTS, splitMessage,
 } = require('./aiUtils');
 
 const RANDOM_REPLY_CHANCE = 0.15;
+const SETMODE_ALLOWED_USER_ID = '598054316510806017';
 
 // ════════════════════════════════════════════════════════
 //  Slash Command 定義
 // ════════════════════════════════════════════════════════
 const slashCommands = [
+
     // ── /ai ──
     {
         data: new SlashCommandBuilder()
@@ -39,14 +47,14 @@ const slashCommands = [
 
         async execute(interaction) {
             if (!process.env.GEMINI_API_KEY)
-                return interaction.reply({ content: '❌ 未設定 API Key', ephemeral: true });
+                return interaction.reply({ content: '❌ 未設定 API Key', flags: MessageFlags.Ephemeral });
 
-            const userId   = interaction.user.id;
-            const userName = interaction.user.username;
-            const guildId  = interaction.guildId;
-            const botId    = interaction.client.user.id;
+            const userId     = interaction.user.id;
+            const userName   = interaction.user.username;
+            const guildId    = interaction.guildId;
+            const botId      = interaction.client.user.id;
             const attachment = interaction.options.getAttachment('image');
-            const mode     = getUserMode(userId, interaction.options.getString('question'));
+            const mode       = getUserMode(userId, interaction.options.getString('question'));
             const modeModule = MODE_MAP[mode];
 
             await interaction.deferReply();
@@ -54,7 +62,7 @@ const slashCommands = [
             try {
                 const rawQuestion = interaction.options.getString('question');
                 const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
-                const urlImageParts = await processImageUrls(question); // 🌟 解析網址圖片
+                const urlImageParts = await processImageUrls(question);
 
                 let attachmentParts = [];
                 if (attachment)
@@ -103,7 +111,7 @@ const slashCommands = [
         async execute(interaction) {
             const guildId = interaction.guildId;
             if (!guildId)
-                return interaction.reply({ content: '❌ 此指令只能在伺服器中使用', ephemeral: true });
+                return interaction.reply({ content: '❌ 此指令只能在伺服器中使用', flags: MessageFlags.Ephemeral });
 
             const current = isAITTSEnabled(guildId);
             setAITTSEnabled(guildId, !current);
@@ -111,6 +119,64 @@ const slashCommands = [
             await interaction.reply({ content: `${status} AI 回覆朗讀功能` });
         }
     },
+
+    // ── /setmode ──
+    {
+        data: new SlashCommandBuilder()
+            .setName('setmode')
+            .setDescription('設定指定使用者的 AI 人格模式')
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+            .setDMPermission(false)
+            .addUserOption(opt =>
+                opt.setName('target')
+                    .setDescription('要設定的使用者（不填則設定自己）')
+                    .setRequired(false)
+            )
+            .addStringOption(opt =>
+                opt.setName('mode')
+                    .setDescription('模式名稱（不填則重置為預設）')
+                    .setRequired(false)
+            ),
+
+        async execute(interaction) {
+            if (interaction.user.id !== SETMODE_ALLOWED_USER_ID) {
+                return interaction.reply({
+                    content: '❌ 你沒有權限使用此指令。',
+                    flags: MessageFlags.Ephemeral,
+                });
+            }
+
+            const targetUser = interaction.options.getUser('target') ?? interaction.user;
+            const selected   = interaction.options.getString('mode')?.trim().toLowerCase() ?? null;
+            const targetId   = targetUser.id;
+
+            // 不填 → 重置
+            if (!selected) {
+                setUserMode(targetId, null);
+                const defaultMode = selectMode(targetId, '');
+                return interaction.reply({
+                    content: `🔄 已重置 **${targetUser.username}** 的模式為預設：**${getModeName(defaultMode)}**`,
+                    flags: MessageFlags.Ephemeral,
+                });
+            }
+
+            // 驗證是否為合法模式
+            const matched = AVAILABLE_MODES.find(m => m.toLowerCase() === selected);
+            if (!matched) {
+                return interaction.reply({
+                    content: `❌ 無效的模式名稱：\`${selected}\``,
+                    flags: MessageFlags.Ephemeral,
+                });
+            }
+
+            setUserMode(targetId, matched);
+            return interaction.reply({
+                content: `✅ 已將 **${targetUser.username}** 的 AI 模式設為：**${getModeName(matched)}**`,
+                flags: MessageFlags.Ephemeral,
+            });
+        }
+    },
+
 ];
 
 // ════════════════════════════════════════════════════════
@@ -126,20 +192,18 @@ function setupAICommands(client) {
 
         const hasAttachment = message.attachments.size > 0;
         const content = message.content?.trim() || '';
-        
-        // 🌟 修正：檢查是否包含圖片網址，排除括號與大於符號
-        const hasLikelyImageLink = /(https?:\/\/[^\s)\]>]+.*\.(png|jpg|jpeg|webp|heic|heif|gif)(\?.*)?)|(cdn\.discordapp\.com\/attachments\/)/i.test(content);
+
+        const hasLikelyImageLink = /(https?:\/\/[^\s)\]>]+.*\.(png|jpg|jpeg|webp|heic|heif|gif)(\?.*)?)|( cdn\.discordapp\.com\/attachments\/)/i.test(content);
         if (!content && !hasAttachment && !hasLikelyImageLink) return;
 
-        const userId   = message.author.id;
-        const userName = message.author.username;
-        const guildId  = message.guild?.id;
-        const botId    = client.user.id;
-        const channel  = message.channel;
+        const userId    = message.author.id;
+        const userName  = message.author.username;
+        const guildId   = message.guild?.id;
+        const botId     = client.user.id;
+        const channel   = message.channel;
         const messageId = message.id;
         const isMentioned = message.mentions.has(client.user);
 
-        // 忽略包含 mention 其他人（非機器人）的訊息 ──
         const mentionedUsers = message.mentions.users;
         const mentionedRoles = message.mentions.roles;
         const hasOtherMention =
@@ -152,7 +216,6 @@ function setupAICommands(client) {
         if (isMentioned) {
             const rawQuestion = content.replace(/<@!?\d+>/g, '').trim();
 
-            // 只 mention 機器人、無內容也無附件、無圖片網址 → 回應「怎麼了」類訊息 ──
             if (!rawQuestion && !hasAttachment && !hasLikelyImageLink) {
                 if (!process.env.GEMINI_API_KEY) return;
                 try {
@@ -176,7 +239,7 @@ function setupAICommands(client) {
                 const mode = getUserMode(userId, rawQuestion || '圖片');
 
                 const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
-                const urlImageParts = await processImageUrls(question); // 🌟 解析網址圖片
+                const urlImageParts = await processImageUrls(question);
                 const attachmentParts = await processAttachments(message.attachments);
                 const imageParts = [...emojiParts, ...urlImageParts, ...attachmentParts];
 
@@ -206,18 +269,17 @@ function setupAICommands(client) {
                 .trim();
 
             if (!rawCleaned && !hasAttachment) return;
-            
-            // 🌟 修正：如果包含網址，檢查是否為圖片網址，若不是圖片網址則忽略（避免對一般連結隨機回覆）
+
             if (/(https?:\/\/[^\s)\]>]+)|(www\.[^\s)\]>]+)/gi.test(rawCleaned)) {
                 if (!hasLikelyImageLink) return;
             }
-            
+
             if (/^!(gugu|m|stt)/.test(rawCleaned)) return;
 
             if (Math.random() < RANDOM_REPLY_CHANCE) {
                 try {
                     const { cleanedText: cleanedContent, emojiParts } = await processCustomEmojis(rawCleaned);
-                    const urlImageParts = await processImageUrls(cleanedContent); // 🌟 解析網址圖片
+                    const urlImageParts = await processImageUrls(cleanedContent);
                     const mode = getUserMode(userId, cleanedContent);
                     const attachmentParts = await processAttachments(message.attachments);
                     const imageParts = [...emojiParts, ...urlImageParts, ...attachmentParts];

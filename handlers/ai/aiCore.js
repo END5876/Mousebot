@@ -1,5 +1,5 @@
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
-const { GENERATION_CONFIG } = require('../../config/aiSettings');
+const { GENERATION_CONFIG } = require('./aiSettings');
 const { selectMode, getModeName } = require('./modeSelector');
 const developerMode = require('./modes/developerMode');
 const guguMode = require('./modes/gugugagaMode');
