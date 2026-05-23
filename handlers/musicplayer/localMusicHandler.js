@@ -17,7 +17,7 @@ const path = require('path');
 const { registerEngine, handleAutocomplete } = require('./unifiedQueue');
 
 // ── 音樂資料夾路徑 ────────────────────────────────────────
-const MUSIC_DIR = path.join(__dirname, '..', 'music');
+const MUSIC_DIR = path.join(__dirname, '..', '..', 'data', 'music');
 
 // ── 支援的音訊格式 ────────────────────────────────────────
 const SUPPORTED_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac'];
@@ -71,7 +71,7 @@ function walkFiles(dir) {
 function getMusicFiles() {
   try {
     if (!fs.existsSync(MUSIC_DIR)) {
-      console.warn('⚠️ music 資料夾不存在，嘗試建立...');
+      console.warn('⚠️ data/music 資料夾不存在，嘗試建立...');
       fs.mkdirSync(MUSIC_DIR, { recursive: true });
       return [];
     }
@@ -98,7 +98,7 @@ function getMusicFiles() {
         };
       });
   } catch (err) {
-    console.error('❌ 讀取 music 資料夾失敗:', err);
+    console.error('❌ 讀取 data/music 資料夾失敗:', err);
     return [];
   }
 }
@@ -170,13 +170,13 @@ function setupLocalMusicEngine(client) {
   client.commands.set('locallist', {
     data: new SlashCommandBuilder()
       .setName('locallist')
-      .setDescription('列出 music 資料夾內所有可播放的音訊檔案'),
+      .setDescription('列出 data/music 資料夾內所有可播放的音訊檔案'),
     async execute(interaction) {
       const musicFiles = getMusicFiles();
 
       if (musicFiles.length === 0) {
         return interaction.reply({
-          content: '❌ music 資料夾內沒有可播放的音訊檔案\n支援格式：`.mp3` `.wav` `.ogg` `.flac` `.m4a` `.aac`',
+          content: '❌ data/music 資料夾內沒有可播放的音訊檔案\n支援格式：`.mp3` `.wav` `.ogg` `.flac` `.m4a` `.aac`',
           flags: MessageFlags.Ephemeral,
         });
       }

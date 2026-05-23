@@ -1,7 +1,11 @@
 const { EmbedBuilder, SlashCommandBuilder } = require('discord.js');
-const { getRandom } = require('../config/settings');
 
 const SAY_AUTHORIZED_ID = process.env.SAY_AUTHORIZED_ID;
+
+// ── 原本在 settings.js 的 getRandom，直接內聯 ──────────
+function getRandom(max) {
+    return Math.floor(Math.random() * max) + 1;
+}
 
 function setupBasicCommands(client) {
 

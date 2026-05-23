@@ -11,8 +11,8 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  StringSelectMenuBuilder,       // ✅ 新增
-  StringSelectMenuOptionBuilder, // ✅ 新增
+  StringSelectMenuBuilder,       
+  StringSelectMenuOptionBuilder, 
 } = require('discord.js');
 
 // STT 相關

@@ -1,5 +1,4 @@
 node_modules/
 .env
 start.bat
-music/cache/
-steam_cache/
+data/music/

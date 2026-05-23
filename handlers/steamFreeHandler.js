@@ -10,11 +10,10 @@ const CHECK_INTERVAL_MS = 30 * 60 * 1000;
 const LOG_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 // ── 已通知過的 AppID 存檔設定 ────────────────────────────
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'steam_cache');
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const NOTIFIED_FILE = path.join(DATA_DIR, 'notifiedGames.json');
-let notifiedGames = new Map();
+const NOTIFIED_FILE = path.join(DATA_DIR, 'steamnotified.json');
 
 if (fs.existsSync(NOTIFIED_FILE)) {
   try {
@@ -58,11 +57,10 @@ async function fetchJson(url, retries = 3, delayMs = 3000) {
 // ── 取得最終落地 URL (利用 fetch 自動跟隨 Redirect) ────────
 async function getFinalUrl(url) {
   try {
-    // 使用 HEAD 請求節省頻寬，fetch 預設會 follow redirect
     const res = await fetch(url, { method: 'HEAD', headers: { 'User-Agent': 'MouseBot/1.0' } });
     return res.url;
   } catch {
-    return url; // 失敗則回傳原網址
+    return url;
   }
 }
 
@@ -105,8 +103,6 @@ async function getSteamFreeGames() {
     for (const game of freeGames) {
       const resolvedUrl = await getFinalUrl(game.open_giveaway_url);
       const steamAppId = extractSteamAppId(resolvedUrl);
-
-      // 已移除 console.warn，無法解析 Steam AppID 時直接忽略並使用原網址
 
       const steamUrl = steamAppId ? `https://store.steampowered.com/app/${steamAppId}/` : game.open_giveaway_url;
       const twInfo = await getSteamTWInfo(steamAppId);
@@ -182,7 +178,7 @@ function setupSteamFreeNotifier(client) {
 
         const displayGames = games.slice(0, MAX_GAMES_PER_REPLY);
         await interaction.editReply(`✅ 找到 **${games.length}** 款限免遊戲！${games.length > MAX_GAMES_PER_REPLY ? `（僅顯示前 ${MAX_GAMES_PER_REPLY} 款）` : ''}`);
-        
+
         for (const game of displayGames) await interaction.followUp(buildMessage(game));
       } catch (err) {
         console.error('⚠️ [SteamFree] /steamfree 指令執行失敗:', err.message);
