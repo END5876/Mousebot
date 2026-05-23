@@ -1,4 +1,4 @@
-const { EmbedBuilder, SlashCommandBuilder } = require('discord.js');
+const { EmbedBuilder, SlashCommandBuilder, MessageFlags } = require('discord.js');
 
 const SAY_AUTHORIZED_ID = process.env.SAY_AUTHORIZED_ID;
 
@@ -139,11 +139,17 @@ function setupBasicCommands(client) {
 
         async execute(interaction) {
             if (interaction.user.id !== SAY_AUTHORIZED_ID) {
-                return interaction.reply({ content: '別想操控我 爛咖👎', ephemeral: true });
+                return interaction.reply({
+                    content: '別想操控我 爛咖👎',
+                    flags: MessageFlags.Ephemeral
+                });
             }
 
             const sayText = interaction.options.getString('text');
-            await interaction.reply({ content: `✅ 已發送`, ephemeral: true });
+            await interaction.reply({
+                content: `✅ 已發送`,
+                flags: MessageFlags.Ephemeral
+            });
             await interaction.channel.send(sayText);
             console.log(`💬 Say 指令: ${sayText}`);
         }

@@ -10,6 +10,7 @@ const {
   ActionRowBuilder,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
+  MessageFlags,
 } = require('discord.js');
 
 // ─── 狀態管理 ───────────────────────────────────────────
@@ -195,7 +196,7 @@ function setupAutoJoinCommands(client) {
       await interaction.reply({
         content: '🤖 **自動加入管理** — 請從下方選單選擇操作：',
         components: [buildAutoJoinMenu()],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
   });
@@ -219,7 +220,7 @@ function setupAutoJoinCommands(client) {
           await joinTargetChannel(client);
           await interaction.update({
             content: '✅ 自動加入已 **開啟**，Bot 將自動待在語音頻道',
-            components: [buildAutoJoinMenu()], // 刷新選單顯示新狀態
+            components: [buildAutoJoinMenu()],
           });
         } else {
           stopAutoJoinCheck();
