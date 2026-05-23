@@ -127,10 +127,40 @@ async function processAttachments(attachments) {
     return imageParts;
 }
 
+// 🌟 新增：檢查是否包含缺少簽名的 Discord 網址
+function hasMissingSignature(content) {
+    if (!content) return false;
+    const urlRegex = /(https?:\/\/[^\s)\]>]+)/g;
+    const urls = content.match(urlRegex) || [];
+    for (const url of urls) {
+        if (url.includes('cdn.discordapp.com/attachments/')) {
+            const hasSig = url.includes('?ex=') && url.includes('&is=') && url.includes('&hm=');
+            if (!hasSig) return true;
+        }
+    }
+    return false;
+}
+
+// 🌟 新增：處理 Discord Embeds (預覽圖)
+async function processEmbeds(embeds) {
+    const imageParts = [];
+    if (!embeds || embeds.length === 0) return imageParts;
+
+    for (const embed of embeds) {
+        const imageUrl = embed.image?.proxyURL || embed.image?.url || embed.thumbnail?.proxyURL || embed.thumbnail?.url;
+        if (imageUrl) {
+            const imgData = await fetchImageUrlAsBase64(imageUrl);
+            if (imgData) {
+                imageParts.push({ type: 'image', mimeType: imgData.mimeType, data: imgData.base64 });
+            }
+        }
+    }
+    return imageParts;
+}
+
 async function processImageUrls(content) {
     if (!content) return [];
 
-    // 🌟 修正：排除 Markdown 括號 )、] 以及 Discord 隱藏預覽的 >
     const urlRegex = /(https?:\/\/[^\s)\]>]+)/g;
     const urls = content.match(urlRegex) || [];
     const imageParts = [];
@@ -140,17 +170,23 @@ async function processImageUrls(content) {
         if (seen.has(url)) continue;
         seen.add(url);
 
-        // 簡單判斷是否可能為圖片網址 (包含 Discord CDN 附件網址)
+        const isDiscordCDN = url.includes('cdn.discordapp.com/attachments/');
+        const hasSignature = url.includes('?ex=') && url.includes('&is=') && url.includes('&hm=');
+
         const isLikelyImage = /\.(png|jpg|jpeg|webp|heic|heif|gif)(?:\?.*)?$/i.test(url)
-            || url.includes('cdn.discordapp.com/attachments/');
+            || isDiscordCDN;
 
         if (isLikelyImage) {
+            // 🌟 如果是 Discord CDN 且沒有簽名，標記為 missing_signature 交給外部處理
+            if (isDiscordCDN && !hasSignature) {
+                imageParts.push({ type: 'missing_signature', url });
+                continue;
+            }
+
             const imgData = await fetchImageUrlAsBase64(url);
             if (imgData) {
-                // ✅ 成功：標記為圖片類型
                 imageParts.push({ type: 'image', mimeType: imgData.mimeType, data: imgData.base64 });
             } else {
-                // ✅ 失敗：標記為文字類型，避免混入 inlineData 造成 API 400 錯誤
                 imageParts.push({ type: 'text', text: '[系統提示：使用者傳送的圖片網址無法讀取或檔案過大]' });
             }
         }
@@ -305,6 +341,8 @@ module.exports = {
     recordBotMessageContext, getBotMessageContext,
     processAttachments,
     processCustomEmojis,
-    processImageUrls, // 🌟 匯出新函數
+    processImageUrls,
+    processEmbeds,       // 🌟 匯出
+    hasMissingSignature, // 🌟 匯出
     withTyping, speakWithTTS, splitMessage,
 };

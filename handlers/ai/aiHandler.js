@@ -22,6 +22,8 @@ const {
     processAttachments,
     processCustomEmojis,
     processImageUrls,
+    processEmbeds,       // 🌟 新增引入
+    hasMissingSignature, // 🌟 新增引入
     withTyping, speakWithTTS, splitMessage,
 } = require('./aiUtils');
 
@@ -62,7 +64,18 @@ const slashCommands = [
             try {
                 const rawQuestion = interaction.options.getString('question');
                 const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
-                const urlImageParts = await processImageUrls(question);
+                
+                // 🌟 處理斜線指令中的網址 (斜線指令沒有 Embeds，直接給予錯誤提示)
+                const urlImagePartsRaw = await processImageUrls(question);
+                const urlImageParts = urlImagePartsRaw.map(part => {
+                    if (part.type === 'missing_signature') {
+                        return {
+                            type: 'text',
+                            text: '[系統提示：使用者傳送的 Discord 圖片網址缺少了安全簽名參數(?ex=...&is=...)，導致權限不足無法讀取。請直接吐槽使用者複製連結時把後面的參數弄丟了，叫他重新上傳圖片或給完整的連結。]'
+                        };
+                    }
+                    return part;
+                });
 
                 let attachmentParts = [];
                 if (attachment)
@@ -220,7 +233,7 @@ function setupAICommands(client) {
                 if (!process.env.GEMINI_API_KEY) return;
                 try {
                     const mode = getUserMode(userId, '');
-                    const greetPrompt = '使用者只 @ 了你，沒有說任何話。請根據你的人格設定，用 10 字以內回應「怎麼了」的意思。';
+                    const greetPrompt = '使用者只 @ 了你，沒有說任何話。用 10 字以內回應。';
                     const answer = await withTyping(message.channel, () =>
                         getGeminiResponse(userId, greetPrompt, [], channel, messageId, botId, null, mode)
                     );
@@ -239,9 +252,33 @@ function setupAICommands(client) {
                 const mode = getUserMode(userId, rawQuestion || '圖片');
 
                 const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
-                const urlImageParts = await processImageUrls(question);
+                
+                // 🌟 處理 Embeds 與 URL
+                const embedParts = await processEmbeds(message.embeds);
+                const urlImagePartsRaw = await processImageUrls(question);
+                
+                const urlImageParts = [];
+                for (const part of urlImagePartsRaw) {
+                    if (part.type === 'missing_signature') {
+                        if (embedParts.length > 0) {
+                            // Embed 成功抓到圖，忽略此錯誤
+                            continue;
+                        } else {
+                            // Embed 也沒抓到，給予精準錯誤提示
+                            urlImageParts.push({
+                                type: 'text',
+                                text: '[系統提示：使用者傳送的 Discord 圖片網址缺少了安全簽名參數(?ex=...&is=...)，導致權限不足無法讀取。請直接吐槽使用者複製連結時把後面的參數弄丟了，叫他重新上傳圖片或給完整的連結。]'
+                            });
+                        }
+                    } else {
+                        urlImageParts.push(part);
+                    }
+                }
+
                 const attachmentParts = await processAttachments(message.attachments);
-                const imageParts = [...emojiParts, ...urlImageParts, ...attachmentParts];
+                
+                // 將所有圖片來源合併 (包含 Embeds)
+                const imageParts = [...emojiParts, ...urlImageParts, ...embedParts, ...attachmentParts];
 
                 const answer = await withTyping(message.channel, () =>
                     getGeminiResponse(userId, question, imageParts, channel, messageId, botId, message, mode)
@@ -267,6 +304,12 @@ function setupAICommands(client) {
                 .replace(/<@&\d+>/g, '')
                 .replace(/<#\d+>/g, '')
                 .trim();
+
+            // 🌟 1. 如果收到的是缺少安全簽名的，隨機回覆直接過濾掉
+            if (hasMissingSignature(rawCleaned)) {
+                console.log(`[Random Reply] 偵測到缺少簽名的 Discord 網址，已過濾隨機回覆。`);
+                return;
+            }
 
             if (!rawCleaned && !hasAttachment) return;
 
