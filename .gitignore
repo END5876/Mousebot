@@ -1,4 +1,4 @@
 node_modules/
 .env
 start.bat
-data/music/
+data/
