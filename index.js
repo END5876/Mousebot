@@ -1,14 +1,14 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, REST, Routes, Collection } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, Collection, MessageFlags } = require('discord.js');
 
 // ── 導入所有處理器 ─────────────────────────────────────────
-const { setupVoiceCommands }    = require('./handlers/voiceHandler');
-const { setupBasicCommands }    = require('./handlers/commandHandler');
-const { setupCustomResponses }  = require('./handlers/responseHandler');
-const { setupAICommands }       = require('./handlers/ai/aiHandler');
-const { setupGuguGenerator }    = require('./handlers/ai/gugugagaGenerator');
-const { setupAutoJoinCommands } = require('./handlers/autoJoinHandler');
-const { setupTTSCommands }      = require('./handlers/ttsHandler');
+const { setupVoiceCommands }     = require('./handlers/voiceHandler');
+const { setupBasicCommands }     = require('./handlers/commandHandler');
+const { setupCustomResponses }   = require('./handlers/responseHandler');
+const { setupAICommands }        = require('./handlers/ai/aiHandler');
+const { setupGuguGenerator }     = require('./handlers/ai/gugugagaGenerator');
+const { setupAutoJoinCommands }  = require('./handlers/autoJoinHandler');
+const { setupTTSCommands }       = require('./handlers/ttsHandler');
 const { setupSteamFreeNotifier } = require('./handlers/steamFreeHandler');
 
 // ── 重構後的音樂模組 ───────────────────────────────────────
@@ -69,7 +69,10 @@ client.on('interactionCreate', async interaction => {
     await command.execute(interaction, client);
   } catch (error) {
     console.error(`❌ 執行指令 /${interaction.commandName} 時發生錯誤：`, error);
-    const reply = { content: '❌ 執行指令時發生錯誤，請稍後再試。', ephemeral: true };
+    const reply = {
+      content: '❌ 執行指令時發生錯誤，請稍後再試。',
+      flags: MessageFlags.Ephemeral,
+    };
     if (interaction.replied || interaction.deferred) {
       await interaction.followUp(reply);
     } else {

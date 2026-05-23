@@ -11,8 +11,9 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  StringSelectMenuBuilder,       
-  StringSelectMenuOptionBuilder, 
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
+  MessageFlags,
 } = require('discord.js');
 
 // STT 相關
@@ -46,8 +47,8 @@ const HEYJQN_USER_COOLDOWN_MS = parseInt(process.env.HEYJQN_USER_COOLDOWN_MS || 
 const HEYJQN_BTN_TTL_MS       = parseInt(process.env.HEYJQN_BTN_TTL_MS || String(15 * 60 * 1000), 10);
 
 // interactionCreate 防重複註冊
-let heyjqnBound   = false;
-let silenceMenuBound = false; // ✅ 新增
+let heyjqnBound      = false;
+let silenceMenuBound = false;
 
 // ── heyjqn 按鈕工具 ───────────────────────────────────────
 function buildHeyJqnButton(guildId, disabled = false) {
@@ -62,14 +63,13 @@ function buildHeyJqnButton(guildId, disabled = false) {
 }
 
 function parseHeyJqnCustomId(customId) {
-  // heyjqn_record:guildId:timestamp
   const [prefix, gid, ts] = customId.split(':');
   return { prefix, gid, ts: Number(ts || 0) };
 }
 
 // ── /silence 選單工具 ─────────────────────────────────────
 function buildSilenceMenu(guildId) {
-  const isSilence = getActiveLayer(guildId) === 'silence';
+  const isSilence  = getActiveLayer(guildId) === 'silence';
   const hasPending = silenceTimers.has(guildId);
 
   return new ActionRowBuilder().addComponents(
@@ -113,7 +113,10 @@ function setupVoiceCommands(client) {
       const voiceChannel = interaction.member?.voice?.channel;
 
       if (!voiceChannel) {
-        return interaction.reply({ content: '你要我去哪？', ephemeral: true });
+        return interaction.reply({
+          content: '你要我去哪？',
+          flags: MessageFlags.Ephemeral
+        });
       }
 
       try {
@@ -158,7 +161,10 @@ function setupVoiceCommands(client) {
 
       } catch (error) {
         console.error('加入語音頻道時發生錯誤：', error);
-        await interaction.reply({ content: '❌ 加入語音頻道時發生錯誤', ephemeral: true });
+        await interaction.reply({
+          content: '❌ 加入語音頻道時發生錯誤',
+          flags: MessageFlags.Ephemeral
+        });
       }
     }
   });
@@ -174,7 +180,10 @@ function setupVoiceCommands(client) {
       const connection = getVoiceConnection(guildId);
 
       if (!connection) {
-        return interaction.reply({ content: '你要我離開哪？Bot 目前不在語音頻道中', ephemeral: true });
+        return interaction.reply({
+          content: '你要我離開哪？Bot 目前不在語音頻道中',
+          flags: MessageFlags.Ephemeral
+        });
       }
 
       cleanupGuild(guildId);
@@ -212,7 +221,10 @@ function setupVoiceCommands(client) {
       const connection = getVoiceConnection(guildId);
 
       if (!connection) {
-        return interaction.reply({ content: '📢 Bot 目前不在任何語音頻道中', ephemeral: true });
+        return interaction.reply({
+          content: '📢 Bot 目前不在任何語音頻道中',
+          flags: MessageFlags.Ephemeral
+        });
       }
 
       const channel     = interaction.guild.channels.cache.get(connection.joinConfig.channelId);
@@ -233,7 +245,7 @@ function setupVoiceCommands(client) {
             { name: '頻道名稱', value: channel?.name || '未知', inline: true },
             { name: '連接狀態', value: connection.state.status, inline: true },
             { name: '頻道成員', value: `${channel?.members.size || 0} 人`, inline: true },
-            { name: '音頻層', value: layerText, inline: true },
+            { name: '音頻層',   value: layerText, inline: true },
             { name: 'STT 狀態', value: isSttActive ? '🎙️ 監聽中' : '⏸️ 未啟用', inline: true }
           )
           .setTimestamp()
@@ -261,11 +273,17 @@ function setupVoiceCommands(client) {
         const connection = getVoiceConnection(guildId);
 
         if (!connection) {
-          return interaction.reply({ content: '❌ Bot 尚未加入語音頻道，請先使用 `/join`', ephemeral: true });
+          return interaction.reply({
+            content: '❌ Bot 尚未加入語音頻道，請先使用 `/join`',
+            flags: MessageFlags.Ephemeral
+          });
         }
 
         if (sttActiveGuilds.has(guildId)) {
-          return interaction.reply({ content: '🎙️ STT 語音辨識已經在運行中', ephemeral: true });
+          return interaction.reply({
+            content: '🎙️ STT 語音辨識已經在運行中',
+            flags: MessageFlags.Ephemeral
+          });
         }
 
         const sttTextChannel = interaction.guild.channels.cache.find(
@@ -299,9 +317,13 @@ function setupVoiceCommands(client) {
         await interaction.reply(
           `🎙️ STT 語音辨識已啟動！\n📝 轉錄結果將發送至 ${targetChannelName}\n🗣️ 說 **hey機器鳥** 來呼叫我`
         );
+
       } else if (sub === 'stop') {
         if (!sttActiveGuilds.has(guildId)) {
-          return interaction.reply({ content: '❌ STT 語音辨識目前未在運行', ephemeral: true });
+          return interaction.reply({
+            content: '❌ STT 語音辨識目前未在運行',
+            flags: MessageFlags.Ephemeral
+          });
         }
 
         stopSTTListening(guildId);
@@ -323,7 +345,10 @@ function setupVoiceCommands(client) {
       const connection = getVoiceConnection(guildId);
 
       if (!connection) {
-        return interaction.reply({ content: '❌ Bot 尚未加入語音頻道，請先使用 `/join`', ephemeral: true });
+        return interaction.reply({
+          content: '❌ Bot 尚未加入語音頻道，請先使用 `/join`',
+          flags: MessageFlags.Ephemeral
+        });
       }
 
       ensureManualSession(connection, interaction.guild, interaction.channel, async (userId, member, text, channel) => {
@@ -355,7 +380,7 @@ function setupVoiceCommands(client) {
       if (!connection) {
         return interaction.reply({
           content: '❌ Bot 必須先加入語音頻道才能使用靜音功能，請先使用 `/join`',
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -369,7 +394,7 @@ function setupVoiceCommands(client) {
       await interaction.reply({
         content: `🔇 **靜音防踢管理**\n目前音頻層：**${layerText}**\n\n請從下方選單選擇操作：`,
         components: [buildSilenceMenu(guildId)],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
   });
@@ -428,7 +453,6 @@ function setupVoiceCommands(client) {
           return interaction.update({ content: '❌ Bot 不在語音頻道，請先使用 `/join`', components: [] });
         }
 
-        // 重設計時器（若已存在則覆蓋）
         if (silenceTimers.has(guildId)) {
           clearTimeout(silenceTimers.get(guildId));
         }
@@ -464,31 +488,46 @@ function setupVoiceCommands(client) {
       const connection = getVoiceConnection(guildId);
 
       if (!connection) {
-        return interaction.reply({ content: '❌ Bot 不在語音頻道，請先 `/join`', ephemeral: true });
+        return interaction.reply({
+          content: '❌ Bot 不在語音頻道，請先 `/join`',
+          flags: MessageFlags.Ephemeral
+        });
       }
 
       if (!interaction.member?.voice?.channel) {
-        return interaction.reply({ content: '❌ 你必須先在語音頻道內', ephemeral: true });
+        return interaction.reply({
+          content: '❌ 你必須先在語音頻道內',
+          flags: MessageFlags.Ephemeral
+        });
       }
 
       // TTL 檢查
       const { ts } = parseHeyJqnCustomId(interaction.customId);
       if (ts > 0 && Date.now() - ts > HEYJQN_BTN_TTL_MS) {
-        return interaction.reply({ content: '⌛ 這顆按鈕已過期，請重新使用 `/heyjqn`', ephemeral: true });
+        return interaction.reply({
+          content: '⌛ 這顆按鈕已過期，請重新使用 `/heyjqn`',
+          flags: MessageFlags.Ephemeral
+        });
       }
 
       // user cooldown
-      const cdKey      = `${guildId}:${userId}`;
-      const now        = Date.now();
+      const cdKey       = `${guildId}:${userId}`;
+      const now         = Date.now();
       const availableAt = manualUserCooldown.get(cdKey) || 0;
       if (now < availableAt) {
         const left = ((availableAt - now) / 1000).toFixed(1);
-        return interaction.reply({ content: `⏳ 請 ${left}s 後再試`, ephemeral: true });
+        return interaction.reply({
+          content: `⏳ 請 ${left}s 後再試`,
+          flags: MessageFlags.Ephemeral
+        });
       }
 
       // guild lock
       if (manualGuildLocks.get(guildId)) {
-        return interaction.reply({ content: '🎙️ 目前有人在錄音，請稍候', ephemeral: true });
+        return interaction.reply({
+          content: '🎙️ 目前有人在錄音，請稍候',
+          flags: MessageFlags.Ephemeral
+        });
       }
 
       manualGuildLocks.set(guildId, true);
@@ -508,7 +547,10 @@ function setupVoiceCommands(client) {
         });
         updatedMainMessage = true;
 
-        await interaction.followUp({ content: '🎤 已開始錄音，請說話', ephemeral: true });
+        await interaction.followUp({
+          content: '🎤 已開始錄音，請說話',
+          flags: MessageFlags.Ephemeral
+        });
 
         // 2) 確保手動 Session
         ensureManualSession(connection, interaction.guild, interaction.channel, async (uid, member, text, channel) => {
@@ -525,7 +567,10 @@ function setupVoiceCommands(client) {
 
       } catch (err) {
         console.error('[heyjqn] 按鈕流程錯誤:', err);
-        await interaction.followUp({ content: `❌ 手動錄音失敗：${err.message}`, ephemeral: true }).catch(() => {});
+        await interaction.followUp({
+          content: `❌ 手動錄音失敗：${err.message}`,
+          flags: MessageFlags.Ephemeral
+        }).catch(() => {});
       } finally {
         manualGuildLocks.delete(guildId);
 

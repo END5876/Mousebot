@@ -416,7 +416,7 @@ function setupTTSCommands(client) {
       if (!guildId) {
         return interaction.reply({
           content: '❌ 此指令只能在伺服器中使用',
-          flags: MessageFlags.Ephemeral,  // ✅
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -427,7 +427,7 @@ function setupTTSCommands(client) {
         if (text.length > TTS_MAX_LENGTH) {
           return interaction.reply({
             content: `❌ 太長！上限 ${TTS_MAX_LENGTH} 字（目前 ${text.length} 字）`,
-            flags: MessageFlags.Ephemeral,  // ✅
+            flags: MessageFlags.Ephemeral,
           });
         }
 
@@ -435,7 +435,7 @@ function setupTTSCommands(client) {
         if (!connection) {
           return interaction.reply({
             content: '❌ Bot 不在語音頻道！請先使用 `/join` 加入',
-            flags: MessageFlags.Ephemeral,  // ✅
+            flags: MessageFlags.Ephemeral,
           });
         }
 
@@ -463,7 +463,7 @@ function setupTTSCommands(client) {
         const stopped = stopTTS(guildId);
         await interaction.reply({
           content: stopped ? '⏹️ 已停止 TTS 並清空排隊' : '❌ 目前沒有 TTS 在播放',
-          flags: stopped ? undefined : MessageFlags.Ephemeral,  // ✅
+          flags: stopped ? undefined : MessageFlags.Ephemeral,
         });
       }
 
@@ -475,7 +475,7 @@ function setupTTSCommands(client) {
           const available = Object.keys(TTS_MODELS).map(k => `\`${k}\``).join(', ');
           return interaction.reply({
             content: `❌ 找不到模型 \`${key}\`\n可用：${available}`,
-            flags: MessageFlags.Ephemeral,  // ✅
+            flags: MessageFlags.Ephemeral,
           });
         }
 
@@ -497,7 +497,7 @@ function setupTTSCommands(client) {
         if (!hasEdgeTTS) {
           return interaction.reply({
             content: '❌ edge-tts 未安裝，無法設定聲音',
-            flags: MessageFlags.Ephemeral,  // ✅
+            flags: MessageFlags.Ephemeral, 
           });
         }
 
