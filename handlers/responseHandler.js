@@ -1,4 +1,4 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const fs   = require('fs');
 const path = require('path');
 
@@ -102,7 +102,7 @@ function setupCustomResponses(client) {
         .setName('keyword')
         .setDescription('要刪除的關鍵字（輸入可篩選）')
         .setRequired(true)
-        .setAutocomplete(true)   // ← 改這裡
+        .setAutocomplete(true)
       )
     )
 
@@ -154,7 +154,7 @@ function setupCustomResponses(client) {
         if (!isAllowed(interaction.user.id)) {
           return interaction.reply({
             content: '❌ 你沒有權限使用此指令。',
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
           });
         }
       }
@@ -184,7 +184,7 @@ function setupCustomResponses(client) {
             `> 關鍵字：\`${keyword}\``,
             `> 回應：\n${preview}`
           ].join('\n'),
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -196,7 +196,7 @@ function setupCustomResponses(client) {
         if (!(keyword in responses[type])) {
           return interaction.reply({
             content: `❌ 找不到 **${type}** 中的關鍵字：\`${keyword}\``,
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
           });
         }
 
@@ -205,7 +205,7 @@ function setupCustomResponses(client) {
 
         return interaction.reply({
           content: `🗑️ 已刪除 **${type}** 規則：\`${keyword}\``,
-          ephemeral: true
+          flags: MessageFlags.Ephemeral
         });
       }
 
@@ -238,7 +238,10 @@ function setupCustomResponses(client) {
           content = content.slice(0, 1900) + '\n\n*...內容過長，已截斷*';
         }
 
-        return interaction.reply({ content, ephemeral: true });
+        return interaction.reply({
+          content,
+          flags: MessageFlags.Ephemeral
+        });
       }
     }
   });
