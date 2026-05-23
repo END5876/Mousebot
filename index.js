@@ -1,6 +1,5 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, REST, Routes, Collection } = require('discord.js');
-const { customResponses } = require('./config/settings');
 
 // ── 導入所有處理器 ─────────────────────────────────────────
 const { setupVoiceCommands }    = require('./handlers/voiceHandler');
@@ -43,6 +42,21 @@ setupSteamFreeNotifier(client);
 
 // ── Slash Command 互動處理 ─────────────────────────────────
 client.on('interactionCreate', async interaction => {
+
+  // ── Autocomplete（必須在最上面）────────────────────────
+  if (interaction.isAutocomplete()) {
+    const command = client.commands.get(interaction.commandName);
+    if (command?.autocomplete) {
+      try {
+        await command.autocomplete(interaction);
+      } catch (err) {
+        console.error('❌ Autocomplete 錯誤：', err);
+      }
+    }
+    return;
+  }
+
+  // ── Slash Command ───────────────────────────────────────
   if (!interaction.isChatInputCommand()) return;
 
   const command = client.commands.get(interaction.commandName);
@@ -85,8 +99,6 @@ async function registerSlashCommands() {
 client.once('clientReady', async () => {
   console.log(`✅ Bot 已登入為 ${client.user.tag}`);
   console.log(`📊 已加入 ${client.guilds.cache.size} 個伺服器`);
-  console.log(`🎯 已載入 ${Object.keys(customResponses.exact).length} 個完全匹配回應`);
-  console.log(`🔍 已載入 ${Object.keys(customResponses.contains).length} 個包含匹配回應`);
   console.log(`🤖 AI 功能已啟用 (Gemini API)`);
 
   // ── 音樂引擎初始化（需 async，在 ready 後執行）──────────
