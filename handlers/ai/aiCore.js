@@ -13,7 +13,7 @@ const {
     historyCache, HISTORY_CACHE_TTL_MS,
     getMemoryClearTime, getBotMessageContext,
     processAttachments,
-    processImageUrls, // 🌟 新增引入這個
+    processImageUrls,
 } = require('./aiUtils');
 
 // ════════════════════════════════════════════════════════
@@ -57,6 +57,30 @@ const GENERAL_TEXT_ADDON = `
 `;
 
 // ════════════════════════════════════════════════════════
+//  工具函式：將 imageParts 陣列轉換為 Gemini API 格式
+// ════════════════════════════════════════════════════════
+/**
+ * 將 processImageUrls() 回傳的統一格式（含 type 欄位）
+ * 或 processAttachments() / emojiParts 回傳的舊格式（含 mimeType + data）
+ * 統一轉換為 Gemini API 所需的 part 格式。
+ */
+function toGeminiPart(part) {
+    // processImageUrls() 回傳的新格式
+    if (part.type === 'text') {
+        return { text: part.text };
+    }
+    if (part.type === 'image') {
+        return { inlineData: { mimeType: part.mimeType, data: part.data } };
+    }
+    // processAttachments() / emojiParts 回傳的舊格式（含 mimeType + data，無 type）
+    if (part.mimeType && part.data) {
+        return { inlineData: { mimeType: part.mimeType, data: part.data } };
+    }
+    // 其他情況（保險用）
+    return null;
+}
+
+// ════════════════════════════════════════════════════════
 //  模式工具函式
 // ════════════════════════════════════════════════════════
 const promptCache = {};
@@ -82,18 +106,18 @@ function getUserMode(userId, message) {
 
 function getModel(mode, isVoice = false) {
     let systemPrompt = getSystemPrompt(mode);
-    
+
     systemPrompt += GENERAL_TEXT_ADDON;
     if (isVoice) systemPrompt += VOICE_MODE_ADDON;
-    
+
     return genAI.getGenerativeModel({
         model: MODEL_NAME,
         systemInstruction: systemPrompt,
         safetySettings: [
-            { category: HarmCategory.HARM_CATEGORY_HARASSMENT,         threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,        threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,  threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,  threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
         ]
     });
 }
@@ -181,8 +205,7 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
         }
 
         let finalHistory = mergeConsecutiveRoles(history);
-        
-        // 優化：直接尋找第一個 user，避免多次 shift 造成效能浪費
+
         const firstUserIndex = finalHistory.findIndex(msg => msg.role === 'user');
         if (firstUserIndex > 0) {
             finalHistory = finalHistory.slice(firstUserIndex);
@@ -241,16 +264,20 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
         // 處理實體附件
         if (refMsg.attachments.size > 0) {
             const refImageParts = await processAttachments(refMsg.attachments);
-            refImageParts.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } }));
+            refImageParts.forEach(img =>
+                parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } })
+            );
             refText += refContent ? ' [附帶圖片]' : ' [一張圖片]';
         }
 
-        // 🌟 新增：解析引用訊息中的網址圖片
+        // ✅ 修正：解析引用訊息中的網址圖片，依 type 分流處理
         if (refContent) {
             const refUrlImageParts = await processImageUrls(refContent);
-            refUrlImageParts.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } }));
-            // 如果有抓到網址圖片，且剛剛沒有實體附件，就補上提示文字
-            if (refUrlImageParts.length > 0 && refMsg.attachments.size === 0) {
+            refUrlImageParts.forEach(part => {
+                const geminiPart = toGeminiPart(part);
+                if (geminiPart) parts.push(geminiPart);
+            });
+            if (refUrlImageParts.some(p => p.type === 'image') && refMsg.attachments.size === 0) {
                 refText += ' [附帶網址圖片]';
             }
         }
@@ -258,7 +285,12 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
         parts.push({ text: refText });
     }
 
-    imageParts.forEach(img => parts.push({ inlineData: img }));
+    // ✅ 修正：imageParts 依 type 分流處理
+    imageParts.forEach(part => {
+        const geminiPart = toGeminiPart(part);
+        if (geminiPart) parts.push(geminiPart);
+    });
+
     if (question) {
         parts.push({ text: question });
     }
@@ -274,9 +306,15 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
         const model = getModel(mode);
         const history = channel ? await fetchUserChannelHistory(channel, userId, messageId, botId) : [];
         const chat = model.startChat({ history, generationConfig: GENERATION_CONFIG });
+
         const messageParts = message
             ? await buildMessagePartsWithReference(message, prompt, imageParts, botId, mode, userId)
-            : [...imageParts.map(img => ({ inlineData: img })), { text: prompt || '' }];
+            : [
+                // ✅ 修正：依 type 分流處理
+                ...imageParts.map(part => toGeminiPart(part)).filter(Boolean),
+                { text: prompt || '' }
+            ];
+
         const result = await chat.sendMessage(messageParts);
         return result.response.text();
     } catch (error) {
@@ -310,9 +348,15 @@ async function getShortResponse(userId, promptText, imageParts = [], channel = n
             ? `請用大約10~200個字回應或吐槽這張圖片`
             : `請用大約10~200字回應或吐槽訊息：「${promptText}」`;
         const chat = model.startChat({ history, generationConfig: { ...GENERATION_CONFIG, maxOutputTokens: 300 } });
+
         const messageParts = message
             ? await buildMessagePartsWithReference(message, shortPrompt, imageParts, botId, mode, userId)
-            : [...imageParts.map(img => ({ inlineData: img })), { text: shortPrompt }];
+            : [
+                // ✅ 修正：依 type 分流處理
+                ...imageParts.map(part => toGeminiPart(part)).filter(Boolean),
+                { text: shortPrompt }
+            ];
+
         const result = await chat.sendMessage(messageParts);
         return result.response.text().trim();
     } catch (error) {
