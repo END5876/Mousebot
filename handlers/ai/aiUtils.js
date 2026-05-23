@@ -85,13 +85,13 @@ async function fetchImageUrlAsBase64(url) {
         if (originalMimeType === 'image/gif') {
             buffer = await sharp(buffer, { animated: true })
                 .resize({ width: 512, height: 512, fit: 'inside', withoutEnlargement: true })
-                .gif() 
+                .gif()
                 .toBuffer();
             finalMimeType = 'image/gif';
         } else {
             buffer = await sharp(buffer)
                 .resize({ width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true })
-                .webp({ quality: 80 }) 
+                .webp({ quality: 80 })
                 .toBuffer();
             finalMimeType = 'image/webp';
         }
@@ -129,26 +129,29 @@ async function processAttachments(attachments) {
 
 async function processImageUrls(content) {
     if (!content) return [];
-    
+
     // 🌟 修正：排除 Markdown 括號 )、] 以及 Discord 隱藏預覽的 >
     const urlRegex = /(https?:\/\/[^\s)\]>]+)/g;
     const urls = content.match(urlRegex) || [];
     const imageParts = [];
     const seen = new Set();
-    
+
     for (const url of urls) {
         if (seen.has(url)) continue;
         seen.add(url);
-        
+
         // 簡單判斷是否可能為圖片網址 (包含 Discord CDN 附件網址)
-        const isLikelyImage = /\.(png|jpg|jpeg|webp|heic|heif|gif)(?:\?.*)?$/i.test(url) || url.includes('cdn.discordapp.com/attachments/');
+        const isLikelyImage = /\.(png|jpg|jpeg|webp|heic|heif|gif)(?:\?.*)?$/i.test(url)
+            || url.includes('cdn.discordapp.com/attachments/');
+
         if (isLikelyImage) {
             const imgData = await fetchImageUrlAsBase64(url);
             if (imgData) {
-                imageParts.push({ mimeType: imgData.mimeType, data: imgData.base64 });
+                // ✅ 成功：標記為圖片類型
+                imageParts.push({ type: 'image', mimeType: imgData.mimeType, data: imgData.base64 });
             } else {
-                // 🌟 新增：如果下載失敗，偷偷塞一句話給 AI 知道
-                imageParts.push({ text: '[系統提示：使用者傳送的圖片網址無法讀取或檔案過大]' });
+                // ✅ 失敗：標記為文字類型，避免混入 inlineData 造成 API 400 錯誤
+                imageParts.push({ type: 'text', text: '[系統提示：使用者傳送的圖片網址無法讀取或檔案過大]' });
             }
         }
     }
