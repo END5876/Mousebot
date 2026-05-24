@@ -22,12 +22,20 @@ const {
     processAttachments,
     processCustomEmojis,
     processImageUrls,
-    processEmbeds,       // 🌟 新增引入
-    hasMissingSignature, // 🌟 新增引入
+    processEmbeds,
+    hasMissingSignature,
     withTyping, speakWithTTS, splitMessage,
 } = require('./aiUtils');
 
-const RANDOM_REPLY_CHANCE = 0.15;
+const {
+    DEFAULT_CHANCE,
+    getReplyChance,
+    setReplyChance,
+    resetReplyChance,
+    isChannelDisabled,
+    toggleChannel,
+} = require('./aiChance');
+
 const SETMODE_ALLOWED_USER_ID = '598054316510806017';
 
 // ════════════════════════════════════════════════════════
@@ -64,7 +72,7 @@ const slashCommands = [
             try {
                 const rawQuestion = interaction.options.getString('question');
                 const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
-                
+
                 // 🌟 處理斜線指令中的網址 (斜線指令沒有 Embeds，直接給予錯誤提示)
                 const urlImagePartsRaw = await processImageUrls(question);
                 const urlImageParts = urlImagePartsRaw.map(part => {
@@ -190,6 +198,96 @@ const slashCommands = [
         }
     },
 
+    // ── /setchance ──
+    {
+        data: new SlashCommandBuilder()
+            .setName('setchance')
+            .setDescription('設定本伺服器的 AI 隨機回覆機率')
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+            .setDMPermission(false)
+            .addNumberOption(opt =>
+                opt.setName('chance')
+                    .setDescription(`機率 0~100（%），不填則重置為預設值 ${(DEFAULT_CHANCE * 100).toFixed(0)}%`)
+                    .setMinValue(0)
+                    .setMaxValue(100)
+                    .setRequired(false)
+            ),
+
+        async execute(interaction) {
+            const guildId = interaction.guildId;
+            if (!guildId) {
+                return interaction.reply({
+                    content: '❌ 此指令只能在伺服器中使用',
+                    flags: MessageFlags.Ephemeral,
+                });
+            }
+
+            const raw = interaction.options.getNumber('chance');
+
+            // 不填 → 重置為預設值
+            if (raw === null) {
+                const defaultChance = resetReplyChance(guildId);
+                return interaction.reply({
+                    content: `🔄 已重置本伺服器的隨機回覆機率為預設值：**${(defaultChance * 100).toFixed(1)}%**`,
+                    flags: MessageFlags.Ephemeral,
+                });
+            }
+
+            const chance = raw / 100; // % → 小數
+            const result = setReplyChance(guildId, chance);
+
+            if (!result.success) {
+                return interaction.reply({
+                    content: `❌ 設定失敗：${result.error}`,
+                    flags: MessageFlags.Ephemeral,
+                });
+            }
+
+            const display = (result.chance * 100).toFixed(1);
+
+            let hint = '';
+            if (result.chance === 0)      hint = '\n> ⚠️ 機率為 0%，AI 將不會主動隨機回覆。';
+            else if (result.chance === 1) hint = '\n> ⚠️ 機率為 100%，AI 將對每則訊息都隨機回覆。';
+            else if (result.chance > 0.5) hint = '\n> ⚠️ 機率偏高，AI 可能會非常頻繁地回覆。';
+
+            return interaction.reply({
+                content: `✅ 已將本伺服器的 AI 隨機回覆機率設為 **${display}%**${hint}`,
+                flags: MessageFlags.Ephemeral,
+            });
+        }
+    },
+
+    // ── /togglechance ──
+    {
+        data: new SlashCommandBuilder()
+            .setName('togglechance')
+            .setDescription('切換本頻道的 AI 隨機回覆開關（不影響其他頻道）')
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+            .setDMPermission(false),
+
+        async execute(interaction) {
+            const guildId   = interaction.guildId;
+            const channelId = interaction.channelId;
+
+            if (!guildId) {
+                return interaction.reply({
+                    content: '❌ 此指令只能在伺服器中使用',
+                    flags: MessageFlags.Ephemeral,
+                });
+            }
+
+            const { disabled } = toggleChannel(channelId);
+            const channelMention = `<#${channelId}>`;
+
+            return interaction.reply({
+                content: disabled
+                    ? `🔕 已關閉 ${channelMention} 的 AI 隨機回覆（@ 提及仍有效）`
+                    : `🔔 已開啟 ${channelMention} 的 AI 隨機回覆`,
+                flags: MessageFlags.Ephemeral,
+            });
+        }
+    },
+
 ];
 
 // ════════════════════════════════════════════════════════
@@ -212,6 +310,7 @@ function setupAICommands(client) {
         const userId    = message.author.id;
         const userName  = message.author.username;
         const guildId   = message.guild?.id;
+        const channelId = message.channel.id;
         const botId     = client.user.id;
         const channel   = message.channel;
         const messageId = message.id;
@@ -225,7 +324,7 @@ function setupAICommands(client) {
 
         if (hasOtherMention) return;
 
-        // ── @ 提及 ──
+        // ── @ 提及（頻道停用不影響此區塊）──
         if (isMentioned) {
             const rawQuestion = content.replace(/<@!?\d+>/g, '').trim();
 
@@ -252,19 +351,17 @@ function setupAICommands(client) {
                 const mode = getUserMode(userId, rawQuestion || '圖片');
 
                 const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
-                
+
                 // 🌟 處理 Embeds 與 URL
                 const embedParts = await processEmbeds(message.embeds);
                 const urlImagePartsRaw = await processImageUrls(question);
-                
+
                 const urlImageParts = [];
                 for (const part of urlImagePartsRaw) {
                     if (part.type === 'missing_signature') {
                         if (embedParts.length > 0) {
-                            // Embed 成功抓到圖，忽略此錯誤
                             continue;
                         } else {
-                            // Embed 也沒抓到，給予精準錯誤提示
                             urlImageParts.push({
                                 type: 'text',
                                 text: '[系統提示：使用者傳送的 Discord 圖片網址缺少了安全簽名參數(?ex=...&is=...)，導致權限不足無法讀取。請直接吐槽使用者複製連結時把後面的參數弄丟了，叫他重新上傳圖片或給完整的連結。]'
@@ -276,8 +373,6 @@ function setupAICommands(client) {
                 }
 
                 const attachmentParts = await processAttachments(message.attachments);
-                
-                // 將所有圖片來源合併 (包含 Embeds)
                 const imageParts = [...emojiParts, ...urlImageParts, ...embedParts, ...attachmentParts];
 
                 const answer = await withTyping(message.channel, () =>
@@ -299,13 +394,16 @@ function setupAICommands(client) {
         } else {
             if (!process.env.GEMINI_API_KEY) return;
 
+            // 🌟 頻道層級停用檢查（僅影響隨機回覆，@ 提及不受影響）
+            if (isChannelDisabled(channelId)) return;
+
             const rawCleaned = content
                 .replace(/<@!?\d+>/g, '')
                 .replace(/<@&\d+>/g, '')
                 .replace(/<#\d+>/g, '')
                 .trim();
 
-            // 🌟 1. 如果收到的是缺少安全簽名的，隨機回覆直接過濾掉
+            // 🌟 如果收到的是缺少安全簽名的，隨機回覆直接過濾掉
             if (hasMissingSignature(rawCleaned)) {
                 console.log(`[Random Reply] 偵測到缺少簽名的 Discord 網址，已過濾隨機回覆。`);
                 return;
@@ -319,7 +417,9 @@ function setupAICommands(client) {
 
             if (/^!(gugu|m|stt)/.test(rawCleaned)) return;
 
-            if (Math.random() < RANDOM_REPLY_CHANCE) {
+            // 🌟 動態讀取當前伺服器的隨機回覆機率
+            const chance = getReplyChance(guildId);
+            if (Math.random() < chance) {
                 try {
                     const { cleanedText: cleanedContent, emojiParts } = await processCustomEmojis(rawCleaned);
                     const urlImageParts = await processImageUrls(cleanedContent);
