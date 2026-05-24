@@ -1,13 +1,13 @@
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
 const { GENERATION_CONFIG } = require('./aiSettings');
 const { selectMode, getModeName } = require('./modeSelector');
-const developerMode = require('./modes/developerMode');
-const guguMode = require('./modes/gugugagaMode');
-const lossMode = require('./modes/lossMode');
-const mambaMentorMode = require('./modes/mambaMentorMode');
-const mygoMode = require('./modes/mygoMode');
-const inmuMode = require('./modes/inmuMode');
-const loverMode = require('./modes/loverMode');
+const developerMode    = require('./modes/developerMode');
+const guguMode         = require('./modes/gugugagaMode');
+const lossMode         = require('./modes/lossMode');
+const mambaMentorMode  = require('./modes/mambaMentorMode');
+const mygoMode         = require('./modes/mygoMode');
+const inmuMode         = require('./modes/inmuMode');
+const loverMode        = require('./modes/loverMode');
 
 const {
     historyCache, HISTORY_CACHE_TTL_MS,
@@ -19,9 +19,9 @@ const {
 // ════════════════════════════════════════════════════════
 //  設定常數
 // ════════════════════════════════════════════════════════
-const MODEL_NAME = "gemini-3.1-flash-lite";
-const HISTORY_FETCH_LIMIT = 30;
-const HISTORY_PAIR_LIMIT = 10;
+const MODEL_NAME           = "gemini-3.1-flash-lite";
+const HISTORY_FETCH_LIMIT  = 30;
+const HISTORY_PAIR_LIMIT   = 10;
 const HISTORY_TIME_LIMIT_MS = 10 * 60 * 1000;
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -30,13 +30,13 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 //  模式映射表
 // ════════════════════════════════════════════════════════
 const MODE_MAP = {
-    loss: lossMode,
+    loss:        lossMode,
     mambaMentor: mambaMentorMode,
-    mygo: mygoMode,
-    inmu: inmuMode,
-    lover: loverMode,
-    developer: developerMode,
-    gugu: guguMode
+    mygo:        mygoMode,
+    inmu:        inmuMode,
+    lover:       loverMode,
+    developer:   developerMode,
+    gugu:        guguMode
 };
 
 const VOICE_MODE_ADDON = `
@@ -57,6 +57,24 @@ const GENERAL_TEXT_ADDON = `
 `;
 
 // ════════════════════════════════════════════════════════
+//  Token 用量 Debug
+// ════════════════════════════════════════════════════════
+function logTokenUsage(label, response) {
+    const meta = response.usageMetadata;
+    if (!meta) {
+        console.log(`[Token] (${label}) ⚠️ 無法取得 usageMetadata`);
+        return;
+    }
+    const prompt     = meta.promptTokenCount     ?? '?';
+    const candidates = meta.candidatesTokenCount ?? '?';
+    const total      = meta.totalTokenCount      ?? '?';
+    console.log(
+        `[Token] (${label})\n` +
+        `        輸入: ${prompt} | 輸出: ${candidates} | 總計: ${total}`
+    );
+}
+
+// ════════════════════════════════════════════════════════
 //  工具函式：將 imageParts 陣列轉換為 Gemini API 格式
 // ════════════════════════════════════════════════════════
 /**
@@ -65,18 +83,9 @@ const GENERAL_TEXT_ADDON = `
  * 統一轉換為 Gemini API 所需的 part 格式。
  */
 function toGeminiPart(part) {
-    // processImageUrls() 回傳的新格式
-    if (part.type === 'text') {
-        return { text: part.text };
-    }
-    if (part.type === 'image') {
-        return { inlineData: { mimeType: part.mimeType, data: part.data } };
-    }
-    // processAttachments() / emojiParts 回傳的舊格式（含 mimeType + data，無 type）
-    if (part.mimeType && part.data) {
-        return { inlineData: { mimeType: part.mimeType, data: part.data } };
-    }
-    // 其他情況（保險用）
+    if (part.type === 'text')  return { text: part.text };
+    if (part.type === 'image') return { inlineData: { mimeType: part.mimeType, data: part.data } };
+    if (part.mimeType && part.data) return { inlineData: { mimeType: part.mimeType, data: part.data } };
     return null;
 }
 
@@ -106,7 +115,6 @@ function getUserMode(userId, message) {
 
 function getModel(mode, isVoice = false) {
     let systemPrompt = getSystemPrompt(mode);
-
     systemPrompt += GENERAL_TEXT_ADDON;
     if (isVoice) systemPrompt += VOICE_MODE_ADDON;
 
@@ -167,9 +175,9 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
             console.log(`[History Cache] 已更新快取：${channelId}`);
         }
 
-        const currentMsg = fetched.get(currentMessageId);
+        const currentMsg       = fetched.get(currentMessageId);
         const currentTimestamp = currentMsg?.createdTimestamp ?? Date.now();
-        const clearTime = getMemoryClearTime(userId);
+        const clearTime        = getMemoryClearTime(userId);
 
         let relevantMessages = fetched
             .filter(msg => {
@@ -236,17 +244,15 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
     const refMsg = await fetchReferencedMessage(message);
 
     if (refMsg) {
-        const refAuthor = refMsg.author.username;
+        const refAuthor  = refMsg.author.username;
         const refContent = refMsg.content?.trim();
-        const isSelf = refMsg.author.id === botId;
-        let refText = '';
+        const isSelf     = refMsg.author.id === botId;
+        let refText      = '';
 
         if (isSelf) {
             const cachedContext = getBotMessageContext(refMsg.id);
-
             if (cachedContext) {
                 const { mode: refMode, userId: refTargetId, userName: refTargetName } = cachedContext;
-
                 if (refTargetId !== currentUserId) {
                     refText = `> 引用你之前對別人（${refTargetName}）說的話：\n> 「${refContent}」\n\n`;
                 } else if (refMode !== currentMode) {
@@ -291,9 +297,7 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
         if (geminiPart) parts.push(geminiPart);
     });
 
-    if (question) {
-        parts.push({ text: question });
-    }
+    if (question) parts.push({ text: question });
     return parts;
 }
 
@@ -303,19 +307,19 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
 async function getGeminiResponse(userId, prompt, imageParts = [], channel = null, messageId = null, botId = null, message = null, mode = null) {
     try {
         if (!mode) mode = getUserMode(userId, prompt);
-        const model = getModel(mode);
+        const model   = getModel(mode);
         const history = channel ? await fetchUserChannelHistory(channel, userId, messageId, botId) : [];
-        const chat = model.startChat({ history, generationConfig: GENERATION_CONFIG });
+        const chat    = model.startChat({ history, generationConfig: GENERATION_CONFIG });
 
         const messageParts = message
             ? await buildMessagePartsWithReference(message, prompt, imageParts, botId, mode, userId)
             : [
-                // ✅ 修正：依 type 分流處理
                 ...imageParts.map(part => toGeminiPart(part)).filter(Boolean),
                 { text: prompt || '' }
             ];
 
         const result = await chat.sendMessage(messageParts);
+        logTokenUsage(`getGeminiResponse / user:${userId} / mode:${mode}`, result.response); // 🌟
         return result.response.text();
     } catch (error) {
         console.error(`Gemini Error (${MODEL_NAME}):`, error.message);
@@ -326,11 +330,13 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
 async function getGeminiResponseVoice(userId, prompt, channel = null, messageId = null, botId = null, mode = null) {
     try {
         if (!mode) mode = getUserMode(userId, prompt);
-        const model = getModel(mode, true);
+        const model   = getModel(mode, true);
         const history = channel ? await fetchUserChannelHistory(channel, userId, messageId, botId) : [];
-        const chat = model.startChat({ history, generationConfig: { ...GENERATION_CONFIG, maxOutputTokens: 150 } });
-        const result = await chat.sendMessage([{ text: prompt }]);
+        const chat    = model.startChat({ history, generationConfig: { ...GENERATION_CONFIG, maxOutputTokens: 150 } });
+
+        const result   = await chat.sendMessage([{ text: prompt }]);
         const response = result.response.text().trim();
+        logTokenUsage(`getGeminiResponseVoice / user:${userId} / mode:${mode}`, result.response); // 🌟
         console.log(`[Voice AI] ${userId}: "${prompt}" → "${response}"`);
         return response;
     } catch (error) {
@@ -342,7 +348,7 @@ async function getGeminiResponseVoice(userId, prompt, channel = null, messageId 
 async function getShortResponse(userId, promptText, imageParts = [], channel = null, messageId = null, botId = null, message = null, mode = null) {
     try {
         if (!mode) mode = getUserMode(userId, promptText);
-        const model = getModel(mode);
+        const model   = getModel(mode);
         const history = channel ? await fetchUserChannelHistory(channel, userId, messageId, botId) : [];
         const shortPrompt = imageParts.length > 0 && !promptText
             ? `請用大約10~200個字回應或吐槽這張圖片`
@@ -352,12 +358,12 @@ async function getShortResponse(userId, promptText, imageParts = [], channel = n
         const messageParts = message
             ? await buildMessagePartsWithReference(message, shortPrompt, imageParts, botId, mode, userId)
             : [
-                // ✅ 修正：依 type 分流處理
                 ...imageParts.map(part => toGeminiPart(part)).filter(Boolean),
                 { text: shortPrompt }
             ];
 
         const result = await chat.sendMessage(messageParts);
+        logTokenUsage(`getShortResponse / user:${userId} / mode:${mode}`, result.response); // 🌟
         return result.response.text().trim();
     } catch (error) {
         console.error(`Short Response Error:`, error.message);
