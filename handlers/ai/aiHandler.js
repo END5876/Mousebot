@@ -322,7 +322,9 @@ function setupAICommands(client) {
             mentionedUsers.some(u => u.id !== botId) ||
             mentionedRoles.size > 0;
 
-        if (hasOtherMention) return;
+        const hasReference = !!message.reference?.messageId;
+
+        if (hasOtherMention && !hasReference) return;
 
         // ── @ 提及（頻道停用不影響此區塊）──
         if (isMentioned) {
