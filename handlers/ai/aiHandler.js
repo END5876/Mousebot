@@ -396,6 +396,26 @@ function setupAICommands(client) {
         } else {
             if (!process.env.GEMINI_API_KEY) return;
 
+            // 🌟 新增邏輯：如果引用了其他人，且沒有 mention 機器人，則過濾隨機回覆
+            if (hasReference) {
+                let isReplyingToOther = false;
+                
+                if (message.mentions.repliedUser) {
+                    isReplyingToOther = message.mentions.repliedUser.id !== botId;
+                } else {
+                    // 如果對方關閉了 ping 導致 repliedUser 不存在，則抓取原訊息判斷
+                    const refMsg = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+                    if (refMsg && refMsg.author.id !== botId) {
+                        isReplyingToOther = true;
+                    }
+                }
+
+                // 如果確認是回覆其他人，直接 return 過濾掉，不觸發隨機回覆
+                if (isReplyingToOther) {
+                    return; 
+                }
+            }
+
             // 🌟 頻道層級停用檢查（僅影響隨機回覆，@ 提及不受影響）
             if (isChannelDisabled(channelId)) return;
 
