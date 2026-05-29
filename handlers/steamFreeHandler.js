@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, PermissionFlagsBits } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 
@@ -9,12 +9,17 @@ const MAX_AGE_DAYS = 90;
 const CHECK_INTERVAL_MS = 30 * 60 * 1000;
 const LOG_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
-// ── 已通知過的 AppID 存檔設定 ────────────────────────────
+// ── 資料存檔設定 (通知紀錄與頻道設定) ─────────────────────────
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const NOTIFIED_FILE = path.join(DATA_DIR, 'steamnotified.json');
+const CONFIG_FILE = path.join(DATA_DIR, 'steamchannel.json'); // 新增：頻道設定檔
 
+let notifiedGames = new Map();
+let notifyChannelId = null;
+
+// 讀取已通知清單
 if (fs.existsSync(NOTIFIED_FILE)) {
   try {
     const parsed = JSON.parse(fs.readFileSync(NOTIFIED_FILE, 'utf8'));
@@ -29,6 +34,20 @@ if (fs.existsSync(NOTIFIED_FILE)) {
   }
 }
 
+// 讀取頻道設定
+if (fs.existsSync(CONFIG_FILE)) {
+  try {
+    const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    notifyChannelId = config.channelId || null;
+    if (notifyChannelId) console.log(`[SteamFree] 已載入通知頻道設定: ${notifyChannelId}`);
+  } catch (e) {
+    console.error('⚠️ [SteamFree] 讀取頻道設定失敗:', e.message);
+  }
+} else if (process.env.STEAM_NOTIFY_CHANNEL_ID) {
+  // 兼容舊版環境變數設定
+  notifyChannelId = process.env.STEAM_NOTIFY_CHANNEL_ID;
+}
+
 function saveNotifiedGames() {
   const cutoff = Date.now() - MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
   for (const [id, timestamp] of notifiedGames) {
@@ -36,6 +55,14 @@ function saveNotifiedGames() {
   }
   fs.writeFile(NOTIFIED_FILE, JSON.stringify([...notifiedGames]), (e) => {
     if (e) console.error('⚠️ [SteamFree] 儲存已通知清單失敗:', e.message);
+  });
+}
+
+// 新增：儲存頻道設定
+function saveChannelConfig(channelId) {
+  notifyChannelId = channelId;
+  fs.writeFile(CONFIG_FILE, JSON.stringify({ channelId }), (e) => {
+    if (e) console.error('⚠️ [SteamFree] 儲存頻道設定失敗:', e.message);
   });
 }
 
@@ -166,6 +193,7 @@ function buildMessage(game) {
 
 // ── 主要 Setup 函式 ────────────────────────────────────────
 function setupSteamFreeNotifier(client) {
+  // 1. 查詢限免指令
   const command = {
     data: new SlashCommandBuilder()
       .setName('steamfree')
@@ -187,17 +215,36 @@ function setupSteamFreeNotifier(client) {
     }
   };
 
-  client.commands.set(command.data.name, command);
+  // 2. 新增：設定頻道指令
+  const setChannelCommand = {
+    data: new SlashCommandBuilder()
+      .setName('setsteamchannel')
+      .setDescription('設定 Steam 限免通知自動發送的頻道')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator) // 僅限管理員使用
+      .addChannelOption(option => 
+        option.setName('channel')
+          .setDescription('選擇要接收通知的文字頻道')
+          .addChannelTypes(ChannelType.GuildText) // 限制只能選文字頻道
+          .setRequired(true)
+      ),
+    async execute(interaction) {
+      const channel = interaction.options.getChannel('channel');
+      saveChannelConfig(channel.id);
+      await interaction.reply({ content: `✅ 已成功將 Steam 限免通知頻道設定為 ${channel}！`, ephemeral: true });
+    }
+  };
 
-  const NOTIFY_CHANNEL_ID = process.env.STEAM_NOTIFY_CHANNEL_ID;
-  if (!NOTIFY_CHANNEL_ID) {
-    return console.warn('⚠️ [SteamFree] 未設定 STEAM_NOTIFY_CHANNEL_ID，自動通知已停用');
-  }
+  // 註冊指令
+  client.commands.set(command.data.name, command);
+  client.commands.set(setChannelCommand.data.name, setChannelCommand);
 
   let lastLogTime = 0;
   async function checkAndNotify() {
-    const channel = client.channels.cache.get(NOTIFY_CHANNEL_ID) || await client.channels.fetch(NOTIFY_CHANNEL_ID).catch(() => null);
-    if (!channel) return console.error('⚠️ [SteamFree] 找不到通知頻道，跳過本次檢查');
+    // 改為使用動態變數 notifyChannelId
+    if (!notifyChannelId) return; // 如果還沒設定頻道，就安靜跳過
+
+    const channel = client.channels.cache.get(notifyChannelId) || await client.channels.fetch(notifyChannelId).catch(() => null);
+    if (!channel) return console.error(`⚠️ [SteamFree] 找不到設定的通知頻道 (${notifyChannelId})，跳過本次檢查`);
 
     const now = Date.now();
     if (now - lastLogTime >= LOG_INTERVAL_MS) {
@@ -226,11 +273,15 @@ function setupSteamFreeNotifier(client) {
 
   client.once('clientReady', () => {
     console.log(`[SteamFree] Bot 啟動時間：${new Date().toLocaleString('zh-TW')}`);
+    if (!notifyChannelId) {
+      console.warn('⚠️ [SteamFree] 尚未設定通知頻道，請在伺服器中使用 /setsteamchannel 指令來設定。');
+    } else {
+      console.log(`✅ Steam 限免通知已啟用（目標頻道：${notifyChannelId}，每 30 分鐘檢查）`);
+    }
+    
     checkAndNotify().catch(err => console.error('⚠️ [SteamFree] 啟動時檢查失敗:', err.message));
     setInterval(() => checkAndNotify().catch(err => console.error('⚠️ [SteamFree] 定時任務發生錯誤:', err.message)), CHECK_INTERVAL_MS);
   });
-
-  console.log(`✅ Steam 限免通知已啟用（頻道：${NOTIFY_CHANNEL_ID}，每 30 分鐘檢查）`);
 }
 
 module.exports = { setupSteamFreeNotifier };
