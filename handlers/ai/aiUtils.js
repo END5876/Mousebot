@@ -1,5 +1,5 @@
 const { playTTS } = require('../ttsHandler');
-const sharp = require('sharp'); // 🌟 引入 sharp 進行圖片壓縮
+const sharp = require('sharp'); // 引入 sharp 進行圖片壓縮
 
 // ════════════════════════════════════════════════════════
 //  設定常數
@@ -56,7 +56,7 @@ function getBotMessageContext(messageId) {
 }
 
 // ════════════════════════════════════════════════════════
-//  圖片處理 (🌟 支援網址解析與靜態圖/GIF 壓縮邏輯)
+//  圖片處理 (支援網址解析與靜態圖/GIF 壓縮邏輯)
 // ════════════════════════════════════════════════════════
 async function fetchImageUrlAsBase64(url) {
     const cached = imageCache.get(url);
@@ -114,7 +114,9 @@ async function fetchImageAsBase64(attachment) {
     const originalMimeType = attachment.contentType?.split(';')[0] || 'image/jpeg';
     if (originalMimeType && !supportedTypes.includes(originalMimeType)) return null;
 
-    return await fetchImageUrlAsBase64(attachment.url);
+    // 優先使用 proxyURL（不需要安全簽名），fallback 才用 url
+    const fetchUrl = attachment.proxyURL ?? attachment.proxyUrl ?? attachment.url;
+    return await fetchImageUrlAsBase64(fetchUrl);
 }
 
 async function processAttachments(attachments) {
@@ -127,7 +129,7 @@ async function processAttachments(attachments) {
     return imageParts;
 }
 
-// 🌟 新增：檢查是否包含缺少簽名的 Discord 網址
+// 檢查是否包含缺少簽名的 Discord 網址
 function hasMissingSignature(content) {
     if (!content) return false;
     const urlRegex = /(https?:\/\/[^\s)\]>]+)/g;
@@ -141,7 +143,7 @@ function hasMissingSignature(content) {
     return false;
 }
 
-// 🌟 新增：處理 Discord Embeds (預覽圖)
+// 處理 Discord Embeds (預覽圖)
 async function processEmbeds(embeds) {
     const imageParts = [];
     if (!embeds || embeds.length === 0) return imageParts;
@@ -177,7 +179,7 @@ async function processImageUrls(content) {
             || isDiscordCDN;
 
         if (isLikelyImage) {
-            // 🌟 如果是 Discord CDN 且沒有簽名，標記為 missing_signature 交給外部處理
+            // 如果是 Discord CDN 且沒有簽名，標記為 missing_signature 交給外部處理
             if (isDiscordCDN && !hasSignature) {
                 imageParts.push({ type: 'missing_signature', url });
                 continue;
@@ -342,7 +344,7 @@ module.exports = {
     processAttachments,
     processCustomEmojis,
     processImageUrls,
-    processEmbeds,       // 🌟 匯出
-    hasMissingSignature, // 🌟 匯出
+    processEmbeds,       
+    hasMissingSignature, 
     withTyping, speakWithTTS, splitMessage,
 };
