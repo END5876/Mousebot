@@ -141,23 +141,7 @@ function getClearMemoryMessage() {
   return '🗑️ 我操了老鐵，已經清除記憶了！這不就等於重新開始旮旯 game 了嗎🤓 咕咕嘎嘎！';
 }
 
-/**
- * 獲取咕咕嘎嘎模式的錯誤訊息
- */
-function getErrorMessage(error) {
-  let errorMsg = `❌ 我草了老鐵...出錯了：${error.message}`;
-  
-  if (error.message.includes('quota')) {
-      errorMsg += '\n\n⚠️ API 配額用完了，這攻略線崩了啊🤔 咕咕嘎嘎';
-  } else if (error.message.includes('safety')) {
-      errorMsg += '\n\n⚠️ 內容被安全過濾擋住了，這好感度掉太快了吧😨 咕咕嘎嘎';
-  }
-  
-  return errorMsg;
-}
-
 module.exports = {
   GUGU_MODE_PROMPT,
   getClearMemoryMessage,
-  getErrorMessage
 };

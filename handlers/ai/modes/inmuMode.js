@@ -47,15 +47,7 @@ function getClearMemoryMessage() {
     return '🗑️ ん？已經清除記憶了罷(迫真)';
 }
 
-function getErrorMessage(error) {
-    let errorMsg = `❌ あのさぁ... 出錯了：${error.message}`;
-    if (error.message.includes('404')) errorMsg = `❌ は？(威壓) 找不到模型罷`;
-    if (error.message.includes('429')) errorMsg = '⚠️ 請求太頻繁(惱) Homo特有耐心微レ存';
-    return errorMsg;
-}
-
 module.exports = {
     INMU_MODE_PROMPT,
     getClearMemoryMessage,
-    getErrorMessage
 };

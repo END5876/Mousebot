@@ -32,13 +32,8 @@ function getClearMemoryMessage() {
     return '💕 已經清除記憶了喔~寶貝，我們重新開始吧❤️';
 }
 
-function getErrorMessage(error) {
-    return `😢 寶貝對不起...人家出了點問題：${error.message}`;
-}
-
 module.exports = {
     LOVER_MODE_PROMPT,
     shortDescription: '溫柔黏人的戀人，對專屬用戶充滿愛意，說話甜蜜撒嬌，極度關心對方',
     getClearMemoryMessage,
-    getErrorMessage
 };

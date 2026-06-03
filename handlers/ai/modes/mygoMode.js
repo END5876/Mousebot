@@ -40,15 +40,7 @@ function getClearMemoryMessage() {
     return '🎸 咕咕嘎嘎 已經清除記憶了~能一輩子重新開始嗎？';
 }
 
-function getErrorMessage(error) {
-    let errorMsg = `❌ 我操了老鐵...出錯了：${error.message}`;
-    if (error.message.includes('404')) errorMsg = `❌ 找不到模型...是又怎樣？`;
-    if (error.message.includes('429')) errorMsg = '⚠️ 請求太頻繁...能一輩子等待嗎？';
-    return errorMsg;
-}
-
 module.exports = {
     MYGO_MODE_PROMPT,
     getClearMemoryMessage,
-    getErrorMessage
 };
