@@ -7,7 +7,7 @@ const { LOVER_MODE_USER_IDS, DEVELOPER_MODE_USER_IDS } = require('./aiSettings')
 // ════════════════════════════════════════════════════════
 const MODES_FILE_PATH = path.resolve(__dirname, '../../data/userModes.json');
 
-const AVAILABLE_MODES = ['loss', 'mambaMentor', 'mygo', 'inmu', 'lover', 'developer', 'gugu'];
+const AVAILABLE_MODES = ['loss', 'mambaMentor', 'mygo', 'inmu', 'lover', 'developer', 'gugu', 'mesugaki', 'china'];
 
 // ════════════════════════════════════════════════════════
 //  JSON 持久化
@@ -96,6 +96,8 @@ function getModeName(mode) {
         lover:       '戀人模式',
         developer:   '開發者模式',
         gugu:        '咕咕模式',
+        mesugaki:    '磁小鬼模式',
+        china:       '中國模式',
     };
     return names[mode] ?? mode;
 }

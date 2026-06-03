@@ -44,16 +44,7 @@ function getClearMemoryMessage() {
     return '🎸 咕咕嘎嘎 已經清除記憶了~能一輩子重新開始嗎？';
 }
 
-
-function getErrorMessage(error) {
-    let errorMsg = `❌ 孩子們，出現錯誤了：${error.message}`;
-    if (error.message.includes('404')) errorMsg = `❌ 找不到模型`;
-    if (error.message.includes('429')) errorMsg = '⚠️ 孩子們，請求太頻繁了';
-    return errorMsg;
-}
-
 module.exports = {
     MAMBA_MENTOR_MODE_PROMPT,
     getClearMemoryMessage,
-    getErrorMessage
 };

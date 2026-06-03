@@ -61,19 +61,8 @@ function getClearMemoryMessage() {
     return '🧠 已清除你的對話記憶。';
 }
 
-/**
- * 獲取損友模式的錯誤訊息
- */
-function getErrorMessage(error) {
-    let errorMsg = `❌ 錯誤：${error.message}`;
-    if (error.message.includes('404')) errorMsg = `❌ 找不到模型，請嘗試更改模型名稱`;
-    if (error.message.includes('429')) errorMsg = '⚠️ 請求太頻繁，請稍後再試';
-    return errorMsg;
-}
-
 module.exports = {
     LOSS_MODE_PROMPT,
     shortDescription: '極度毒舌的損友，對任何人都惡言相向、人身攻擊、嘲諷羞辱，完全不留情面',
     getClearMemoryMessage,
-    getErrorMessage
 };

@@ -56,8 +56,11 @@ const slashCommands = [
             ),
 
         async execute(interaction) {
-            if (!process.env.GEMINI_API_KEY)
-                return interaction.reply({ content: '❌ 未設定 API Key', flags: MessageFlags.Ephemeral });
+            if (!process.env.GEMINI_API_KEY) {
+                console.error('❌ 未設定 API Key');
+                await interaction.deferReply();
+                return interaction.deleteReply().catch(() => {});
+            }
 
             const userId     = interaction.user.id;
             const userName   = interaction.user.username;
@@ -65,7 +68,6 @@ const slashCommands = [
             const botId      = interaction.client.user.id;
             const attachment = interaction.options.getAttachment('image');
             const mode       = getUserMode(userId, interaction.options.getString('question'));
-            const modeModule = MODE_MAP[mode];
 
             await interaction.deferReply();
 
@@ -73,7 +75,6 @@ const slashCommands = [
                 const rawQuestion = interaction.options.getString('question');
                 const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
 
-                // 🌟 處理斜線指令中的網址 (斜線指令沒有 Embeds，直接給予錯誤提示)
                 const urlImagePartsRaw = await processImageUrls(question);
                 const urlImageParts = urlImagePartsRaw.map(part => {
                     if (part.type === 'missing_signature') {
@@ -104,7 +105,9 @@ const slashCommands = [
 
                 await speakWithTTS(interaction, answer, guildId);
             } catch (error) {
-                await interaction.editReply({ content: modeModule.getErrorMessage(error) });
+                // 發生錯誤時不回覆使用者，僅在後台記錄，並刪除思考中的狀態
+                console.error('Slash command /ai error:', error.message);
+                await interaction.deleteReply().catch(() => {});
             }
         }
     },
@@ -171,7 +174,6 @@ const slashCommands = [
             const selected   = interaction.options.getString('mode')?.trim().toLowerCase() ?? null;
             const targetId   = targetUser.id;
 
-            // 不填 → 重置
             if (!selected) {
                 setUserMode(targetId, null);
                 const defaultMode = selectMode(targetId, '');
@@ -181,7 +183,6 @@ const slashCommands = [
                 });
             }
 
-            // 驗證是否為合法模式
             const matched = AVAILABLE_MODES.find(m => m.toLowerCase() === selected);
             if (!matched) {
                 return interaction.reply({
@@ -224,7 +225,6 @@ const slashCommands = [
 
             const raw = interaction.options.getNumber('chance');
 
-            // 不填 → 重置為預設值
             if (raw === null) {
                 const defaultChance = resetReplyChance(guildId);
                 return interaction.reply({
@@ -233,7 +233,7 @@ const slashCommands = [
                 });
             }
 
-            const chance = raw / 100; // % → 小數
+            const chance = raw / 100;
             const result = setReplyChance(guildId, chance);
 
             if (!result.success) {
@@ -347,14 +347,16 @@ function setupAICommands(client) {
                 return;
             }
 
-            if (!process.env.GEMINI_API_KEY) return message.channel.send('❌ 未設定 API Key');
+            if (!process.env.GEMINI_API_KEY) {
+                console.error('❌ 未設定 API Key');
+                return;
+            }
 
             try {
                 const mode = getUserMode(userId, rawQuestion || '圖片');
 
                 const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
 
-                // 🌟 處理 Embeds 與 URL
                 const embedParts = await processEmbeds(message.embeds);
                 const urlImagePartsRaw = await processImageUrls(question);
 
@@ -388,35 +390,31 @@ function setupAICommands(client) {
                 }
                 await speakWithTTS(message, answer, guildId);
             } catch (error) {
-                const mode = selectMode(userId, content.replace(/<@!?\d+>/g, '').trim() || '圖片');
-                message.channel.send(MODE_MAP[mode].getErrorMessage(error));
+                // 發生錯誤時不回覆使用者，僅在後台記錄
+                console.error('Mention reply error:', error.message);
             }
 
         // ── 隨機回覆 ──
         } else {
             if (!process.env.GEMINI_API_KEY) return;
 
-            // 🌟 新增邏輯：如果引用了其他人，且沒有 mention 機器人，則過濾隨機回覆
             if (hasReference) {
                 let isReplyingToOther = false;
                 
                 if (message.mentions.repliedUser) {
                     isReplyingToOther = message.mentions.repliedUser.id !== botId;
                 } else {
-                    // 如果對方關閉了 ping 導致 repliedUser 不存在，則抓取原訊息判斷
                     const refMsg = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
                     if (refMsg && refMsg.author.id !== botId) {
                         isReplyingToOther = true;
                     }
                 }
 
-                // 如果確認是回覆其他人，直接 return 過濾掉，不觸發隨機回覆
                 if (isReplyingToOther) {
                     return; 
                 }
             }
 
-            // 🌟 頻道層級停用檢查（僅影響隨機回覆，@ 提及不受影響）
             if (isChannelDisabled(channelId)) return;
 
             const rawCleaned = content
@@ -425,7 +423,6 @@ function setupAICommands(client) {
                 .replace(/<#\d+>/g, '')
                 .trim();
 
-            // 🌟 如果收到的是缺少安全簽名的，隨機回覆直接過濾掉
             if (hasMissingSignature(rawCleaned)) {
                 console.log(`[Random Reply] 偵測到缺少簽名的 Discord 網址，已過濾隨機回覆。`);
                 return;
@@ -439,7 +436,6 @@ function setupAICommands(client) {
 
             if (/^!(gugu|m|stt)/.test(rawCleaned)) return;
 
-            // 🌟 動態讀取當前伺服器的隨機回覆機率
             const chance = getReplyChance(guildId);
             if (Math.random() < chance) {
                 try {

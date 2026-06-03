@@ -8,6 +8,8 @@ const mambaMentorMode  = require('./modes/mambaMentorMode');
 const mygoMode         = require('./modes/mygoMode');
 const inmuMode         = require('./modes/inmuMode');
 const loverMode        = require('./modes/loverMode');
+const mesugakiMode     = require('./modes/mesugakiMode');
+const chinaMode     = require('./modes/chinaMode');
 
 const {
     historyCache, HISTORY_CACHE_TTL_MS,
@@ -36,7 +38,9 @@ const MODE_MAP = {
     inmu:        inmuMode,
     lover:       loverMode,
     developer:   developerMode,
-    gugu:        guguMode
+    gugu:        guguMode,
+    mesugaki:    mesugakiMode,
+    china:       chinaMode
 };
 
 const VOICE_MODE_ADDON = `
