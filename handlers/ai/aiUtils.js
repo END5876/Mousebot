@@ -336,6 +336,36 @@ function splitMessage(text, maxLength = 1900) {
     return chunks;
 }
 
+// ════════════════════════════════════════════════════════
+//  將提及 (Mentions) 轉換為純文字名稱
+// ════════════════════════════════════════════════════════
+function replaceMentions(message, botId) {
+    let text = message.content || '';
+    
+    // 1. 移除對機器人本身的提及
+    if (botId) {
+        text = text.replace(new RegExp(`<@!?${botId}>`, 'g'), '');
+    }
+    
+    // 2. 替換其他使用者、身分組、頻道為名稱
+    if (message.mentions) {
+        message.mentions.users?.forEach(user => {
+            if (user.id === botId) return;
+            text = text.replace(new RegExp(`<@!?${user.id}>`, 'g'), `@${user.username}`);
+        });
+        
+        message.mentions.roles?.forEach(role => {
+            text = text.replace(new RegExp(`<@&${role.id}>`, 'g'), `@${role.name}`);
+        });
+        
+        message.mentions.channels?.forEach(channel => {
+            text = text.replace(new RegExp(`<#${channel.id}>`, 'g'), `#${channel.name}`);
+        });
+    }
+    
+    return text.trim();
+}
+
 module.exports = {
     historyCache, HISTORY_CACHE_TTL_MS,
     clearUserMemory, getMemoryClearTime,
@@ -347,4 +377,5 @@ module.exports = {
     processEmbeds,       
     hasMissingSignature, 
     withTyping, speakWithTTS, splitMessage,
+    replaceMentions, // ✅ 匯出新函式
 };
