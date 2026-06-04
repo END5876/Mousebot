@@ -25,6 +25,7 @@ const {
     processEmbeds,
     hasMissingSignature,
     withTyping, speakWithTTS, splitMessage,
+    replaceMentions, 
 } = require('./aiUtils');
 
 const {
@@ -105,7 +106,6 @@ const slashCommands = [
 
                 await speakWithTTS(interaction, answer, guildId);
             } catch (error) {
-                // 發生錯誤時不回覆使用者，僅在後台記錄，並刪除思考中的狀態
                 console.error('Slash command /ai error:', error.message);
                 await interaction.deleteReply().catch(() => {});
             }
@@ -324,11 +324,12 @@ function setupAICommands(client) {
 
         const hasReference = !!message.reference?.messageId;
 
-        if (hasOtherMention && !hasReference) return;
+        if (hasOtherMention && !hasReference && !isMentioned) return;
 
         // ── @ 提及（頻道停用不影響此區塊）──
         if (isMentioned) {
-            const rawQuestion = content.replace(/<@!?\d+>/g, '').trim();
+            // 將提及轉換為名字，並濾掉機器人自己
+            const rawQuestion = replaceMentions(message, botId);
 
             if (!rawQuestion && !hasAttachment && !hasLikelyImageLink) {
                 if (!process.env.GEMINI_API_KEY) return;
@@ -390,7 +391,6 @@ function setupAICommands(client) {
                 }
                 await speakWithTTS(message, answer, guildId);
             } catch (error) {
-                // 發生錯誤時不回覆使用者，僅在後台記錄
                 console.error('Mention reply error:', error.message);
             }
 
@@ -417,11 +417,8 @@ function setupAICommands(client) {
 
             if (isChannelDisabled(channelId)) return;
 
-            const rawCleaned = content
-                .replace(/<@!?\d+>/g, '')
-                .replace(/<@&\d+>/g, '')
-                .replace(/<#\d+>/g, '')
-                .trim();
+            //  將提及轉換為名字
+            const rawCleaned = replaceMentions(message, botId);
 
             if (hasMissingSignature(rawCleaned)) {
                 console.log(`[Random Reply] 偵測到缺少簽名的 Discord 網址，已過濾隨機回覆。`);
