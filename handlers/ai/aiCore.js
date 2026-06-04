@@ -23,7 +23,7 @@ const {
 // ════════════════════════════════════════════════════════
 const MODEL_NAME           = "gemini-3.1-flash-lite";
 const HISTORY_FETCH_LIMIT  = 30;
-const HISTORY_PAIR_LIMIT   = 10;
+const HISTORY_PAIR_LIMIT   = 10; 
 const HISTORY_TIME_LIMIT_MS = 10 * 60 * 1000;
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -51,11 +51,14 @@ const VOICE_MODE_ADDON = `
 3. 保持簡短！盡量控制在 1~3 句話以內（約 30~50 字），絕對不要長篇大論。
 4. 絕對不要使用 Markdown 語法（如 **粗體**、*斜體*、列表、程式碼區塊），因為語音引擎無法朗讀排版。
 5. 在遵守以上規則的前提下，必須完全保持你現在的人格設定與語氣。
+6. 【重要】請優先針對最新訊息回應，歷史紀錄僅供參考。
 `;
 
+// 在全局規則中加入「注意力約束」，強制 AI 優先處理當下訊息
 const GENERAL_TEXT_ADDON = `
 
-## 全局回覆長度限制
+## 全局回覆與注意力規則
+- 【最高優先】請務必針對使用者的「最新一則訊息」與「當下指令」進行回覆。歷史紀錄與引用訊息僅供語境參考，絕對不要被歷史紀錄牽著走而忽略了當下的問題。
 - 若為日常閒聊或一般對話，回覆字數請盡量控制在 60 字以內，保持自然、簡短的聊天節奏。
 - 若使用者詢問技術問題、需要詳細解說或撰寫程式碼時，則不受此字數限制，請給出完整的解答。
 `;
@@ -188,7 +191,10 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
                 if (msg.id === currentMessageId) return false;
                 if ((currentTimestamp - msg.createdTimestamp) > HISTORY_TIME_LIMIT_MS) return false;
                 if (msg.createdTimestamp <= clearTime) return false;
-                if (!msg.content?.trim().length && msg.attachments.size === 0) return false;
+                
+                const textContent = msg.cleanContent || msg.content;
+                if (!textContent?.trim().length && msg.attachments.size === 0) return false;
+                
                 if (msg.author.id === userId) return true;
                 if (msg.author.id === botId) return isBotReplyToUser(msg, userId, fetched);
                 return false;
@@ -211,7 +217,10 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
                 const imgParts = await processAttachments(msg.attachments);
                 imgParts.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } }));
             }
-            if (msg.content?.trim().length > 0) parts.push({ text: msg.content.trim() });
+            
+            const textContent = msg.cleanContent || msg.content;
+            if (textContent?.trim().length > 0) parts.push({ text: textContent.trim() });
+            
             if (parts.length === 0) parts.push({ text: '[使用者傳了一張無法讀取的圖片]' });
             history.push({ role: msg.author.id === botId ? 'model' : 'user', parts });
         }
@@ -249,7 +258,7 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
 
     if (refMsg) {
         const refAuthor  = refMsg.author.username;
-        const refContent = refMsg.content?.trim();
+        const refContent = refMsg.cleanContent?.trim() || refMsg.content?.trim();
         const isSelf     = refMsg.author.id === botId;
         let refText      = '';
 
@@ -280,7 +289,7 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
             refText += refContent ? ' [附帶圖片]' : ' [一張圖片]';
         }
 
-        // ✅ 修正：解析引用訊息中的網址圖片，依 type 分流處理
+        // 解析引用訊息中的網址圖片，依 type 分流處理
         if (refContent) {
             const refUrlImageParts = await processImageUrls(refContent);
             refUrlImageParts.forEach(part => {
@@ -295,7 +304,6 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
         parts.push({ text: refText });
     }
 
-    // ✅ 修正：imageParts 依 type 分流處理
     imageParts.forEach(part => {
         const geminiPart = toGeminiPart(part);
         if (geminiPart) parts.push(geminiPart);
@@ -323,7 +331,7 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
             ];
 
         const result = await chat.sendMessage(messageParts);
-        logTokenUsage(`getGeminiResponse / user:${userId} / mode:${mode}`, result.response); // 🌟
+        logTokenUsage(`getGeminiResponse / user:${userId} / mode:${mode}`, result.response); 
         return result.response.text();
     } catch (error) {
         console.error(`Gemini Error (${MODEL_NAME}):`, error.message);
@@ -340,7 +348,7 @@ async function getGeminiResponseVoice(userId, prompt, channel = null, messageId 
 
         const result   = await chat.sendMessage([{ text: prompt }]);
         const response = result.response.text().trim();
-        logTokenUsage(`getGeminiResponseVoice / user:${userId} / mode:${mode}`, result.response); // 🌟
+        logTokenUsage(`getGeminiResponseVoice / user:${userId} / mode:${mode}`, result.response); 
         console.log(`[Voice AI] ${userId}: "${prompt}" → "${response}"`);
         return response;
     } catch (error) {
@@ -367,7 +375,7 @@ async function getShortResponse(userId, promptText, imageParts = [], channel = n
             ];
 
         const result = await chat.sendMessage(messageParts);
-        logTokenUsage(`getShortResponse / user:${userId} / mode:${mode}`, result.response); // 🌟
+        logTokenUsage(`getShortResponse / user:${userId} / mode:${mode}`, result.response); 
         return result.response.text().trim();
     } catch (error) {
         console.error(`Short Response Error:`, error.message);
