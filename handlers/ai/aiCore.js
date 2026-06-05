@@ -23,7 +23,7 @@ const {
 // ════════════════════════════════════════════════════════
 const MODEL_NAME           = "gemini-3.1-flash-lite";
 const HISTORY_FETCH_LIMIT  = 30;
-const HISTORY_PAIR_LIMIT   = 10; 
+const HISTORY_PAIR_LIMIT   = 5; 
 const HISTORY_TIME_LIMIT_MS = 10 * 60 * 1000;
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -54,11 +54,12 @@ const VOICE_MODE_ADDON = `
 6. 【重要】請優先針對最新訊息回應，歷史紀錄僅供參考。
 `;
 
-// 在全局規則中加入「注意力約束」，強制 AI 優先處理當下訊息
+// 在全局規則中加入「格式區分」的強烈約束
 const GENERAL_TEXT_ADDON = `
 
 ## 全局回覆與注意力規則
-- 【最高優先】請務必針對使用者的「最新一則訊息」與「當下指令」進行回覆。歷史紀錄與引用訊息僅供語境參考，絕對不要被歷史紀錄牽著走而忽略了當下的問題。
+- 【最高優先】請務必針對使用者的「最新一則訊息」與「當下指令」進行回覆。歷史紀錄與引用訊息僅供語境參考。
+- 【格式區分】對話中會以「【發言者：暱稱】」來標示是誰說的話。絕對不要把暱稱當成對話內容來回答！
 - 若為日常閒聊或一般對話，回覆字數請盡量控制在 60 字以內，保持自然、簡短的聊天節奏。
 - 若使用者詢問技術問題、需要詳細解說或撰寫程式碼時，則不受此字數限制，請給出完整的解答。
 `;
@@ -84,11 +85,6 @@ function logTokenUsage(label, response) {
 // ════════════════════════════════════════════════════════
 //  工具函式：將 imageParts 陣列轉換為 Gemini API 格式
 // ════════════════════════════════════════════════════════
-/**
- * 將 processImageUrls() 回傳的統一格式（含 type 欄位）
- * 或 processAttachments() / emojiParts 回傳的舊格式（含 mimeType + data）
- * 統一轉換為 Gemini API 所需的 part 格式。
- */
 function toGeminiPart(part) {
     if (part.type === 'text')  return { text: part.text };
     if (part.type === 'image') return { inlineData: { mimeType: part.mimeType, data: part.data } };
@@ -219,7 +215,14 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
             }
             
             const textContent = msg.cleanContent || msg.content;
-            if (textContent?.trim().length > 0) parts.push({ text: textContent.trim() });
+            if (textContent?.trim().length > 0) {
+                // 歷史紀錄中，明確標示發言者
+                if (msg.author.id === botId) {
+                    parts.push({ text: textContent.trim() });
+                } else {
+                    parts.push({ text: `【發言者：${msg.author.username}】\n${textContent.trim()}` });
+                }
+            }
             
             if (parts.length === 0) parts.push({ text: '[使用者傳了一張無法讀取的圖片]' });
             history.push({ role: msg.author.id === botId ? 'model' : 'user', parts });
@@ -277,7 +280,8 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
                 refText = `> 引用你之前的發言：\n> 「${refContent}」\n\n`;
             }
         } else {
-            refText = `> 引用 ${refAuthor} 的發言：\n> 「${refContent}」\n\n`;
+            // 引用別人發言時，使用括號將暱稱隔開
+            refText = `> 引用【發言者：${refAuthor}】的發言：\n> 「${refContent}」\n\n`;
         }
 
         // 處理實體附件
@@ -309,7 +313,11 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
         if (geminiPart) parts.push(geminiPart);
     });
 
-    if (question) parts.push({ text: question });
+    // 將當下的提問也加上發言者標籤
+    if (question) {
+        const authorName = message?.author?.username || '使用者';
+        parts.push({ text: `【發言者：${authorName}】\n${question}` });
+    }
     return parts;
 }
 
@@ -323,11 +331,12 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
         const history = channel ? await fetchUserChannelHistory(channel, userId, messageId, botId) : [];
         const chat    = model.startChat({ history, generationConfig: GENERATION_CONFIG });
 
+        // 如果沒有 message (例如斜線指令)，也要加上預設標籤
         const messageParts = message
             ? await buildMessagePartsWithReference(message, prompt, imageParts, botId, mode, userId)
             : [
                 ...imageParts.map(part => toGeminiPart(part)).filter(Boolean),
-                { text: prompt || '' }
+                { text: prompt ? `【發言者：使用者】\n${prompt}` : '' }
             ];
 
         const result = await chat.sendMessage(messageParts);
@@ -367,11 +376,12 @@ async function getShortResponse(userId, promptText, imageParts = [], channel = n
             : `請用大約10~200字回應或吐槽訊息：「${promptText}」`;
         const chat = model.startChat({ history, generationConfig: { ...GENERATION_CONFIG, maxOutputTokens: 300 } });
 
+        // 短回覆標籤邏輯
         const messageParts = message
             ? await buildMessagePartsWithReference(message, shortPrompt, imageParts, botId, mode, userId)
             : [
                 ...imageParts.map(part => toGeminiPart(part)).filter(Boolean),
-                { text: shortPrompt }
+                { text: `【發言者：使用者】\n${shortPrompt}` }
             ];
 
         const result = await chat.sendMessage(messageParts);
