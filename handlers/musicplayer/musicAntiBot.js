@@ -224,6 +224,7 @@ function buildYouTubeArgs(url, strategy, streamMode = true) {
 
   // ── 0. Proxy 設定 (透過 WARP 繞過 403) ──────────────────
   args.push('--proxy', WARP_PROXY);
+  args.push('--js-runtimes', 'node'); //讓 yt-dlp 使用 Node.js 解開 YouTube 驗證
 
   // ── 1. 格式 & 輸出 ────────────────────────────────────
   if (streamMode) {
@@ -344,8 +345,9 @@ function buildInfoArgs(url) {
   const base = ['--dump-json', '--no-playlist', '--no-warnings', '--skip-download'];
 
   if (isYouTubeUrl(url)) {
-    // 👇 加入這行，讓 YouTube 獲取資訊時也走 WARP Proxy
+    // 讓 YouTube 獲取資訊時也走 WARP Proxy
     base.push('--proxy', WARP_PROXY);
+    base.push('--js-runtimes', 'node');
     
     const strategy = YT_CLIENT_STRATEGIES.find(s => s.name === 'tv') || YT_CLIENT_STRATEGIES[0];
     base.push(...strategy.args);
