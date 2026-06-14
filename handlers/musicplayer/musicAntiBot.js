@@ -7,6 +7,11 @@ const fs   = require('fs');
 const path = require('path');
 
 // ════════════════════════════════════════════════════════
+//  Proxy 設定 (Cloudflare WARP)
+// ════════════════════════════════════════════════════════
+const WARP_PROXY = 'socks5://127.0.0.1:40000';
+
+// ════════════════════════════════════════════════════════
 //  Cookies 檔案路徑（僅保留「已存在的外部檔案」路徑，不自動建立）
 // ════════════════════════════════════════════════════════
 const COOKIES_PATH    = path.join(__dirname, '..', 'cookies.txt');
@@ -91,7 +96,6 @@ function isYouTubeUrl(url) {
 // ════════════════════════════════════════════════════════
 //  Bilibili Cookies 準備
 //  優先順序：cookies.txt（外部，唯讀）→ 環境變數（記憶體字串）→ null
-//  ✅ 不再建立任何 .txt 檔案
 // ════════════════════════════════════════════════════════
 function prepareBilibiliCookies() {
   // 1. 外部 cookies.txt（使用者自行放置，唯讀）
@@ -125,7 +129,6 @@ function prepareBilibiliCookies() {
 // ════════════════════════════════════════════════════════
 //  YouTube Cookies 準備
 //  優先順序：yt_cookies.txt → cookies.txt → 環境變數（記憶體字串）→ null
-//  ✅ 不再建立任何 .txt 檔案
 // ════════════════════════════════════════════════════════
 function prepareYouTubeCookies() {
   // 1. 外部 yt_cookies.txt
@@ -218,6 +221,9 @@ function resetYtClient(guildId) {
 // ════════════════════════════════════════════════════════
 function buildYouTubeArgs(url, strategy, streamMode = true) {
   const args = [];
+
+  // ── 0. Proxy 設定 (透過 WARP 繞過 403) ──────────────────
+  args.push('--proxy', WARP_PROXY);
 
   // ── 1. 格式 & 輸出 ────────────────────────────────────
   if (streamMode) {
@@ -338,6 +344,9 @@ function buildInfoArgs(url) {
   const base = ['--dump-json', '--no-playlist', '--no-warnings', '--skip-download'];
 
   if (isYouTubeUrl(url)) {
+    // 👇 加入這行，讓 YouTube 獲取資訊時也走 WARP Proxy
+    base.push('--proxy', WARP_PROXY);
+    
     const strategy = YT_CLIENT_STRATEGIES.find(s => s.name === 'tv') || YT_CLIENT_STRATEGIES[0];
     base.push(...strategy.args);
     if (strategy.name !== 'tv_simply') {
