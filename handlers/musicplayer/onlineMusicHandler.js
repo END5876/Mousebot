@@ -23,6 +23,9 @@ const MAX_RETRIES            = 3;
 const RETRY_DELAY            = 3000;
 const MAX_CONSECUTIVE_ERRORS = 5;
 
+// ── 超過此秒數則只串流，不下載快取 ───────────────────────
+const MAX_CACHE_DURATION_SEC = 7 * 60; // 420 秒
+
 // ── 進程 & 錯誤計數 ───────────────────────────────────────
 const activeProcesses = new Map(); // guildId -> ChildProcess
 const errorCounts     = new Map(); // guildId -> number
@@ -106,10 +109,11 @@ async function getInfo(url) {
         const info = JSON.parse(data.trim().split('\n').pop());
         resolve({
           url,
-          title    : info.title    || '未知標題',
-          author   : info.uploader || info.channel || info.creator || '未知作者',
-          duration : formatDuration(info.duration),
-          thumbnail: info.thumbnail || null,
+          title      : info.title    || '未知標題',
+          author     : info.uploader || info.channel || info.creator || '未知作者',
+          duration   : formatDuration(info.duration),
+          durationSec: info.duration || 0,   // 保留原始秒數，供快取判斷使用
+          thumbnail  : info.thumbnail || null,
         });
       } catch { reject(new Error('解析影片資訊失敗')); }
     });
@@ -126,7 +130,13 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
 
   const platform = antiBot.isYouTubeUrl(item.url) ? 'YouTube' : 'Bilibili';
 
+  // 判斷是否要跳過快取下載：
+  // 1. durationSec 不存在或為 0 (通常是直播或未知長度)
+  // 2. durationSec 超過 420 秒
+  const tooLongToCache = !item.durationSec || item.durationSec > MAX_CACHE_DURATION_SEC;
+
   try {
+    // ── 1. 永遠先檢查快取 (即使超過 7 分鐘，若以前載過還是直接用) ──
     const cachedPath = cache.getCachedPath(item.url, item.title);
 
     if (cachedPath) {
@@ -135,51 +145,62 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
       return;
     }
 
-    if (!silent) console.log(`⬇️ [${platform}] 快取未命中，開始下載: ${item.title}`);
-
-    if (downloadingUrls.has(item.url)) {
-      if (!silent) console.log('⏳ 此 URL 正在下載中，等待完成...');
-      await _waitForDownload(item.url, 300);
-      const pathAfterWait = cache.getCachedPath(item.url, item.title);
-      if (pathAfterWait) {
-        _playFromFile(guildId, item, player, pathAfterWait, silent);
-      } else {
-        _fallbackStream(guildId, item, player, retryCount, silent);
-      }
-      return;
+    // ── 2. 快取未命中，一律啟動即時串流播放 ──
+    if (tooLongToCache) {
+      const reason = !item.durationSec ? '未知長度/直播' : `長度超過 7 分鐘`;
+      if (!silent) console.log(`⏭️ [${platform}] ${reason}，跳過背景下載，僅串流: ${item.title}`);
+    } else {
+      if (!silent) console.log(`🔄 [${platform}] 快取未命中，啟動即時串流播放: ${item.title}`);
     }
 
-    downloadingUrls.add(item.url);
+    _fallbackStream(guildId, item, player, retryCount, silent);
 
-    // 尋找 default 策略
-    const dlArgs = antiBot.isYouTubeUrl(item.url)
-      ? antiBot.buildYouTubeArgs(
+    // ── 3. 背景下載快取（僅限 ≤ 7 分鐘且非直播）──
+    if (!tooLongToCache) {
+      if (!downloadingUrls.has(item.url)) {
+        downloadingUrls.add(item.url);
+
+        if (!silent) console.log(`⬇️ [${platform}] 背景開始下載快取...`);
+
+        const dlArgs = antiBot.isYouTubeUrl(item.url)
+          ? antiBot.buildYouTubeArgs(
+              item.url,
+              antiBot.YT_CLIENT_STRATEGIES.find(s => s.name === 'default') || antiBot.YT_CLIENT_STRATEGIES[0],
+              false,
+            )
+          : antiBot.buildBilibiliArgs(item.url, false);
+
+        let lastProgress = 0;
+
+        cache.downloadAndCache(
           item.url,
-          antiBot.YT_CLIENT_STRATEGIES.find(s => s.name === 'default') || antiBot.YT_CLIENT_STRATEGIES[0],
-          false,
+          item.title,
+          dlArgs,
+          (progress) => {
+            if (progress - lastProgress >= 20) {
+              lastProgress = progress;
+              if (!silent) console.log(`⬇️ [${platform}] 背景下載進度: ${progress.toFixed(1)}%`);
+            }
+          },
         )
-      : antiBot.buildBilibiliArgs(item.url, false);
+        .then((filePath) => {
+          if (!silent) console.log(`✅ [Cache] 背景下載完成，已儲存至: ${path.basename(filePath)}`);
+        })
+        .catch((err) => {
+          if (!silent) console.error(`⚠️ [Cache] 背景下載失敗: ${err.message}`);
+        })
+        .finally(() => {
+          downloadingUrls.delete(item.url);
+        });
 
-    let lastProgress = 0;
-    const filePath = await cache.downloadAndCache(
-      item.url,
-      item.title,
-      dlArgs,
-      (progress) => {
-        if (progress - lastProgress >= 10) {
-          lastProgress = progress;
-          if (!silent) console.log(`⬇️ [${platform}] 下載進度: ${progress.toFixed(1)}%`);
-        }
-      },
-    );
-
-    downloadingUrls.delete(item.url);
-    _playFromFile(guildId, item, player, filePath, silent);
+      } else {
+        if (!silent) console.log(`⏳ 此 URL 已經在背景下載中，跳過重複下載任務。`);
+      }
+    }
 
   } catch (err) {
-    downloadingUrls.delete(item.url);
-    if (!silent) console.error(`❌ [${platform}] 下載失敗，切換串流模式: ${err.message}`);
-    _fallbackStream(guildId, item, player, retryCount, silent);
+    if (!silent) console.error(`❌ [${platform}] 播放前發生錯誤: ${err.message}`);
+    _handleStreamError(guildId, item, player, retryCount, err.message, silent);
   }
 }
 
@@ -270,19 +291,6 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
   errorCounts.set(guildId, 0);
 }
 
-function _waitForDownload(url, maxAttempts = 300) {
-  return new Promise((resolve) => {
-    let attempts = 0;
-    const timer = setInterval(() => {
-      attempts++;
-      if (!downloadingUrls.has(url) || attempts >= maxAttempts) {
-        clearInterval(timer);
-        resolve();
-      }
-    }, 1000);
-  });
-}
-
 function _handleStreamError(guildId, item, player, retryCount, errorMessage, silent = false) {
   const currentErrors = (errorCounts.get(guildId) || 0) + 1;
   errorCounts.set(guildId, currentErrors);
@@ -336,7 +344,6 @@ module.exports = {
   getCachedPath: cache.getCachedPath,
   downloadAndCache: (url, title, onProgress) => {
     const args = antiBot.isYouTubeUrl(url)
-      // 🎯 修改重點：改為尋找 default 策略
       ? antiBot.buildYouTubeArgs(url, antiBot.YT_CLIENT_STRATEGIES[0], false)
       : antiBot.buildBilibiliArgs(url, false);
     return cache.downloadAndCache(url, title, args, onProgress);
