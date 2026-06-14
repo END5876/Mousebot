@@ -34,10 +34,8 @@ const BILIBILI_HEADERS = {
 };
 
 // ── Bilibili Cookie（記憶體字串，初始化後設定）────────────
-//    若有外部 cookies.txt 則優先使用檔案路徑，
-//    否則從環境變數組合成 Cookie Header 字串
-let BILIBILI_COOKIES_FILE   = null;  // 外部 .txt 路徑（唯讀）
-let BILIBILI_COOKIE_HEADER  = null;  // 記憶體 Cookie 字串
+let BILIBILI_COOKIES_FILE   = null;
+let BILIBILI_COOKIE_HEADER  = null;
 
 // ════════════════════════════════════════════════════════
 //  YouTube 防爬蟲設定
@@ -48,28 +46,34 @@ const YOUTUBE_HEADERS = {
   'Accept'         : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 };
 
-// ── YouTube PO Token（從環境變數讀取）────────────────────
 const YT_PO_TOKEN = process.env.YOUTUBE_PO_TOKEN || null;
 
 // ── YouTube player_client 優先順序策略 ───────────────────
+// 🎯 修改重點：將 default 設為第一順位，不指定參數讓 yt-dlp 自動選擇最佳客戶端繞過 DRM
 const YT_CLIENT_STRATEGIES = [
   {
-    name    : 'tv',
-    args    : ['--extractor-args', 'youtube:player_client=tv'],
+    name    : 'default',
+    args    : [], // 不指定參數，使用 yt-dlp 預設
     needsPO : false,
-    desc    : 'TV client（最穩定，不需 PO Token）',
-  },
-  {
-    name    : 'tv_simply',
-    args    : ['--extractor-args', 'youtube:player_client=tv_simply'],
-    needsPO : false,
-    desc    : 'TV Simply client（不需 PO Token，不支援帳號 Cookie）',
+    desc    : '預設 client（最穩定，繞過 TV DRM 限制）',
   },
   {
     name    : 'mweb+po',
     args    : ['--extractor-args', 'youtube:player_client=default,mweb'],
     needsPO : true,
     desc    : 'mweb client（需要 PO Token）',
+  },
+  {
+    name    : 'tv',
+    args    : ['--extractor-args', 'youtube:player_client=tv'],
+    needsPO : false,
+    desc    : 'TV client（容易遇到 DRM 限制，作為備用）',
+  },
+  {
+    name    : 'tv_simply',
+    args    : ['--extractor-args', 'youtube:player_client=tv_simply'],
+    needsPO : false,
+    desc    : 'TV Simply client',
   },
   {
     name    : 'web_embedded',
@@ -79,38 +83,25 @@ const YT_CLIENT_STRATEGIES = [
   },
 ];
 
-// ── 每個 Guild 目前使用的 client 索引 ────────────────────
-const ytClientIndex = new Map(); // guildId -> number
+const ytClientIndex = new Map();
 
-// ── YouTube Cookie（記憶體字串，初始化後設定）─────────────
-let YT_COOKIES_FILE   = null;  // 外部 .txt 路徑（唯讀）
-let YT_COOKIE_HEADER  = null;  // 記憶體 Cookie 字串
+let YT_COOKIES_FILE   = null;
+let YT_COOKIE_HEADER  = null;
 
-// ════════════════════════════════════════════════════════
-//  工具：判斷是否為 YouTube URL
-// ════════════════════════════════════════════════════════
 function isYouTubeUrl(url) {
   return /youtube\.com|youtu\.be/.test(url);
 }
 
-// ════════════════════════════════════════════════════════
-//  Bilibili Cookies 準備
-//  優先順序：cookies.txt（外部，唯讀）→ 環境變數（記憶體字串）→ null
-// ════════════════════════════════════════════════════════
 function prepareBilibiliCookies() {
-  // 1. 外部 cookies.txt（使用者自行放置，唯讀）
   if (fs.existsSync(COOKIES_PATH)) {
     console.log('✅ [Bilibili] 找到 cookies.txt');
     BILIBILI_COOKIES_FILE  = COOKIES_PATH;
     BILIBILI_COOKIE_HEADER = null;
     return;
   }
-
-  // 2. 從環境變數組合成 Cookie Header 字串（不寫檔）
   const sessdata   = process.env.BILIBILI_SESSDATA;
   const biliJct    = process.env.BILIBILI_BILI_JCT;
   const dedeUserId = process.env.BILIBILI_DEDEUSERID;
-
   if (sessdata) {
     console.log('✅ [Bilibili] 從環境變數載入 Cookies（記憶體模式）');
     const parts = [`SESSDATA=${sessdata}`];
@@ -120,37 +111,26 @@ function prepareBilibiliCookies() {
     BILIBILI_COOKIE_HEADER = parts.join('; ');
     return;
   }
-
   console.warn('⚠️ [Bilibili] 未找到 Cookies，播放可能失敗');
   BILIBILI_COOKIES_FILE  = null;
   BILIBILI_COOKIE_HEADER = null;
 }
 
-// ════════════════════════════════════════════════════════
-//  YouTube Cookies 準備
-//  優先順序：yt_cookies.txt → cookies.txt → 環境變數（記憶體字串）→ null
-// ════════════════════════════════════════════════════════
 function prepareYouTubeCookies() {
-  // 1. 外部 yt_cookies.txt
   if (fs.existsSync(YT_COOKIES_PATH)) {
     console.log('✅ [YouTube] 找到 yt_cookies.txt');
     YT_COOKIES_FILE   = YT_COOKIES_PATH;
     YT_COOKIE_HEADER  = null;
     return;
   }
-
-  // 2. 外部共用 cookies.txt
   if (fs.existsSync(COOKIES_PATH)) {
     console.log('✅ [YouTube] 使用共用 cookies.txt');
     YT_COOKIES_FILE   = COOKIES_PATH;
     YT_COOKIE_HEADER  = null;
     return;
   }
-
-  // 3. 從環境變數組合成 Cookie Header 字串（不寫檔）
   const ytSessId = process.env.YOUTUBE_SESSION_ID;
   const ytVisitor = process.env.YOUTUBE_VISITOR_INFO;
-
   if (ytSessId || ytVisitor) {
     console.log('✅ [YouTube] 從環境變數載入 Cookies（記憶體模式）');
     const parts = [];
@@ -160,29 +140,17 @@ function prepareYouTubeCookies() {
     YT_COOKIE_HEADER  = parts.join('; ');
     return;
   }
-
-  console.warn('⚠️ [YouTube] 未設定 Cookies，使用無帳號模式（tv client）');
+  console.warn('⚠️ [YouTube] 未設定 Cookies，使用無帳號模式');
   YT_COOKIES_FILE   = null;
   YT_COOKIE_HEADER  = null;
 }
 
-// ════════════════════════════════════════════════════════
-//  初始化所有 Cookies（由 musicPlayer 呼叫一次）
-// ════════════════════════════════════════════════════════
 function initCookies() {
   prepareBilibiliCookies();
   prepareYouTubeCookies();
-  return {
-    BILIBILI_COOKIES_FILE,
-    YT_COOKIES_FILE,
-  };
+  return { BILIBILI_COOKIES_FILE, YT_COOKIES_FILE };
 }
 
-// ════════════════════════════════════════════════════════
-//  內部工具：將 Cookie 注入 args
-//  有外部 .txt → --cookies <path>
-//  有記憶體字串 → --add-header "Cookie:<value>"
-// ════════════════════════════════════════════════════════
 function _appendCookieArgs(args, cookiesFile, cookieHeader) {
   if (cookiesFile) {
     args.push('--cookies', cookiesFile);
@@ -191,9 +159,6 @@ function _appendCookieArgs(args, cookiesFile, cookieHeader) {
   }
 }
 
-// ════════════════════════════════════════════════════════
-//  YouTube client 輪換
-// ════════════════════════════════════════════════════════
 function getYtClientStrategy(guildId) {
   const idx = ytClientIndex.get(guildId) || 0;
   return { strategy: YT_CLIENT_STRATEGIES[idx], idx };
@@ -208,7 +173,7 @@ function rotateYtClient(guildId) {
     return true;
   }
   ytClientIndex.set(guildId, 0);
-  console.warn('⚠️ [YouTube] 所有 client 均失敗，重置為 tv');
+  console.warn('⚠️ [YouTube] 所有 client 均失敗，重置為 default');
   return false;
 }
 
@@ -216,148 +181,85 @@ function resetYtClient(guildId) {
   ytClientIndex.delete(guildId);
 }
 
-// ════════════════════════════════════════════════════════
-//  組合 YouTube yt-dlp 參數
-// ════════════════════════════════════════════════════════
 function buildYouTubeArgs(url, strategy, streamMode = true) {
   const args = [];
-
-  // ── 0. Proxy 設定 (透過 WARP 繞過 403) ──────────────────
   args.push('--proxy', WARP_PROXY);
-  args.push('--js-runtimes', 'node'); //讓 yt-dlp 使用 Node.js 解開 YouTube 驗證
+  args.push('--js-runtimes', 'node');
 
-  // ── 1. 格式 & 輸出 ────────────────────────────────────
   if (streamMode) {
-    args.push(
-      '-f', 'bestaudio/best',
-      '-o', '-',
-      '--quiet',
-      '--buffer-size', '16K',
-    );
+    args.push('-f', 'bestaudio/best', '-o', '-', '--quiet', '--buffer-size', '16K');
   } else {
-    args.push(
-      '-f', 'bestaudio/best',
-      '-o', '__OUTPUT__',
-      '--extract-audio',
-      '--audio-format', 'mp3',
-      '--audio-quality', '0',
-    );
+    args.push('-f', 'bestaudio/best', '-o', '__OUTPUT__', '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0');
   }
 
   args.push('--no-playlist', '--no-warnings');
-
-  // ── 2. player_client 策略 ─────────────────────────────
   args.push(...strategy.args);
 
-  // ── 3. PO Token ───────────────────────────────────────
   if (strategy.needsPO && YT_PO_TOKEN) {
     args.push('--extractor-args', `youtube:po_token=mweb.gvs+${YT_PO_TOKEN}`);
     console.log(`🔑 [YouTube] 附加 PO Token (${YT_PO_TOKEN.slice(0, 8)}...)`);
   }
 
-  // ── 4. Cookies（tv_simply 不支援帳號 Cookie）──────────
   if (strategy.name !== 'tv_simply') {
     _appendCookieArgs(args, YT_COOKIES_FILE, YT_COOKIE_HEADER);
   }
 
-  // ── 5. Headers 偽裝 ───────────────────────────────────
   args.push(
     '--user-agent',  YOUTUBE_HEADERS['User-Agent'],
     '--add-header',  `Accept-Language:${YOUTUBE_HEADERS['Accept-Language']}`,
-  );
-
-  // ── 6. 速率限制（避免觸發 429）────────────────────────
-  args.push(
     '--sleep-requests',     '1',
     '--sleep-interval',     '1',
     '--max-sleep-interval', '3',
+    '--no-check-certificate', '--ignore-errors'
   );
-
-  // ── 7. 其他穩定性設定 ─────────────────────────────────
-  args.push('--no-check-certificate', '--ignore-errors');
 
   args.push(url);
   return args;
 }
 
-// ════════════════════════════════════════════════════════
-//  組合 Bilibili yt-dlp 參數
-// ════════════════════════════════════════════════════════
 function buildBilibiliArgs(url, streamMode = true) {
   const args = [];
-
-  // ── 1. 格式 & 輸出 ────────────────────────────────────
   if (streamMode) {
-    args.push(
-      '-f', 'bestaudio/best',
-      '-o', '-',
-      '--quiet',
-      '--extract-audio',
-      '--audio-format', 'opus',
-      '--audio-quality', '0',
-      '--buffer-size', '16K',
-    );
+    args.push('-f', 'bestaudio/best', '-o', '-', '--quiet', '--extract-audio', '--audio-format', 'opus', '--audio-quality', '0', '--buffer-size', '16K');
   } else {
-    args.push(
-      '-f', 'bestaudio/best',
-      '-o', '__OUTPUT__',
-      '--extract-audio',
-      '--audio-format', 'mp3',
-      '--audio-quality', '0',
-    );
+    args.push('-f', 'bestaudio/best', '-o', '__OUTPUT__', '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0');
   }
 
   args.push('--no-playlist', '--no-warnings');
-
-  // ── 2. Cookies ────────────────────────────────────────
   _appendCookieArgs(args, BILIBILI_COOKIES_FILE, BILIBILI_COOKIE_HEADER);
 
-  // ── 3. Headers 偽裝 ───────────────────────────────────
   args.push(
     '--user-agent', BILIBILI_HEADERS['User-Agent'],
     '--referer',    BILIBILI_HEADERS['Referer'],
     '--add-header', `Origin:${BILIBILI_HEADERS['Origin']}`,
     '--add-header', `Accept:${BILIBILI_HEADERS['Accept']}`,
-  );
-
-  // ── 4. 速率限制 ───────────────────────────────────────
-  args.push(
     '--sleep-requests',     '2',
     '--sleep-interval',     '2',
     '--max-sleep-interval', '5',
-  );
-
-  // ── 5. 其他設定 ───────────────────────────────────────
-  args.push(
     '--no-check-certificate',
     '--extractor-args', 'bilibili:getcomments=false',
-    '--extractor-args', 'bilibili:getdanmaku=false',
+    '--extractor-args', 'bilibili:getdanmaku=false'
   );
 
   args.push(url);
   return args;
 }
 
-// ════════════════════════════════════════════════════════
-//  組合 getInfo 用參數（兩個平台共用入口）
-// ════════════════════════════════════════════════════════
 function buildInfoArgs(url) {
   const base = ['--dump-json', '--no-playlist', '--no-warnings', '--skip-download'];
 
   if (isYouTubeUrl(url)) {
-    // 讓 YouTube 獲取資訊時也走 WARP Proxy
     base.push('--proxy', WARP_PROXY);
     base.push('--js-runtimes', 'node');
     
-    const strategy = YT_CLIENT_STRATEGIES.find(s => s.name === 'tv') || YT_CLIENT_STRATEGIES[0];
+    // 🎯 修改重點：改為尋找 default 策略
+    const strategy = YT_CLIENT_STRATEGIES.find(s => s.name === 'default') || YT_CLIENT_STRATEGIES[0];
     base.push(...strategy.args);
+    
     if (strategy.name !== 'tv_simply') {
       _appendCookieArgs(base, YT_COOKIES_FILE, YT_COOKIE_HEADER);
     }
-    base.push(
-      '--user-agent', YOUTUBE_HEADERS['User-Agent'],
-      '--no-check-certificate',
-    );
+    base.push('--user-agent', YOUTUBE_HEADERS['User-Agent'], '--no-check-certificate');
   } else {
     _appendCookieArgs(base, BILIBILI_COOKIES_FILE, BILIBILI_COOKIE_HEADER);
     base.push(
@@ -369,7 +271,7 @@ function buildInfoArgs(url) {
       '--extractor-args', 'bilibili:getdanmaku=false',
       '--sleep-requests',     '2',
       '--sleep-interval',     '2',
-      '--max-sleep-interval', '5',
+      '--max-sleep-interval', '5'
     );
   }
 
@@ -377,9 +279,6 @@ function buildInfoArgs(url) {
   return base;
 }
 
-// ════════════════════════════════════════════════════════
-//  YouTube 錯誤分類
-// ════════════════════════════════════════════════════════
 function classifyYouTubeError(errorOutput) {
   if (errorOutput.includes('Sign in to confirm') || errorOutput.includes('not a bot')) {
     return { type: 'BOT_DETECTED',   rotate: true,  msg: 'YouTube 偵測到機器人請求，嘗試切換 client' };
@@ -402,9 +301,6 @@ function classifyYouTubeError(errorOutput) {
   return   { type: 'UNKNOWN',        rotate: true,  msg: `未知錯誤: ${errorOutput.slice(-150)}` };
 }
 
-// ════════════════════════════════════════════════════════
-//  Bilibili 錯誤分類
-// ════════════════════════════════════════════════════════
 function classifyBilibiliError(errorOutput) {
   if (errorOutput.includes('412')) return { msg: 'Bilibili 反爬蟲限制 (412)' };
   if (errorOutput.includes('403')) return { msg: '影片無法訪問 (403)，可能有地區限制或需要大會員' };
@@ -413,23 +309,17 @@ function classifyBilibiliError(errorOutput) {
 }
 
 module.exports = {
-  // 初始化
   initCookies,
-  // 工具
   isYouTubeUrl,
-  // YouTube
   YT_CLIENT_STRATEGIES,
   getYtClientStrategy,
   rotateYtClient,
   resetYtClient,
   buildYouTubeArgs,
   classifyYouTubeError,
-  // Bilibili
   buildBilibiliArgs,
   classifyBilibiliError,
-  // 共用
   buildInfoArgs,
-  // 狀態 getter（供 musicPlayer 讀取設定資訊）
   getCookieStatus: () => ({
     bilibili : BILIBILI_COOKIES_FILE || BILIBILI_COOKIE_HEADER,
     youtube  : YT_COOKIES_FILE       || YT_COOKIE_HEADER,
