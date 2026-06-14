@@ -1,7 +1,7 @@
 const {
   getVoiceConnection,
 } = require('@discordjs/voice');
-const { SlashCommandBuilder, MessageFlags } = require('discord.js'); // ✨ 新增 MessageFlags
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const { execSync, spawn } = require('child_process');
 const fs   = require('fs');
 const path = require('path');
