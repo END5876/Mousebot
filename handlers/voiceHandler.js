@@ -194,7 +194,7 @@ function setupVoiceCommands(client) {
       }
 
       const { stopBilibiliAudio } = require('./musicplayer/onlineMusicHandler');
-      stopBilibiliAudio(guildId);
+      stopAll(guildId);
 
       if (sttActiveGuilds.has(guildId)) {
         stopSTTListening(guildId);
