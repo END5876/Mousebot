@@ -193,7 +193,7 @@ function setupVoiceCommands(client) {
         silenceTimers.delete(guildId);
       }
 
-      const { stopBilibiliAudio } = require('./musicplayer/onlineMusicHandler');
+      const { stopAll } = require('./musicplayer/onlineMusicHandler');
       stopAll(guildId);
 
       if (sttActiveGuilds.has(guildId)) {
