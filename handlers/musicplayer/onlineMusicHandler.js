@@ -208,9 +208,9 @@ function _playFromFile(guildId, item, player, filePath, silent) {
   try {
     const resource = createAudioResource(filePath, {
       inputType:    StreamType.Arbitrary,
-      inlineVolume: true,
+      inlineVolume: false,
     });
-    resource.volume.setVolume(0.5);
+
     player.play(resource);
     errorCounts.set(guildId, 0);
     if (!silent) console.log(`🎵 [OnlineMusic] 本地播放: ${path.basename(filePath)}`);
@@ -280,9 +280,9 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
 
   const resource = createAudioResource(ytdlp.stdout, {
     inputType:    StreamType.Arbitrary,
-    inlineVolume: true,
+    inlineVolume: false,
   });
-  resource.volume.setVolume(0.5);
+
   resource.playStream?.on('error', err => {
     if (!silent) console.error('音頻流錯誤:', err);
   });
@@ -338,6 +338,26 @@ async function setupOnlineMusicEngine() {
   registerEngine('bilibili', { playStream, getInfo });
 }
 
+// ════════════════════════════════════════════════════════
+//  防殭屍進程保護 (Zombie Process Protection)
+// ════════════════════════════════════════════════════════
+process.on('exit', () => {
+  for (const [guildId, childProcess] of activeProcesses.entries()) {
+    if (!childProcess.killed) {
+      try {
+        childProcess.kill('SIGKILL');
+      } catch (e) {}
+    }
+  }
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('❌ [OnlineMusic] 發生未捕捉的錯誤:', err);
+});
+
+// ════════════════════════════════════════════════════════
+//  匯出模組
+// ════════════════════════════════════════════════════════
 module.exports = {
   setupOnlineMusicEngine,
   cleanupProcess,
