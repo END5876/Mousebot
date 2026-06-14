@@ -392,6 +392,37 @@ async function _handlePlayAll(interaction, shuffleOpt) {
 }
 
 // ════════════════════════════════════════════════════════
+//  網址清理工具 (URL Cleaning)
+// ════════════════════════════════════════════════════════
+function cleanUrl(rawUrl) {
+  try {
+    const urlObj = new URL(rawUrl);
+
+    // 處理 Bilibili 網址：保留分P，刪除所有追蹤碼
+    if (urlObj.hostname.includes('bilibili.com')) {
+      const p = urlObj.searchParams.get('p');
+      urlObj.search = ''; 
+      if (p) urlObj.searchParams.set('p', p);
+      return urlObj.toString();
+    }
+
+    // 處理 YouTube 網址：刪除播放清單與無用參數
+    if (urlObj.hostname.includes('youtube.com')) {
+      urlObj.searchParams.delete('list');
+      urlObj.searchParams.delete('index');
+      urlObj.searchParams.delete('start_radio');
+      urlObj.searchParams.delete('rv');
+      urlObj.searchParams.delete('feature');
+      return urlObj.toString();
+    }
+
+    return rawUrl;
+  } catch (error) {
+    return rawUrl; // 若非網址（如搜尋關鍵字）則原樣回傳
+  }
+}
+
+// ════════════════════════════════════════════════════════
 //  handlePlay（/play 核心邏輯）
 // ════════════════════════════════════════════════════════
 async function handlePlay(interaction, input, shuffleOpt = 'no') {
@@ -409,7 +440,9 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
   }
   if (!connection) return interaction.editReply('❌ 你必須先加入語音頻道！');
 
-  const isUrl = (() => { try { new URL(input); return true; } catch { return false; } })();
+  // 網址清理
+  const cleanInput = cleanUrl(input);
+  const isUrl = (() => { try { new URL(cleanInput); return true; } catch { return false; } })();
 
   let item;
 
@@ -426,7 +459,8 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
     });
 
     try {
-      item = await engine.getInfo(input);
+      // 使用清理後的網址獲取資訊
+      item = await engine.getInfo(cleanInput);
       item.type = 'bilibili';
     } catch (err) {
       return interaction.editReply(`❌ 無法獲取影片資訊：${err.message}`);
@@ -435,6 +469,7 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
     const engine = _engines.local;
     if (!engine) return interaction.editReply('❌ 本地音樂引擎未就緒');
 
+    // 本地音樂直接使用原始輸入
     item = engine.getTrackInfo(input);
     if (!item) return interaction.editReply(`❌ 找不到本地音訊檔案：**${input}**`);
     item.type = 'local';
