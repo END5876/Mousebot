@@ -120,10 +120,6 @@ async function getInfo(url) {
 
 // ════════════════════════════════════════════════════════
 //  playStream（由 unifiedQueue 呼叫）
-//  流程：
-//    1. 檢查快取 → 有則直接播放本地檔案
-//    2. 沒有快取 → 下載到 music/cache/ → 播放
-//    3. 下載失敗 → fallback 回即時串流模式
 // ════════════════════════════════════════════════════════
 async function playStream(guildId, item, player, { retryCount = 0, silent = false } = {}) {
   cleanupProcess(guildId);
@@ -131,7 +127,6 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
   const platform = antiBot.isYouTubeUrl(item.url) ? 'YouTube' : 'Bilibili';
 
   try {
-    // ── Step 1：檢查快取 ──────────────────────────────
     const cachedPath = cache.getCachedPath(item.url, item.title);
 
     if (cachedPath) {
@@ -140,10 +135,8 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
       return;
     }
 
-    // ── Step 2：需要下載 ──────────────────────────────
     if (!silent) console.log(`⬇️ [${platform}] 快取未命中，開始下載: ${item.title}`);
 
-    // 防止重複下載同一 URL
     if (downloadingUrls.has(item.url)) {
       if (!silent) console.log('⏳ 此 URL 正在下載中，等待完成...');
       await _waitForDownload(item.url, 300);
@@ -158,12 +151,12 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
 
     downloadingUrls.add(item.url);
 
-    // 組合下載參數
+    // 尋找 default 策略
     const dlArgs = antiBot.isYouTubeUrl(item.url)
       ? antiBot.buildYouTubeArgs(
           item.url,
-          antiBot.YT_CLIENT_STRATEGIES.find(s => s.name === 'tv') || antiBot.YT_CLIENT_STRATEGIES[0],
-          false,  // streamMode = false（下載模式）
+          antiBot.YT_CLIENT_STRATEGIES.find(s => s.name === 'default') || antiBot.YT_CLIENT_STRATEGIES[0],
+          false,
         )
       : antiBot.buildBilibiliArgs(item.url, false);
 
@@ -190,9 +183,6 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
   }
 }
 
-// ════════════════════════════════════════════════════════
-//  從本地檔案播放
-// ════════════════════════════════════════════════════════
 function _playFromFile(guildId, item, player, filePath, silent) {
   try {
     const resource = createAudioResource(filePath, {
@@ -209,9 +199,6 @@ function _playFromFile(guildId, item, player, filePath, silent) {
   }
 }
 
-// ════════════════════════════════════════════════════════
-//  Fallback：回退到即時串流模式（YouTube + Bilibili 分支）
-// ════════════════════════════════════════════════════════
 function _fallbackStream(guildId, item, player, retryCount, silent) {
   const isYT     = antiBot.isYouTubeUrl(item.url);
   const platform = isYT ? 'YouTube' : 'Bilibili';
@@ -257,7 +244,6 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
 
     if (code !== 0 && !dataReceived && hasError) {
       if (isYT) {
-        // YouTube：先嘗試 rotate client，再走重試邏輯
         const classified = antiBot.classifyYouTubeError(errorOutput);
         if (!silent) console.warn(`⚠️ [YouTube] ${classified.msg}`);
 
@@ -284,9 +270,6 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
   errorCounts.set(guildId, 0);
 }
 
-// ════════════════════════════════════════════════════════
-//  等待同一 URL 的下載完成（輪詢）
-// ════════════════════════════════════════════════════════
 function _waitForDownload(url, maxAttempts = 300) {
   return new Promise((resolve) => {
     let attempts = 0;
@@ -300,9 +283,6 @@ function _waitForDownload(url, maxAttempts = 300) {
   });
 }
 
-// ════════════════════════════════════════════════════════
-//  重試 / 跳過邏輯
-// ════════════════════════════════════════════════════════
 function _handleStreamError(guildId, item, player, retryCount, errorMessage, silent = false) {
   const currentErrors = (errorCounts.get(guildId) || 0) + 1;
   errorCounts.set(guildId, currentErrors);
@@ -330,9 +310,6 @@ function _handleStreamError(guildId, item, player, retryCount, errorMessage, sil
   }
 }
 
-// ════════════════════════════════════════════════════════
-//  setupOnlineMusicEngine（原 setupBilibiliEngine）
-// ════════════════════════════════════════════════════════
 async function setupOnlineMusicEngine() {
   antiBot.initCookies();
   cache.ensureCacheDir();
@@ -343,24 +320,23 @@ async function setupOnlineMusicEngine() {
     const { bilibili, youtube, poToken } = antiBot.getCookieStatus();
     console.log('✅ [OnlineMusic] 引擎已就緒');
     console.log(bilibili ? '✅ Bilibili Cookies 已配置'  : '⚠️ 未配置 Bilibili Cookies');
-    console.log(youtube  ? '✅ YouTube Cookies 已配置'   : '⚠️ 未配置 YouTube Cookies（使用 tv client 無帳號模式）');
+    console.log(youtube  ? '✅ YouTube Cookies 已配置'   : '⚠️ 未配置 YouTube Cookies（使用無帳號模式）');
     console.log(poToken  ? '✅ YouTube PO Token 已配置'  : '⚠️ 未配置 YouTube PO Token（mweb client 將跳過）');
-    console.log(`📁 [Cache] 快取資料夾: ${cache.CACHE_DIR} (上限 ${cache.MAX_CACHE_SIZE_MB} MB)`);
+    console.log(`📂 [Cache] 快取資料夾: ${cache.CACHE_DIR} (上限 ${cache.MAX_CACHE_SIZE_MB} MB)`);
   } else {
     console.warn('⚠️ [OnlineMusic] 引擎可能無法正常運作');
   }
 
-  // 注入引擎到 unifiedQueue
   registerEngine('bilibili', { playStream, getInfo });
 }
 
 module.exports = {
   setupOnlineMusicEngine,
   cleanupProcess,
-  // 供外部直接使用（如 localMusicHandler 共用快取）
   getCachedPath: cache.getCachedPath,
   downloadAndCache: (url, title, onProgress) => {
     const args = antiBot.isYouTubeUrl(url)
+      // 🎯 修改重點：改為尋找 default 策略
       ? antiBot.buildYouTubeArgs(url, antiBot.YT_CLIENT_STRATEGIES[0], false)
       : antiBot.buildBilibiliArgs(url, false);
     return cache.downloadAndCache(url, title, args, onProgress);
