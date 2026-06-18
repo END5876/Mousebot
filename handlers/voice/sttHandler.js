@@ -10,7 +10,7 @@ const { getGeminiResponseVoice } = require('../../handlers/ai/aiHandler');
 const {
   WAKEUP_VOICE_PATH, TEMP_DIR,
   RECORD_MAX_MS, RECORD_SILENCE_MS, WAKEUP_COOLDOWN_MS,
-  RMS_THRESHOLD, DETECT_WINDOW_MS,
+  RMS_THRESHOLD, DETECT_WINDOW_MS, DETECT_INTERVAL_MS,
   VAD_VOICE_RATIO_MIN, MIN_AUDIO_DURATION_MS, START_DELAY_MS,
   NO_SPEECH_THRESHOLD, SILENCE_CHECK_MS,
   ensureTempDir, safeUnlink, writeWav,
@@ -181,7 +181,7 @@ async function processPCMToText(guildId, userId, recordedChunks, textChannel) {
 }
 
 // ══════════════════════════════════════════════════════════
-// 觸發喚醒偵測
+// 觸發喚醒偵測 (滑動視窗非破壞性讀取)
 // ══════════════════════════════════════════════════════════
 async function triggerDetection(guildId, userId) {
   const state = guildStates.get(guildId);
@@ -194,19 +194,13 @@ async function triggerDetection(guildId, userId) {
   userState.isDetectingRequest = true;
 
   try {
-    userState.isDetecting = false;
-    if (userState.detectTimer) {
-      clearTimeout(userState.detectTimer);
-      userState.detectTimer = null;
-    }
-
     if (state.isExclusive) return;
 
     const now = Date.now();
     if (now < userState.cooldownUntil) return;
 
-    const chunks = userState.detectChunks.splice(0);
-    userState.detectBytes = 0;
+    // ⚠️ 複製一份 Buffer，不破壞原有的滑動視窗
+    const chunks = [...userState.detectChunks];
     if (chunks.length === 0) return;
 
     const pcmBuffer = Buffer.concat(chunks);
@@ -214,6 +208,10 @@ async function triggerDetection(guildId, userId) {
 
     const result = await detectWakeword(guildId, userId, pcmBuffer);
     if (!result.detected) return;
+
+    // ✅ 成功喚醒後，清空滑動視窗，避免剛退出錄音模式又立刻被舊聲音觸發
+    userState.detectChunks = [];
+    userState.detectBytes = 0;
 
     const name = userState.member?.displayName || userId;
     console.log(`[STT] ✅ 喚醒 ${name} (prob=${result.prob_score?.toFixed(3)})`);
@@ -433,13 +431,12 @@ function startSTTListening(connection, guild, textChannel, onWakeup) {
     if (state.isExclusive) return;
     if (!userState || userState.isDetecting) return;
 
-    userState.isDetecting  = true;
-    userState.detectChunks = [];
-    userState.detectBytes  = 0;
-
-    userState.detectTimer = setTimeout(() => {
+    userState.isDetecting = true;
+    
+    // ⚠️ 週期性觸發檢測 (每 DETECT_INTERVAL_MS 毫秒檢查一次滑動視窗)
+    userState.detectTimer = setInterval(() => {
       triggerDetection(guildId, userId);
-    }, DETECT_WINDOW_MS);
+    }, DETECT_INTERVAL_MS);
   };
 
   const onSpeakingEnd = (userId) => {
@@ -449,12 +446,14 @@ function startSTTListening(connection, guild, textChannel, onWakeup) {
     if (!userState || !userState.isDetecting) return;
 
     userState.lastActive = Date.now();
+    userState.isDetecting = false;
 
     if (userState.detectTimer) {
-      clearTimeout(userState.detectTimer);
+      clearInterval(userState.detectTimer);
       userState.detectTimer = null;
     }
 
+    // 結束說話時，做最後一次檢查
     triggerDetection(guildId, userId);
   };
 

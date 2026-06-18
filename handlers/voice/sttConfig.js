@@ -16,7 +16,12 @@ const RECORD_MAX_MS         = parseInt(process.env.STT_RECORD_MS,          10);
 const RECORD_SILENCE_MS     = parseInt(process.env.STT_SILENCE_MS,         10);
 const WAKEUP_COOLDOWN_MS    = parseInt(process.env.STT_COOLDOWN_MS,        10);
 const RMS_THRESHOLD         = parseFloat(process.env.STT_RMS_THRESHOLD);
+
+// 滑動視窗大小 (建議 2500 ~ 3000 ms)
 const DETECT_WINDOW_MS      = parseInt(process.env.STT_DETECT_WINDOW_MS,   10);
+// 週期性檢查間隔 (新增：建議 500 ms)
+const DETECT_INTERVAL_MS    = parseInt(process.env.STT_DETECT_INTERVAL_MS || '500', 10);
+
 const MAX_DETECT_CHUNKS     = parseInt(process.env.STT_MAX_DETECT_CHUNKS,  10);
 const MAX_RECORD_BYTES      = parseInt(process.env.STT_MAX_RECORD_BYTES,   10);
 const VAD_AMP_THRESHOLD     = parseFloat(process.env.STT_VAD_THRESHOLD);
@@ -89,7 +94,6 @@ const owwSemaphore = new Semaphore(OWW_MAX_CONCURRENT);
 
 // ── 帶連線池的 axios instance ───────────────────────────
 const owwAgent = new http.Agent({ maxSockets: OWW_MAX_SOCKETS, keepAlive: true });
-
 const owwAxios = axios.create({ httpAgent: owwAgent, timeout: 3000 });
 
 // ══════════════════════════════════════════════════════════
@@ -191,16 +195,15 @@ async function detectWakeword(guildId, userId, pcmBuffer) {
 }
 
 module.exports = {
-  // 路徑
   WAKEUP_VOICE_PATH,
   TEMP_DIR,
-  // 數值常數
   OWW_HTTP_URL,
   RECORD_MAX_MS,
   RECORD_SILENCE_MS,
   WAKEUP_COOLDOWN_MS,
   RMS_THRESHOLD,
   DETECT_WINDOW_MS,
+  DETECT_INTERVAL_MS,
   DETECT_MAX_BYTES,
   MAX_DETECT_CHUNKS,
   MAX_RECORD_BYTES,
@@ -212,7 +215,6 @@ module.exports = {
   STT_USER_CLEANUP_INTERVAL_MS,
   SILENCE_CHECK_MS,
   SAMPLE_RATE,
-  // 工具函式
   ensureTempDir,
   safeUnlink,
   writeWav,

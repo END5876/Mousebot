@@ -315,7 +315,7 @@ function setupVoiceCommands(client) {
           : `**#${sttTextChannel.name}**`;
 
         await interaction.reply(
-          `🎙️ STT 語音辨識已啟動！\n📝 轉錄結果將發送至 ${targetChannelName}\n🗣️ 說 **hey機器鳥** 來呼叫我`
+          `🎙️ STT 語音辨識已啟動！\n📝 轉錄結果將發送至 ${targetChannelName}\n🗣️ 說 **hey泥鴿** 來呼叫我`
         );
 
       } else if (sub === 'stop') {

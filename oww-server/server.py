@@ -1,6 +1,5 @@
-# server.py — Shared-Model OWW HTTP Server
+# server.py — Shared-Model OWW HTTP Server (修正版)
 import logging
-import math
 import os
 import threading
 import time
@@ -50,20 +49,6 @@ logging.getLogger("werkzeug").setLevel(logging.ERROR)
 # =========================================================
 # Utilities
 # =========================================================
-def sigmoid(x: float) -> float:
-    """
-    保留你原本的邏輯：
-    如果你的模型輸出是 logit，sigmoid 後才是 probability。
-    如果你的模型本身已輸出 0~1，建議之後可改成直接使用 raw。
-    """
-    if x >= 0:
-        z = math.exp(-x)
-        return 1.0 / (1.0 + z)
-    else:
-        z = math.exp(x)
-        return z / (1.0 + z)
-
-
 def check_model_files(model_path: Path):
     if not model_path.exists():
         raise FileNotFoundError(f"[OWW] 找不到模型檔: {model_path}")
@@ -112,11 +97,6 @@ class SessionManager:
         self.active_wakeup_session: Optional[str] = None
 
     def get_or_create(self, session_id: str) -> OWWSession:
-        """
-        修正版：
-        不再使用 None 佔位符。
-        因為 OWWSession 已經不建立 ONNX Model，所以建立成本很低。
-        """
         now = time.time()
 
         with self.global_lock:
@@ -170,9 +150,6 @@ class SessionManager:
             session.reset()
 
     def _evict_oldest_locked(self):
-        """
-        必須在持有 global_lock 時呼叫。
-        """
         if not self.sessions:
             return
 
@@ -276,16 +253,7 @@ session_manager = SessionManager(max_sessions=MAX_SESSIONS)
 def predict_chunks_shared(audio_np: np.ndarray, num_chunks: int):
     """
     使用單一共享 OWW Model 推理。
-
-    為什麼要加 lock？
-    - openwakeword Model 內部可能有狀態
-    - onnxruntime session 不保證上層 Model 狀態完全 thread-safe
-    - 所以用 lock 串行化 predict，換取穩定記憶體與正確狀態
-
-    注意：
-    HTTP /detect 是單次片段推理，因此每次推理前 reset。
     """
-
     local_hits = 0
     detected = False
     prob_max = 0.0
@@ -302,8 +270,10 @@ def predict_chunks_shared(audio_np: np.ndarray, num_chunks: int):
             chunk = audio_np[i * CHUNK_SIZE:(i + 1) * CHUNK_SIZE]
 
             prediction = SHARED_MODEL.predict(chunk)
+            
+            # 修正：模型直接輸出 0~1 的機率值，不再需要 sigmoid 轉換
             raw = float(prediction.get(TARGET_NAME, 0.0))
-            prob = sigmoid(raw)
+            prob = raw 
 
             if raw > raw_max:
                 raw_max = raw
@@ -347,7 +317,7 @@ _ttl_thread = threading.Thread(
 _ttl_thread.start()
 
 print(
-    f"[OWW] 🕐 TTL 清理執行緒已啟動"
+    f"[OWW] 🕒 TTL 清理執行緒已啟動"
     f"（每 {TTL_CHECK_SEC:.0f}s 掃描，TTL={SESSION_TTL_SEC:.0f}s）"
 )
 
@@ -406,16 +376,6 @@ def reset_session():
 
 # =========================================================
 # /detect — HTTP Wakeword Detection
-#
-# Body:
-#   raw binary int16 little-endian PCM, 16kHz mono
-#
-# Query:
-#   ?session_id=xxx
-#
-# 記憶體修正重點：
-#   - 不再每個 session 建立 Model
-#   - 所有 HTTP detect 共用 SHARED_MODEL
 # =========================================================
 @app.route("/detect", methods=["POST"])
 def detect():
@@ -468,34 +428,15 @@ def detect():
         session.last_trigger_ts = time.time()
 
     if DEBUG_SCORE or detected:
-        print(
-            f"[OWW-HTTP] session={session_id} "
-            f"detected={detected} "
-            f"prob_max={prob_max:.4f} "
-            f"raw_max={raw_max:.4f} "
-            f"chunks={num_chunks}"
-        )
+        print(f"[OWW] {session_id} | hit={local_hits}/{MIN_CONSECUTIVE} | prob={prob_max:.3f} | raw={raw_max:.3f} | det={detected}")
 
     return jsonify({
         "detected": detected,
-        "prob_score": round(prob_max, 6),
-        "raw_score": round(raw_max, 6),
-        "chunks": num_chunks,
-        "consecutive_hits": local_hits,
+        "prob_score": round(prob_max, 4),
+        "raw_score": round(raw_max, 4),
+        "local_hits": local_hits,
         "session_id": session_id,
     })
 
-
-# =========================================================
-# Start HTTP Server
-# =========================================================
 if __name__ == "__main__":
-    print(f"[OWW-HTTP] HTTP 伺服器啟動於 http://0.0.0.0:{HTTP_PORT}")
-
-    app.run(
-        host="0.0.0.0",
-        port=HTTP_PORT,
-        debug=False,
-        use_reloader=False,
-        threaded=True,
-    )
+    app.run(host="0.0.0.0", port=HTTP_PORT, debug=False, use_reloader=False)

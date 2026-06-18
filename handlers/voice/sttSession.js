@@ -17,7 +17,7 @@ const {
 const guildStates = new Map();
 
 // ══════════════════════════════════════════════════════════
-// 靜音偵測快取 RMS（避免 setInterval 每次重新 concat）
+// 靜音偵測快取 RMS
 // ══════════════════════════════════════════════════════════
 function getCachedRecentRMS(userState) {
   const currentLen = userState.recordChunks.length;
@@ -61,7 +61,7 @@ function unsubscribeUser(guildId, userId) {
   if (!userState) return;
 
   if (userState.detectTimer) {
-    clearTimeout(userState.detectTimer);
+    clearInterval(userState.detectTimer); // 改為 clearInterval
     userState.detectTimer = null;
   }
 
@@ -80,7 +80,6 @@ function unsubscribeUser(guildId, userId) {
   userState.stream     = null;
   userState.opusStream = null;
 
-  // 先從 Map 刪掉，避免 destroy 觸發 close/end 時重複進入
   state.users.delete(userId);
 
   try { pcmStream?.removeAllListeners();  } catch {}
@@ -187,18 +186,17 @@ function subscribeUser(guildId, userId, member) {
       return;
     }
 
-    // 喚醒偵測模式：累積偵測 buffer
-    if (userState.isDetecting) {
-      userState.detectChunks.push(chunk);
-      userState.detectBytes += chunk.length;
+    // 喚醒偵測模式：無條件持續收集最近的聲音 (滑動視窗)
+    userState.detectChunks.push(chunk);
+    userState.detectBytes += chunk.length;
 
-      while (
-        (userState.detectBytes > DETECT_MAX_BYTES || userState.detectChunks.length > MAX_DETECT_CHUNKS) &&
-        userState.detectChunks.length > 0
-      ) {
-        const dropped = userState.detectChunks.shift();
-        userState.detectBytes -= dropped.length;
-      }
+    // 保持 Buffer 在最大限制內 (例如永遠只保留最近 2.5 秒)
+    while (
+      (userState.detectBytes > DETECT_MAX_BYTES || userState.detectChunks.length > MAX_DETECT_CHUNKS) &&
+      userState.detectChunks.length > 0
+    ) {
+      const dropped = userState.detectChunks.shift();
+      userState.detectBytes -= dropped.length;
     }
   });
 
