@@ -111,7 +111,6 @@ class SessionManager:
             session = OWWSession(session_id)
             self.sessions[session_id] = session
 
-            print(f"[OWW] 🆕 建立 Session: {session_id} (總數: {len(self.sessions)})")
             return session
 
     def remove(self, session_id: str):
@@ -120,7 +119,6 @@ class SessionManager:
 
         if session is not None:
             session.close()
-            print(f"[OWW] 🗑️ 移除 Session: {session_id} (剩餘: {len(self.sessions)})")
 
     def pause_all(self, except_session: str = None):
         with self.global_lock:
@@ -166,7 +164,6 @@ class SessionManager:
 
         if evicted is not None:
             evicted.close()
-            print(f"[OWW] ♻️ 淘汰最舊 Session: {oldest_id}")
 
     def cleanup_expired_sessions(self):
         now = time.time()
@@ -183,11 +180,8 @@ class SessionManager:
 
         for sid, session, idle_sec in expired:
             session.close()
-            print(f"[OWW] 🧹 TTL 清理 Session: {sid} (閒置 {idle_sec:.0f}s)")
 
         if expired:
-            print(f"[OWW] 🧹 本次清理 {len(expired)} 個過期 Session，剩餘: {remaining}")
-
             if ENABLE_GC_CLEANUP:
                 gc.collect()
 
