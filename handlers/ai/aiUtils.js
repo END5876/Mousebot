@@ -1,4 +1,4 @@
-const { playTTS } = require('../ttsHandler');
+const { playTTS } = require('../voice/ttsHandler');
 const sharp = require('sharp'); // 引入 sharp 進行圖片壓縮
 
 // ════════════════════════════════════════════════════════
