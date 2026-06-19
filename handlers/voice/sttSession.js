@@ -50,6 +50,45 @@ function resetAllRecordBuffers(state) {
   }
 }
 
+/**
+ * 將新 chunk 加入使用者的偵測滑動視窗，並同步維護 detectMergedBuffer。
+ * @param {object} userState
+ * @param {Buffer} chunk
+ */
+function pushDetectChunk(userState, chunk) {
+  userState.detectChunks.push(chunk);
+  userState.detectBytes += chunk.length;
+
+  // 裁切超出視窗的舊資料，同步從合併 Buffer 的頭部移除
+  while (
+    (userState.detectBytes > DETECT_MAX_BYTES || userState.detectChunks.length > MAX_DETECT_CHUNKS) &&
+    userState.detectChunks.length > 0
+  ) {
+    const dropped = userState.detectChunks.shift();
+    userState.detectBytes -= dropped.length;
+    // 從合併 Buffer 頭部截去已丟棄的位元組
+    if (userState.detectMergedBuffer.length >= dropped.length) {
+      userState.detectMergedBuffer = userState.detectMergedBuffer.slice(dropped.length);
+    } else {
+      // 防禦性重建（理論上不應發生）
+      userState.detectMergedBuffer = Buffer.concat(userState.detectChunks);
+    }
+  }
+
+  // 增量追加新 chunk 到合併 Buffer
+  userState.detectMergedBuffer = Buffer.concat([userState.detectMergedBuffer, chunk]);
+}
+
+/**
+ * 清空偵測滑動視窗（喚醒成功後呼叫）。
+ * @param {object} userState
+ */
+function clearDetectBuffer(userState) {
+  userState.detectChunks       = [];
+  userState.detectBytes        = 0;
+  userState.detectMergedBuffer = Buffer.alloc(0);
+}
+
 // ══════════════════════════════════════════════════════════
 // 退訂使用者音訊（完整釋放）
 // ══════════════════════════════════════════════════════════
@@ -61,7 +100,7 @@ function unsubscribeUser(guildId, userId) {
   if (!userState) return;
 
   if (userState.detectTimer) {
-    clearInterval(userState.detectTimer); // 改為 clearInterval
+    clearInterval(userState.detectTimer);
     userState.detectTimer = null;
   }
 
@@ -71,6 +110,8 @@ function unsubscribeUser(guildId, userId) {
   userState.recordChunks       = [];
   userState.detectBytes        = 0;
   userState.recordBytes        = 0;
+  // 同步釋放合併 Buffer
+  userState.detectMergedBuffer = Buffer.alloc(0);
   userState._lastSilenceChunksLen = -1;
   userState._lastSilenceRMS       = 0;
 
@@ -132,6 +173,8 @@ function subscribeUser(guildId, userId, member) {
     member,
     detectChunks:  [],
     detectBytes:   0,
+    // 增量維護的合併 Buffer，避免每次 triggerDetection 重新 concat
+    detectMergedBuffer: Buffer.alloc(0),
     recordChunks:  [],
     recordBytes:   0,
     stream:        null,
@@ -186,18 +229,9 @@ function subscribeUser(guildId, userId, member) {
       return;
     }
 
-    // 喚醒偵測模式：無條件持續收集最近的聲音 (滑動視窗)
-    userState.detectChunks.push(chunk);
-    userState.detectBytes += chunk.length;
-
-    // 保持 Buffer 在最大限制內 (例如永遠只保留最近 2.5 秒)
-    while (
-      (userState.detectBytes > DETECT_MAX_BYTES || userState.detectChunks.length > MAX_DETECT_CHUNKS) &&
-      userState.detectChunks.length > 0
-    ) {
-      const dropped = userState.detectChunks.shift();
-      userState.detectBytes -= dropped.length;
-    }
+    // 喚醒偵測模式：使用增量維護的滑動視窗
+    // [修正 JS-2] 改用 pushDetectChunk，避免每次 triggerDetection 重新 concat
+    pushDetectChunk(userState, chunk);
   });
 
   pcmStream.on('error', (err) => {
@@ -254,6 +288,8 @@ module.exports = {
   guildStates,
   getCachedRecentRMS,
   resetAllRecordBuffers,
+  pushDetectChunk,
+  clearDetectBuffer,
   unsubscribeUser,
   subscribeUser,
   startUserIdleCleanup,

@@ -19,7 +19,7 @@ const RMS_THRESHOLD         = parseFloat(process.env.STT_RMS_THRESHOLD);
 
 // 滑動視窗大小 (建議 2500 ~ 3000 ms)
 const DETECT_WINDOW_MS      = parseInt(process.env.STT_DETECT_WINDOW_MS,   10);
-// 週期性檢查間隔 (新增：建議 500 ms)
+// 週期性檢查間隔 (建議 500 ms)
 const DETECT_INTERVAL_MS    = parseInt(process.env.STT_DETECT_INTERVAL_MS || '500', 10);
 
 const MAX_DETECT_CHUNKS     = parseInt(process.env.STT_MAX_DETECT_CHUNKS,  10);
@@ -33,6 +33,10 @@ const OWW_MAX_SOCKETS       = parseInt(process.env.STT_OWW_MAX_SOCKETS    || '8'
 const OWW_MAX_CONCURRENT    = parseInt(process.env.STT_OWW_MAX_CONCURRENT || '4',  10);
 const STT_USER_IDLE_MS      = parseInt(process.env.STT_USER_IDLE_MS       || '600000', 10);
 const STT_USER_CLEANUP_INTERVAL_MS = parseInt(process.env.STT_USER_CLEANUP_INTERVAL_MS || '60000', 10);
+
+// Semaphore 佇列上限，防止 OWW 服務異常時無限積累等待者
+// 預設為 OWW_MAX_CONCURRENT 的 2 倍，超過時直接拒絕新請求
+const OWW_SEMAPHORE_QUEUE_MAX = parseInt(process.env.STT_OWW_QUEUE_MAX || String(OWW_MAX_CONCURRENT * 2), 10);
 
 // ── 衍生常數 ─────────────────────────────────────────────
 const SAMPLE_RATE         = 16000;
@@ -61,22 +65,36 @@ if (missingVars.length > 0) {
 
 // ══════════════════════════════════════════════════════════
 // Semaphore（OWW 並發控制）
+// [修正 JS-9] 加入 maxQueue 上限，OWW 服務異常時拒絕超量等待者，
+//             避免 _queue 無限增長造成記憶體壓力。
 // ══════════════════════════════════════════════════════════
 class Semaphore {
-  constructor(max) {
-    this._max     = max;
-    this._current = 0;
-    this._queue   = [];
+  /**
+   * @param {number} max      最大並發數
+   * @param {number} maxQueue 等待佇列上限，超過時 acquire() 拋出錯誤
+   */
+  constructor(max, maxQueue = Infinity) {
+    this._max      = max;
+    this._maxQueue = maxQueue;
+    this._current  = 0;
+    this._queue    = [];
   }
 
   acquire() {
-    return new Promise(resolve => {
+    return new Promise((resolve, reject) => {
       if (this._current < this._max) {
         this._current++;
         resolve();
-      } else {
-        this._queue.push(resolve);
+        return;
       }
+
+      // 佇列已滿時直接拒絕，而非無限等待
+      if (this._queue.length >= this._maxQueue) {
+        reject(new Error(`[Semaphore] 佇列已滿 (max=${this._maxQueue})，拒絕新請求`));
+        return;
+      }
+
+      this._queue.push(resolve);
     });
   }
 
@@ -88,9 +106,14 @@ class Semaphore {
       this._queue.shift()();
     }
   }
+
+  /** 目前等待中的請求數（供監控使用） */
+  get queueLength() {
+    return this._queue.length;
+  }
 }
 
-const owwSemaphore = new Semaphore(OWW_MAX_CONCURRENT);
+const owwSemaphore = new Semaphore(OWW_MAX_CONCURRENT, OWW_SEMAPHORE_QUEUE_MAX);
 
 // ── 帶連線池的 axios instance ───────────────────────────
 const owwAgent = new http.Agent({ maxSockets: OWW_MAX_SOCKETS, keepAlive: true });
@@ -101,6 +124,35 @@ const owwAxios = axios.create({ httpAgent: owwAgent, timeout: 3000 });
 // ══════════════════════════════════════════════════════════
 function ensureTempDir() {
   if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
+}
+
+// 啟動時清理 temp 目錄中超過指定時間的殘留 .wav 檔案，
+// 防止程序異常退出（SIGKILL）後磁碟空間逐漸耗盡。
+function cleanupStaleTempFiles(maxAgeMs = 10 * 60 * 1000) {
+  try {
+    if (!fs.existsSync(TEMP_DIR)) return;
+    const now   = Date.now();
+    const files = fs.readdirSync(TEMP_DIR);
+    let   count = 0;
+
+    for (const f of files) {
+      if (!f.endsWith('.wav')) continue;
+      const fullPath = path.join(TEMP_DIR, f);
+      try {
+        const stat = fs.statSync(fullPath);
+        if (now - stat.mtimeMs > maxAgeMs) {
+          fs.unlinkSync(fullPath);
+          count++;
+        }
+      } catch {}
+    }
+
+    if (count > 0) {
+      console.log(`[STT] 🧹 清理殘留 temp 檔案：${count} 個`);
+    }
+  } catch (err) {
+    console.warn(`[STT] temp 清理失敗：${err.message}`);
+  }
 }
 
 function safeUnlink(f) {
@@ -177,6 +229,7 @@ function isHallucination(text) {
 
 // ── OWW HTTP 偵測（含 Semaphore）────────────────────────
 async function detectWakeword(guildId, userId, pcmBuffer) {
+  // 可能因佇列已滿而拋出錯誤，呼叫端需自行捕獲
   await owwSemaphore.acquire();
   try {
     const sessionId = `${guildId}_${userId}`;
@@ -216,6 +269,7 @@ module.exports = {
   SILENCE_CHECK_MS,
   SAMPLE_RATE,
   ensureTempDir,
+  cleanupStaleTempFiles,
   safeUnlink,
   writeWav,
   calcRMS,
