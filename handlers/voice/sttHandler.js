@@ -7,13 +7,16 @@ const path = require('path');
 const Groq = require('groq-sdk');
 const { getGeminiResponseVoice } = require('../../handlers/ai/aiHandler');
 
+// 將 ttsHandler 移至頂層 require，避免每次喚醒都在熱路徑上執行動態載入
+const { playTTS } = require('../ttsHandler');
+
 const {
   WAKEUP_VOICE_PATH, TEMP_DIR,
   RECORD_MAX_MS, RECORD_SILENCE_MS, WAKEUP_COOLDOWN_MS,
   RMS_THRESHOLD, DETECT_WINDOW_MS, DETECT_INTERVAL_MS,
   VAD_VOICE_RATIO_MIN, MIN_AUDIO_DURATION_MS, START_DELAY_MS,
   NO_SPEECH_THRESHOLD, SILENCE_CHECK_MS,
-  ensureTempDir, safeUnlink, writeWav,
+  ensureTempDir, cleanupStaleTempFiles, safeUnlink, writeWav,
   calcRMS, calcVoiceRatio, calcDurationMs,
   isHallucination, detectWakeword,
 } = require('./sttConfig');
@@ -22,6 +25,7 @@ const {
   guildStates,
   getCachedRecentRMS,
   resetAllRecordBuffers,
+  clearDetectBuffer,
   unsubscribeUser,
   subscribeUser,
   startUserIdleCleanup,
@@ -31,6 +35,10 @@ const {
 
 // ── Groq 客戶端 ─────────────────────────────────────────
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+// [修正 CROSS-4] 程序啟動時清理殘留的 temp .wav 檔案
+// 防止 SIGKILL 等異常退出後磁碟空間逐漸耗盡
+cleanupStaleTempFiles();
 
 // ══════════════════════════════════════════════════════════
 // 播放喚醒音效
@@ -199,19 +207,21 @@ async function triggerDetection(guildId, userId) {
     const now = Date.now();
     if (now < userState.cooldownUntil) return;
 
-    // ⚠️ 複製一份 Buffer，不破壞原有的滑動視窗
-    const chunks = [...userState.detectChunks];
-    if (chunks.length === 0) return;
+    // 直接使用增量維護的 detectMergedBuffer，
+    // 不再每次重新 Buffer.concat，消除高頻 GC 壓力
+    const pcmBuffer = userState.detectMergedBuffer;
+    if (!pcmBuffer || pcmBuffer.length === 0) return;
 
-    const pcmBuffer = Buffer.concat(chunks);
     if (calcRMS(pcmBuffer) < RMS_THRESHOLD) return;
 
+    // detectWakeword 內的 Semaphore.acquire() 可能因佇列已滿而拋出，
+    // 此處 catch 已涵蓋，不影響正常流程
     const result = await detectWakeword(guildId, userId, pcmBuffer);
     if (!result.detected) return;
 
-    // ✅ 成功喚醒後，清空滑動視窗，避免剛退出錄音模式又立刻被舊聲音觸發
-    userState.detectChunks = [];
-    userState.detectBytes = 0;
+    // 成功喚醒後，清空滑動視窗，避免剛退出錄音模式又立刻被舊聲音觸發
+    // 改用 clearDetectBuffer 同步清空 detectMergedBuffer
+    clearDetectBuffer(userState);
 
     const name = userState.member?.displayName || userId;
     console.log(`[STT] ✅ 喚醒 ${name} (prob=${result.prob_score?.toFixed(3)})`);
@@ -259,7 +269,11 @@ async function handleWakeup(guildId, userId, member) {
     const sttResult = await processPCMToText(guildId, userId, recordedChunks, textChannel);
     if (!sttResult.ok) return;
 
-    const finalName = state.guild.members.cache.get(userId)?.displayName || '使用者';
+    // [修正 JS-11] 在非同步操作後重新取得 state，防止 stopSTTListening 已被呼叫
+    const currentState = guildStates.get(guildId);
+    if (!currentState?.active) return;
+
+    const finalName = currentState.guild.members.cache.get(userId)?.displayName || '使用者';
     console.log(`[STT] 📝 ${finalName}：${sttResult.text}`);
     await textChannel?.send(`🗣️ "**${finalName}**" ：${sttResult.text}`).catch(() => {});
 
@@ -269,8 +283,10 @@ async function handleWakeup(guildId, userId, member) {
     try {
       const aiReply = await getGeminiResponseVoice(userId, sttResult.text);
       if (aiReply) {
+        // AI 回覆後再次確認 state 仍有效
+        if (!guildStates.get(guildId)?.active) return;
         await textChannel?.send(aiReply).catch(() => {});
-        const { playTTS } = require('../ttsHandler');
+        // playTTS 已在頂層 require，此處直接使用
         const ttsResult = await playTTS(guildId, aiReply);
         if (ttsResult.success) {
           console.log(`🔊 [STT→TTS] 朗讀中 (engine: ${ttsResult.engine}, queued: ${ttsResult.queued})`);
@@ -375,9 +391,11 @@ async function manualRecordOnce(guildId, userId, member, textChannel, onWakeupOv
 
     return { ok: true, text: sttResult.text };
   } catch (err) {
-    if (!state.isExclusive && wasNewlySubscribed) unsubscribeUser(guildId, userId);
+    exitExclusiveMode(guildId);
+    if (wasNewlySubscribed) unsubscribeUser(guildId, userId);
     throw err;
   } finally {
+    // exitExclusiveMode 可能已在 catch 中呼叫，此處呼叫為冪等操作（安全）
     exitExclusiveMode(guildId);
   }
 }
@@ -432,8 +450,8 @@ function startSTTListening(connection, guild, textChannel, onWakeup) {
     if (!userState || userState.isDetecting) return;
 
     userState.isDetecting = true;
-    
-    // ⚠️ 週期性觸發檢測 (每 DETECT_INTERVAL_MS 毫秒檢查一次滑動視窗)
+
+    // 週期性觸發檢測（每 DETECT_INTERVAL_MS 毫秒檢查一次滑動視窗）
     userState.detectTimer = setInterval(() => {
       triggerDetection(guildId, userId);
     }, DETECT_INTERVAL_MS);
@@ -487,6 +505,8 @@ function stopSTTListening(guildId) {
   const state = guildStates.get(guildId);
   if (!state) return;
 
+  // 先將 active 設為 false，讓所有進行中的非同步操作
+  // 在下一個 await 點後能透過 state.active 檢查提早退出
   state.active = false;
 
   if (state._onSpeakingStart) {

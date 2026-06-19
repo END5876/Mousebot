@@ -1,11 +1,13 @@
-# server.py — Shared-Model OWW HTTP Server (修正版)
+# server.py — Shared-Model OWW HTTP Server
+import collections
 import logging
 import os
 import threading
 import time
-import gc
+# 移除不必要的 gc import，OWWSession 不持有大型資源，
+# 強制 gc.collect() 只會造成停頓而無實質效益。
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Deque
 
 import numpy as np
 from dotenv import load_dotenv
@@ -35,8 +37,10 @@ TTL_CHECK_SEC   = float(os.environ.get("OWW_TTL_CHECK_SEC", "30"))
 MAX_DETECT_SEC   = float(os.environ.get("OWW_MAX_DETECT_SEC", "2"))
 MAX_DETECT_BYTES = int(16000 * MAX_DETECT_SEC * 2)
 
-# 是否定期手動 gc
-ENABLE_GC_CLEANUP = os.environ.get("OWW_ENABLE_GC_CLEANUP", "1") == "1"
+# 每個 session 的速率限制：在滑動視窗內最多允許多少次 /detect 請求
+# 預設：每 1 秒內最多 10 次（對應 Node.js 端 DETECT_INTERVAL_MS=100ms 的極端情況）
+RATE_LIMIT_MAX_CALLS  = int(os.environ.get("OWW_RATE_LIMIT_MAX_CALLS", "10"))
+RATE_LIMIT_WINDOW_SEC = float(os.environ.get("OWW_RATE_LIMIT_WINDOW_SEC", "1.0"))
 
 SAMPLE_RATE = 16000
 CHUNK_BYTES = CHUNK_SIZE * 2
@@ -65,9 +69,12 @@ def check_model_files(model_path: Path):
 # =========================================================
 class OWWSession:
     """
-    重點：
-    這裡不再持有 Model。
-    每個 session 只保留 paused / cooldown / last_active 這類輕量狀態。
+    每個 session 保留輕量狀態：
+    - paused / cooldown / last_active（原有）
+    - [修正 PY-1] consecutive_hits：跨請求累積的連續命中數，
+      讓 MIN_CONSECUTIVE 的時序判斷能跨越多次 HTTP 請求生效，
+      恢復 OWW 時序偵測的核心優勢。
+    - [修正 PY-9] _rate_timestamps：滑動視窗速率限制的時間戳記佇列。
     """
 
     def __init__(self, session_id: str):
@@ -77,13 +84,34 @@ class OWWSession:
         self.created_at = time.time()
         self.last_active = time.time()
 
+        # 跨請求累積的連續命中計數
+        self.consecutive_hits: int = 0
+
+        # 速率限制：記錄最近請求的時間戳（使用 deque 自動淘汰舊記錄）
+        self._rate_timestamps: Deque[float] = collections.deque()
+
     def reset(self):
         self.last_trigger_ts = 0.0
+        # 重置時同步清除跨請求命中計數
+        self.consecutive_hits = 0
+
+    def is_rate_limited(self) -> bool:
+        now = time.time()
+        cutoff = now - RATE_LIMIT_WINDOW_SEC
+
+        # 移除視窗外的舊記錄
+        while self._rate_timestamps and self._rate_timestamps[0] < cutoff:
+            self._rate_timestamps.popleft()
+
+        if len(self._rate_timestamps) >= RATE_LIMIT_MAX_CALLS:
+            return True
+
+        self._rate_timestamps.append(now)
+        return False
 
     def close(self):
         """
-        session 不再持有 ONNX Model，所以這裡不用釋放大型資源。
-        保留此方法是為了相容 SessionManager 的清理流程。
+        session 不持有 ONNX Model，此方法保留以相容 SessionManager 清理流程。
         """
         pass
 
@@ -137,6 +165,8 @@ class SessionManager:
 
             for session in self.sessions.values():
                 session.paused = False
+                # 恢復偵測時重置跨請求命中計數，避免舊狀態誤觸發
+                session.consecutive_hits = 0
 
             print("[OWW] ▶️ 全域恢復偵測")
 
@@ -181,9 +211,11 @@ class SessionManager:
         for sid, session, idle_sec in expired:
             session.close()
 
+        # 移除 gc.collect() 呼叫。
+        # OWWSession 不持有大型資源，強制 GC 只會造成執行緒停頓，
+        # Python 的自動 GC 已足夠處理這類輕量物件的回收。
         if expired:
-            if ENABLE_GC_CLEANUP:
-                gc.collect()
+            print(f"[OWW] 🧹 TTL 清理：移除 {len(expired)} 個閒置 session，剩餘 {remaining} 個")
 
     def get_status(self) -> dict:
         now = time.time()
@@ -201,6 +233,8 @@ class SessionManager:
                             0.0,
                             round(COOLDOWN_SEC - (now - session.last_trigger_ts), 2)
                         ),
+                        # [修正 PY-1] 在狀態回報中顯示跨請求命中計數，方便除錯
+                        "consecutive_hits": session.consecutive_hits,
                     }
                     for sid, session in self.sessions.items()
                 },
@@ -216,6 +250,7 @@ print(f"[OWW] PROB_THRESHOLD={PROB_THRESHOLD}, MIN_CONSECUTIVE={MIN_CONSECUTIVE}
 print(f"[OWW] MAX_SESSIONS={MAX_SESSIONS}")
 print(f"[OWW] SESSION_TTL_SEC={SESSION_TTL_SEC}, TTL_CHECK_SEC={TTL_CHECK_SEC}")
 print(f"[OWW] MAX_DETECT_SEC={MAX_DETECT_SEC}, MAX_DETECT_BYTES={MAX_DETECT_BYTES}")
+print(f"[OWW] RATE_LIMIT={RATE_LIMIT_MAX_CALLS} calls / {RATE_LIMIT_WINDOW_SEC}s")
 
 check_model_files(MODEL_PATH)
 
@@ -240,34 +275,33 @@ print(f"[OWW] 共享模型載入完成 ✅ target={TARGET_NAME}")
 
 session_manager = SessionManager(max_sessions=MAX_SESSIONS)
 
-
-# =========================================================
-# Shared Inference
-# =========================================================
-def predict_chunks_shared(audio_np: np.ndarray, num_chunks: int):
+def predict_chunks_shared(audio_np: np.ndarray, num_chunks: int, initial_hits: int = 0):
     """
     使用單一共享 OWW Model 推理。
+
+    Args:
+        audio_np:     PCM 音訊資料（int16 numpy array）
+        num_chunks:   要處理的 chunk 數量
+        initial_hits: 從 session 傳入的跨請求累積命中數
+
+    Returns:
+        (detected, raw_max, prob_max, final_hits)
+        final_hits: 本次推理結束後的累積命中數，應回寫至 session
     """
-    local_hits = 0
+    local_hits = initial_hits
     detected = False
     prob_max = 0.0
     raw_max = float("-inf")
 
     with SHARED_MODEL_LOCK:
-        try:
-            if hasattr(SHARED_MODEL, "reset"):
-                SHARED_MODEL.reset()
-        except Exception as e:
-            print(f"[OWW] ⚠️ shared model reset 失敗: {e}")
-
         for i in range(num_chunks):
             chunk = audio_np[i * CHUNK_SIZE:(i + 1) * CHUNK_SIZE]
 
             prediction = SHARED_MODEL.predict(chunk)
-            
-            # 修正：模型直接輸出 0~1 的機率值，不再需要 sigmoid 轉換
+
+            # 模型直接輸出 0~1 的機率值
             raw = float(prediction.get(TARGET_NAME, 0.0))
-            prob = raw 
+            prob = raw
 
             if raw > raw_max:
                 raw_max = raw
@@ -278,6 +312,7 @@ def predict_chunks_shared(audio_np: np.ndarray, num_chunks: int):
             if prob > PROB_THRESHOLD:
                 local_hits += 1
             else:
+                # 機率低於閾值時重置連續計數（非連續命中不算數）
                 local_hits = 0
 
             if local_hits >= MIN_CONSECUTIVE:
@@ -335,6 +370,8 @@ def health():
         "shared_model": True,
         "max_detect_sec": MAX_DETECT_SEC,
         "max_detect_bytes": MAX_DETECT_BYTES,
+        "rate_limit_max_calls": RATE_LIMIT_MAX_CALLS,
+        "rate_limit_window_sec": RATE_LIMIT_WINDOW_SEC,
         **session_manager.get_status(),
     })
 
@@ -388,6 +425,14 @@ def detect():
 
     session = session_manager.get_or_create(session_id)
 
+    # [速率限制檢查：防止異常客戶端無限制地發送請求
+    if session.is_rate_limited():
+        return jsonify({
+            "detected": False,
+            "reason": "rate_limited",
+            "session_id": session_id,
+        }), 429
+
     if session.paused:
         return jsonify({
             "detected": False,
@@ -395,6 +440,9 @@ def detect():
             "session_id": session_id,
         })
 
+    # np.frombuffer 不複製資料，audio_np 與 pcm_bytes 共享記憶體。
+    #             在 Flask request context 內（請求結束前）pcm_bytes 不會被釋放，
+    #             此處是安全的。若未來改用非同步框架，需改為 np.frombuffer(...).copy()。
     audio_np = np.frombuffer(pcm_bytes, dtype=np.int16)
     num_chunks = len(audio_np) // CHUNK_SIZE
 
@@ -409,6 +457,8 @@ def detect():
     cooldown_remaining = COOLDOWN_SEC - (now - session.last_trigger_ts)
 
     if cooldown_remaining > 0:
+        # Cooldown 期間重置跨請求命中計數，避免冷卻結束後立即誤觸發
+        session.consecutive_hits = 0
         return jsonify({
             "detected": False,
             "reason": "cooldown",
@@ -416,21 +466,35 @@ def detect():
             "session_id": session_id,
         })
 
-    detected, raw_max, prob_max, local_hits = predict_chunks_shared(audio_np, num_chunks)
+    # 傳入 session 的跨請求累積命中數，並在推理後回寫
+    detected, raw_max, prob_max, final_hits = predict_chunks_shared(
+        audio_np, num_chunks, initial_hits=session.consecutive_hits
+    )
 
     if detected:
         session.last_trigger_ts = time.time()
+        # 偵測成功後重置命中計數，防止連續觸發
+        session.consecutive_hits = 0
+    else:
+        # 未偵測到時，將最終命中數回寫至 session 供下次請求繼續累積
+        session.consecutive_hits = final_hits
 
     if DEBUG_SCORE or detected:
-        print(f"[OWW] {session_id} | hit={local_hits}/{MIN_CONSECUTIVE} | prob={prob_max:.3f} | raw={raw_max:.3f} | det={detected}")
+        print(
+            f"[OWW] {session_id} | "
+            f"hit={final_hits}/{MIN_CONSECUTIVE} | "
+            f"prob={prob_max:.3f} | raw={raw_max:.3f} | det={detected}"
+        )
 
     return jsonify({
         "detected": detected,
         "prob_score": round(prob_max, 4),
         "raw_score": round(raw_max, 4),
-        "local_hits": local_hits,
+        "local_hits": final_hits,
         "session_id": session_id,
     })
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=HTTP_PORT, debug=False, use_reloader=False)
+    # 開發環境：使用 threaded=True 允許並發請求（仍受 SHARED_MODEL_LOCK 串行化）
+    # 生產環境：請使用上方 gunicorn 指令
+    app.run(host="0.0.0.0", port=HTTP_PORT, debug=False, use_reloader=False, threaded=True)
