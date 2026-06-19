@@ -8,12 +8,14 @@ const path = require('path');
 const http = require('http');
 const dns  = require('dns').promises;
 
-// udioManager 統一管理 TTS 層
+// audioManager 統一管理 TTS 層
 const { playTTSLayer } = require('./audioManager');
 
 // ── TTS 排隊 Map ─────────────────────────────────────────
-const ttsQueues        = new Map();
-const ttsIsPlaying     = new Map();
+// 佇列項目結構升級：加入 readyPromise / file / status 欄位，
+// 讓播放器能在「合成完成」後立即銜接，實現播放與合成真正並行。
+const ttsQueues    = new Map();  // guildId → QueueItem[]
+const ttsIsPlaying = new Map();  // guildId → boolean
 const activeModels     = new Map();
 const activeEdgeVoices = new Map();
 
@@ -22,6 +24,21 @@ const TTS_MAX_LENGTH = 1000;
 // ── SoVITS 連線設定 ──────────────────────────────────────
 const SOVITS_HOST = process.env.SOVITS_HOST || 'localhost';
 const SOVITS_PORT = parseInt(process.env.SOVITS_PORT) || 9880;
+
+// SoVITS 健康狀態追蹤
+// 記錄 SoVITS 是否可用，避免每次都等 timeout 才 fallback
+let sovitsHealthy        = true;   // 樂觀預設可用
+let sovitsLastCheckAt    = 0;
+const SOVITS_HEALTH_INTERVAL_MS = 30_000;  // 每 30 秒重新探測
+const SOVITS_CONNECT_TIMEOUT_MS = 3_000;   // TCP 連線逾時（原本 2000，稍微放寬）
+const SOVITS_RECEIVE_TIMEOUT_MS = 30_000;  // 音訊接收逾時
+
+// LRU 文字快取
+// 對相同文字+模型的合成結果做記憶體快取，命中時 0 延遲
+const TTS_CACHE_MAX  = parseInt(process.env.TTS_CACHE_MAX  || '30');
+const TTS_CACHE_TTL_MS = parseInt(process.env.TTS_CACHE_TTL_MS || String(10 * 60 * 1000));
+// key: `${modelKey}::${text}` → { file, engine, voice, model, createdAt }
+const ttsCache = new Map();
 
 // ════════════════════════════════════════════════════════
 //  模型載入
@@ -124,7 +141,7 @@ const DEFAULT_VOICE = 'zh-TW-YunJheNeural';
 function detectLanguage(text) {
   if (/[\u3040-\u309F\u30A0-\u30FF]/.test(text)) return 'ja';
   if (/[\u4E00-\u9FFF]/.test(text)) return 'zh';
-  if (/^[A-Za-z0-9\s.,!?'"()\-:;@#$%&*+=/\\[\]{}|<>~`^_]+$/.test(text.trim())) return 'en';
+  if (/^[A-Za-z0-9\s.,!?'"()\-:;@#$%&*+=/\\\[\]{}|<>~`^_]+$/.test(text.trim())) return 'en';
   return 'zh';
 }
 
@@ -139,6 +156,132 @@ let hasEdgeTTS = false;
 function checkEdgeTTS() {
   try { execSync('edge-tts --version', { stdio: 'ignore' }); return true; }
   catch { return false; }
+}
+
+// ════════════════════════════════════════════════════════
+//  句子分段工具
+//  將長文字切割為短句，讓第一句能盡快合成並播放，
+//  後續句子在播放時並行合成，大幅降低感知延遲。
+// ════════════════════════════════════════════════════════
+
+/**
+ * 將文字按句子邊界分割，每段不超過 maxLen 字。
+ * 分割優先順序：句號/問號/驚嘆號 > 逗號/分號 > 空白
+ * @param {string} text
+ * @param {number} maxLen 每段最大字數（預設 50）
+ * @returns {string[]}
+ */
+function splitSentences(text, maxLen = 50) {
+  if (!text || text.trim().length === 0) return [];
+
+  // 先按主要句子邊界切割
+  const primary = text
+    .split(/(?<=[。！？!?\n])\s*/)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  const result = [];
+
+  for (const seg of primary) {
+    if (seg.length <= maxLen) {
+      result.push(seg);
+      continue;
+    }
+
+    // 超長段落再按次要邊界切割
+    const secondary = seg
+      .split(/(?<=[，,；;、])\s*/)
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    let buf = '';
+    for (const part of secondary) {
+      if ((buf + part).length > maxLen && buf.length > 0) {
+        result.push(buf);
+        buf = part;
+      } else {
+        buf += part;
+      }
+    }
+    if (buf) result.push(buf);
+  }
+
+  return result.filter(s => s.length > 0);
+}
+
+// ════════════════════════════════════════════════════════
+//  LRU 快取工具
+// ════════════════════════════════════════════════════════
+
+function getCacheKey(text, modelKey) {
+  return `${modelKey}::${text}`;
+}
+
+/**
+ * 從快取取得合成結果。命中時複製檔案到新路徑（避免播放完刪除原始快取檔）。
+ * @returns {{ file, engine, voice, model } | null}
+ */
+async function getCached(text, modelKey, destDir) {
+  const key   = getCacheKey(text, modelKey);
+  const entry = ttsCache.get(key);
+  if (!entry) return null;
+
+  // 檢查 TTL
+  if (Date.now() - entry.createdAt > TTS_CACHE_TTL_MS) {
+    safeUnlink(entry.file);
+    ttsCache.delete(key);
+    return null;
+  }
+
+  // 檢查檔案是否仍存在
+  if (!fs.existsSync(entry.file)) {
+    ttsCache.delete(key);
+    return null;
+  }
+
+  // 複製到新路徑供播放使用（播放後會刪除副本，原始快取保留）
+  const ext     = path.extname(entry.file);
+  const newFile = path.join(destDir, `tts_cache_${Date.now()}${ext}`);
+  try {
+    await fs.promises.copyFile(entry.file, newFile);
+  } catch {
+    ttsCache.delete(key);
+    return null;
+  }
+
+  // LRU：移到最後（最近使用）
+  ttsCache.delete(key);
+  ttsCache.set(key, entry);
+
+  console.log(`⚡ [TTS Cache] 命中: ${text.slice(0, 20)}...`);
+  return { ...entry, file: newFile };
+}
+
+/**
+ * 將合成結果存入快取（LRU 淘汰最舊的）。
+ */
+function putCache(text, modelKey, entry) {
+  if (TTS_CACHE_MAX <= 0) return;
+
+  const key = getCacheKey(text, modelKey);
+
+  // 淘汰超出上限的最舊項目
+  if (ttsCache.size >= TTS_CACHE_MAX) {
+    const oldestKey = ttsCache.keys().next().value;
+    const oldest    = ttsCache.get(oldestKey);
+    if (oldest) safeUnlink(oldest.file);
+    ttsCache.delete(oldestKey);
+  }
+
+  // 複製一份專用快取檔案（原始檔案播放後會被刪除）
+  const ext       = path.extname(entry.file);
+  const cacheFile = entry.file.replace(ext, `_cache${ext}`);
+  try {
+    fs.copyFileSync(entry.file, cacheFile);
+    ttsCache.set(key, { ...entry, file: cacheFile, createdAt: Date.now() });
+  } catch {
+    // 快取寫入失敗不影響主流程
+  }
 }
 
 // ════════════════════════════════════════════════════════
@@ -177,6 +320,45 @@ async function switchSoVITSWeights(gptWeights, sovitsWeights) {
 }
 
 // ════════════════════════════════════════════════════════
+//  SoVITS 健康檢查
+//  定期探測 SoVITS 是否可用，避免每次都等 timeout 才 fallback
+// ════════════════════════════════════════════════════════
+async function checkSoVITSHealth() {
+  const now = Date.now();
+  if (now - sovitsLastCheckAt < SOVITS_HEALTH_INTERVAL_MS) return sovitsHealthy;
+
+  sovitsLastCheckAt = now;
+  const resolvedIP  = await resolveSoVITSHost();
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      req.destroy();
+      if (sovitsHealthy) console.warn('⚠️ [SoVITS] 健康檢查逾時，標記為不可用');
+      sovitsHealthy = false;
+      resolve(false);
+    }, SOVITS_CONNECT_TIMEOUT_MS);
+
+    const req = http.request(
+      { hostname: resolvedIP, port: SOVITS_PORT, path: '/', method: 'GET', headers: { Host: SOVITS_HOST } },
+      (res) => {
+        clearTimeout(timer);
+        res.resume();
+        if (!sovitsHealthy) console.log('✅ [SoVITS] 服務已恢復');
+        sovitsHealthy = true;
+        resolve(true);
+      }
+    );
+    req.on('error', () => {
+      clearTimeout(timer);
+      if (sovitsHealthy) console.warn('⚠️ [SoVITS] 健康檢查失敗，標記為不可用');
+      sovitsHealthy = false;
+      resolve(false);
+    });
+    req.end();
+  });
+}
+
+// ════════════════════════════════════════════════════════
 //  TTS 生成核心
 // ════════════════════════════════════════════════════════
 async function generateSoVITS(text, filename, guildId) {
@@ -198,7 +380,7 @@ async function generateSoVITS(text, filename, guildId) {
 
     const connectTimer = setTimeout(() => {
       req.destroy(new Error('SoVITS 連線逾時（Port 無回應，Server 可能關機）'));
-    }, 2000);
+    }, SOVITS_CONNECT_TIMEOUT_MS);
     let receiveTimer = null;
 
     const req = http.request({
@@ -208,7 +390,7 @@ async function generateSoVITS(text, filename, guildId) {
       if (res.statusCode !== 200) { done(new Error(`SoVITS HTTP ${res.statusCode}`)); res.resume(); return; }
       receiveTimer = setTimeout(() => {
         req.destroy(new Error('SoVITS 音訊接收逾時（處理超過 30 秒）'));
-      }, 30000);
+      }, SOVITS_RECEIVE_TIMEOUT_MS);
       const fileStream = fs.createWriteStream(filename);
       res.pipe(fileStream);
       fileStream.on('finish', () => done(null));
@@ -234,29 +416,74 @@ function generateEdgeTTS(text, filename, voice) {
   });
 }
 
+/**
+ * 合成單一文字片段。
+ * 先查健康狀態，不可用時直接走 edge-tts，不等 SoVITS timeout。
+ * 合成前查快取，命中則直接返回。
+ */
 async function generateTTS(text, filename, guildId) {
-  try {
-    const sovitsFile = filename.replace(/\.\w+$/, '_sovits.wav');
-    await generateSoVITS(text, sovitsFile, guildId);
-    const model = getActiveModel(guildId);
-    console.log(`✅ [SoVITS][${model.name}] 生成成功: ${text.slice(0, 20)}...`);
-    return { file: sovitsFile, engine: 'sovits', model: model.name };
-  } catch (err) {
-    console.warn(`⚠️ [SoVITS] 失敗 (${err.message})，切換至 edge-tts`);
+  const model    = getActiveModel(guildId);
+  const tempDir  = path.dirname(filename);
+
+  // 查詢快取
+  const cached = await getCached(text, model.key, tempDir);
+  if (cached) return cached;
+
+  // 先做健康檢查，已知不可用時跳過 SoVITS
+  const healthy = await checkSoVITSHealth();
+
+  if (healthy) {
+    try {
+      const sovitsFile = filename.replace(/\.\w+$/, '_sovits.wav');
+      await generateSoVITS(text, sovitsFile, guildId);
+      // SoVITS 成功：標記健康
+      sovitsHealthy = true;
+      console.log(`✅ [SoVITS][${model.name}] 生成成功: ${text.slice(0, 20)}...`);
+      const result = { file: sovitsFile, engine: 'sovits', model: model.name };
+      putCache(text, model.key, result);
+      return result;
+    } catch (err) {
+      // SoVITS 失敗：標記不可用，下次直接走 fallback
+      sovitsHealthy     = false;
+      sovitsLastCheckAt = Date.now();
+      console.warn(`⚠️ [SoVITS] 失敗 (${err.message})，切換至 edge-tts`);
+    }
+  } else {
+    console.log(`⚡ [SoVITS] 已知不可用，直接使用 edge-tts`);
   }
+
   if (!hasEdgeTTS) throw new Error('SoVITS 不可用且 edge-tts 未安裝');
+
   const voice    = resolveVoice(text, guildId);
   const edgeFile = filename.replace(/\.\w+$/, '_edge.mp3');
   await generateEdgeTTS(text, edgeFile, voice);
   console.log(`✅ [edge-tts] 生成成功: ${text.slice(0, 20)}...`);
-  return { file: edgeFile, engine: 'edge', voice };
+  const result = { file: edgeFile, engine: 'edge', voice };
+  putCache(text, model.key, result);
+  return result;
 }
 
 function safeUnlink(f) { try { fs.unlinkSync(f); } catch {} }
 
 // ════════════════════════════════════════════════════════
-//  佇列處理
+//  Pipeline 佇列處理
+//
+//  核心設計：
+//  1. playTTS 將文字分段後，每段立即建立一個「佇列項目」並開始非同步合成
+//  2. 佇列項目包含 readyPromise（合成完成的 Promise）
+//  3. processQueue 等待隊首項目的 readyPromise，合成完成後立即播放
+//  4. 播放下一段時，下一段的合成通常已在並行進行中（或已完成）
 // ════════════════════════════════════════════════════════
+
+/**
+ * @typedef {Object} QueueItem
+ * @property {string}  text
+ * @property {string}  engine
+ * @property {Promise<{file:string, engine:string, voice?:string, model?:string}>} readyPromise
+ * @property {{file:string, engine:string, voice?:string, model?:string} | null} result
+ * @property {boolean} failed
+ */
+
 async function processQueue(guildId) {
   const queue = ttsQueues.get(guildId);
   if (!queue || queue.length === 0) {
@@ -265,32 +492,65 @@ async function processQueue(guildId) {
     return;
   }
 
-  const { filename } = queue[0];
   const connection = getVoiceConnection(guildId);
   if (!connection) {
-    for (const item of queue) safeUnlink(item.filename);
+    // 清理所有待播放項目（合成結果可能尚未完成，等 Promise settle 後刪除）
+    const items = [...queue];
     ttsQueues.delete(guildId);
     ttsIsPlaying.delete(guildId);
+    for (const item of items) {
+      item.readyPromise.then(r => { if (r?.file) safeUnlink(r.file); }).catch(() => {});
+    }
     return;
   }
 
   ttsIsPlaying.set(guildId, true);
 
-  const ok = playTTSLayer(guildId, filename, () => {
-    safeUnlink(filename);
+  const item = queue[0];
+
+  // 等待隊首項目的合成完成（若已完成則立即繼續）
+  let result;
+  try {
+    result = await item.readyPromise;
+  } catch (err) {
+    console.error(`❌ [TTS] 合成失敗，跳過此段: ${err.message}`);
+    queue.shift();
+    ttsIsPlaying.delete(guildId);
+    processQueue(guildId);
+    return;
+  }
+
+  if (!result?.file) {
+    queue.shift();
+    ttsIsPlaying.delete(guildId);
+    processQueue(guildId);
+    return;
+  }
+
+  const ok = playTTSLayer(guildId, result.file, () => {
+    safeUnlink(result.file);
     queue.shift();
     ttsIsPlaying.delete(guildId);
     processQueue(guildId);
   });
 
   if (!ok) {
-    safeUnlink(filename);
+    safeUnlink(result.file);
     queue.shift();
     ttsIsPlaying.delete(guildId);
     processQueue(guildId);
   }
 }
 
+// ════════════════════════════════════════════════════════
+//  公開 API：playTTS
+// ════════════════════════════════════════════════════════
+
+/**
+ * 主要入口。
+ * 將文字分段，每段立即啟動非同步合成並加入佇列，
+ * 第一段合成完成後立即開始播放，後續段落並行合成。
+ */
 async function playTTS(guildId, text) {
   const connection = getVoiceConnection(guildId);
   if (!connection) return { success: false, reason: 'no_connection' };
@@ -298,31 +558,80 @@ async function playTTS(guildId, text) {
   const tempDir = path.join(__dirname, '../temp');
   if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-  const baseFile = path.join(tempDir, `tts_${guildId}_${Date.now()}.tmp`);
-  let result;
-  try {
-    result = await generateTTS(text, baseFile, guildId);
-  } catch (err) {
-    console.error('❌ TTS 全部失敗:', err.message);
-    return { success: false, reason: 'tts_failed' };
-  }
+  // 分段
+  const segments = splitSentences(text);
+  if (segments.length === 0) return { success: false, reason: 'empty_text' };
 
   if (!ttsQueues.has(guildId)) ttsQueues.set(guildId, []);
   const queue     = ttsQueues.get(guildId);
-  const isPlaying = ttsIsPlaying.has(guildId);
-  queue.push({ text, filename: result.file, engine: result.engine });
-  if (!isPlaying) processQueue(guildId);
+  const wasEmpty  = queue.length === 0 && !ttsIsPlaying.has(guildId);
+
+  // 記錄第一段的引擎資訊（用於回傳）
+  let firstEngine = 'unknown';
+  let firstModel  = null;
+  let firstVoice  = null;
+
+  // ✨ 新增一個變數來追蹤「上一個合成任務」，避免併發塞爆 SoVITS
+  let lastGenerationPromise = Promise.resolve();
+
+  // 將 Promise 串聯起來，確保 SoVITS 是一句接著一句合成
+  for (let i = 0; i < segments.length; i++) {
+    const seg      = segments[i];
+    const baseFile = path.join(tempDir, `tts_${guildId}_${Date.now()}_${i}.tmp`);
+
+    // ✨ 等待上一句「開始合成完畢」後，才啟動這一句的合成
+    const readyPromise = lastGenerationPromise.then(() => {
+      return generateTTS(seg, baseFile, guildId);
+    }).then(result => {
+      if (i === 0) {
+        firstEngine = result.engine;
+        firstModel  = result.model ?? null;
+        firstVoice  = result.voice ?? null;
+      }
+      return result;
+    });
+
+    // ✨ 更新追蹤變數，加上 catch 避免某一句失敗導致後續全部卡死
+    lastGenerationPromise = readyPromise.catch(() => {});
+
+    queue.push({ text: seg, readyPromise });
+  }
+
+  // 如果佇列原本是空的，立即啟動播放（會等第一段的 readyPromise）
+  if (wasEmpty) processQueue(guildId);
+
+  // 等第一段合成完成，取得引擎資訊後回傳（讓呼叫端能立即得知結果）
+  // 注意：此 await 只等第一段，不阻塞後續段落的並行合成
+  try {
+    const firstResult = await queue[queue.length - segments.length]?.readyPromise;
+    if (firstResult) {
+      firstEngine = firstResult.engine;
+      firstModel  = firstResult.model ?? null;
+      firstVoice  = firstResult.voice ?? null;
+    }
+  } catch {
+    // 第一段合成失敗，processQueue 會自動跳過
+  }
 
   return {
-    success: true, queued: queue.length > 1, position: queue.length,
-    engine: result.engine, model: result.model ?? null,
-    detectedLang: detectLanguage(text), voice: result.voice ?? null,
+    success:      true,
+    queued:       !wasEmpty || segments.length > 1,
+    position:     queue.length,
+    engine:       firstEngine,
+    model:        firstModel,
+    detectedLang: detectLanguage(text),
+    voice:        firstVoice,
+    segments:     segments.length,
   };
 }
 
 function stopTTS(guildId) {
   if (ttsQueues.has(guildId)) {
-    for (const item of ttsQueues.get(guildId)) safeUnlink(item.filename);
+    const items = ttsQueues.get(guildId);
+    // 清理時需等 readyPromise settle 後才能刪除檔案
+    for (const item of items) {
+      item.readyPromise.then(r => { if (r?.file) safeUnlink(r.file); }).catch(() => {});
+    }
     ttsQueues.delete(guildId);
   }
   ttsIsPlaying.delete(guildId);
@@ -355,6 +664,10 @@ function setupTTSCommands(client) {
 
   resolveSoVITSHost().then(ip => {
     console.log(`✅ [DNS] 預解析完成: ${SOVITS_HOST} → ${ip}`);
+    // 啟動時立即做一次健康檢查，確認 SoVITS 狀態
+    checkSoVITSHealth().then(ok => {
+      console.log(ok ? '✅ [SoVITS] 服務正常' : '⚠️ [SoVITS] 服務不可用，將使用 edge-tts fallback');
+    });
   });
 
   const modelChoices = buildModelChoices();
@@ -450,9 +763,10 @@ function setupTTSCommands(client) {
         }
 
         const quotedText = text.split('\n').map(line => `> ${line}`).join('\n');
+        const segInfo    = result.segments > 1 ? `（已分為 ${result.segments} 段並行合成）` : '';
         await interaction.editReply({
           content:
-            `🔊 **朗讀中**\n` +
+            `🔊 **朗讀中** ${segInfo}\n` +
             `${quotedText}` +
             (result.queued ? `\n\n📋 已加入排隊（第 ${result.position} 位）` : '')
         });
@@ -485,6 +799,10 @@ function setupTTSCommands(client) {
         try {
           await switchSoVITSWeights(model.gpt_weights, model.sovits_weights);
           activeModels.set(guildId, key);
+          // 切換模型時清空快取，避免舊模型的合成結果被誤用
+          for (const [k] of ttsCache) {
+            if (k.startsWith(`${key}::`)) ttsCache.delete(k);
+          }
           await interaction.editReply({ content: `✅ 已切換至 **${model.name}**！` });
         } catch (err) {
           console.error('❌ 切換模型失敗:', err.message);
@@ -497,7 +815,7 @@ function setupTTSCommands(client) {
         if (!hasEdgeTTS) {
           return interaction.reply({
             content: '❌ edge-tts 未安裝，無法設定聲音',
-            flags: MessageFlags.Ephemeral, 
+            flags: MessageFlags.Ephemeral,
           });
         }
 
