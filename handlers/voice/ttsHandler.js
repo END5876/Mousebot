@@ -9,7 +9,7 @@ const http = require('http');
 const dns  = require('dns').promises;
 
 // audioManager 統一管理 TTS 層
-const { playTTSLayer } = require('./audioManager');
+const { playTTSLayer } = require('../audioManager');
 
 // ── TTS 排隊 Map ─────────────────────────────────────────
 // 佇列項目結構升級：加入 readyPromise / file / status 欄位，
