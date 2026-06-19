@@ -25,9 +25,9 @@ const {
 } = require('./voice/sttHandler');
 
 const { getGeminiResponseVoice } = require('./ai/aiHandler');
-const { playTTS } = require('./ttsHandler');
+const { playTTS } = require('./voice/ttsHandler');
 
-// ✅ 改用 audioManager 統一管理靜音層
+// 改用 audioManager 統一管理靜音層
 const {
   startSilenceLayer,
   stopSilenceLayer,

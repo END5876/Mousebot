@@ -8,7 +8,7 @@ const Groq = require('groq-sdk');
 const { getGeminiResponseVoice } = require('../../handlers/ai/aiHandler');
 
 // 將 ttsHandler 移至頂層 require，避免每次喚醒都在熱路徑上執行動態載入
-const { playTTS } = require('../ttsHandler');
+const { playTTS } = require('./ttsHandler');
 
 const {
   WAKEUP_VOICE_PATH, TEMP_DIR,
