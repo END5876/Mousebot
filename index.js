@@ -8,7 +8,7 @@ const { setupCustomResponses }   = require('./handlers/responseHandler');
 const { setupAICommands }        = require('./handlers/ai/aiHandler');
 const { setupGuguGenerator }     = require('./handlers/ai/gugugagaGenerator');
 const { setupAutoJoinCommands }  = require('./handlers/autoJoinHandler');
-const { setupTTSCommands }       = require('./handlers/ttsHandler');
+const { setupTTSCommands }       = require('./handlers/voice/ttsHandler');
 const { setupSteamFreeNotifier } = require('./handlers/steamFreeHandler');
 
 // ── 重構後的音樂模組 ───────────────────────────────────────
