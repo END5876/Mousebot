@@ -398,15 +398,21 @@ async function generateSoVITS(text, filename, guildId) {
     });
 
     req.on('socket', (socket) => {
-      socket.on('connect', () => {
+      if (!socket.connecting) {
         clearTimeout(connectTimer);
-        console.log('🔌 [SoVITS] TCP 連線成功，等待推理完成...');
-      });
+      } else {
+        socket.on('connect', () => {
+          clearTimeout(connectTimer);
+          console.log('🔌 [SoVITS] TCP 連線成功，等待推理完成...');
+        });
+      }
     });
+    
     req.on('error', (err) => done(err));
     req.end();
   });
 }
+
 
 function generateEdgeTTS(text, filename, voice) {
   return new Promise((resolve, reject) => {
@@ -763,13 +769,10 @@ function setupTTSCommands(client) {
         }
 
         const quotedText = text.split('\n').map(line => `> ${line}`).join('\n');
-        const segInfo    = result.segments > 1 ? `（已分為 ${result.segments} 段並行合成）` : '';
         await interaction.editReply({
-          content:
-            `🔊 **朗讀中** ${segInfo}\n` +
-            `${quotedText}` +
-            (result.queued ? `\n\n📋 已加入排隊（第 ${result.position} 位）` : '')
+          content: `🔊 **朗讀中**\n${quotedText}`
         });
+
       }
 
       // ── /tts stop ──────────────────────────────────────

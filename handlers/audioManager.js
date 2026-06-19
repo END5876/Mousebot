@@ -189,7 +189,6 @@ function playTTSLayer(guildId, filename, onEnd) {
 
   player.on(AudioPlayerStatus.Idle, () => {
     delete state.players.tts;
-    console.log(`✅ [AudioManager] TTS 播放完畢 (${guildId})`);
     // 恢復音樂或靜音
     _restoreAfterTTS(guildId);
     onEnd?.();
@@ -202,7 +201,6 @@ function playTTSLayer(guildId, filename, onEnd) {
     onEnd?.();
   });
 
-  console.log(`🔊 [AudioManager] TTS 層啟動 (${guildId})`);
   return true;
 }
 
