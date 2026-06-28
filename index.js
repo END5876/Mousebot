@@ -10,6 +10,7 @@ const { setupGuguGenerator }     = require('./handlers/ai/gugugagaGenerator');
 const { setupAutoJoinCommands }  = require('./handlers/autoJoinHandler');
 const { setupTTSCommands }       = require('./handlers/voice/ttsHandler');
 const { setupSteamFreeNotifier } = require('./handlers/steamFreeHandler');
+const { setupEpicFreeNotifier }  = require('./handlers/epicFreeHandler'); 
 
 // ── 重構後的音樂模組 ───────────────────────────────────────
 const { setupUnifiedCommands }   = require('./handlers/musicplayer/unifiedQueue');
@@ -39,6 +40,7 @@ setupGuguGenerator(client);
 setupAutoJoinCommands(client);
 setupTTSCommands(client);
 setupSteamFreeNotifier(client);
+setupEpicFreeNotifier(client);
 
 // ── Slash Command 互動處理 ─────────────────────────────────
 client.on('interactionCreate', async interaction => {
