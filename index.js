@@ -9,8 +9,8 @@ const { setupAICommands }        = require('./handlers/ai/aiHandler');
 const { setupGuguGenerator }     = require('./handlers/ai/gugugagaGenerator');
 const { setupAutoJoinCommands }  = require('./handlers/autoJoinHandler');
 const { setupTTSCommands }       = require('./handlers/voice/ttsHandler');
-const { setupSteamFreeNotifier } = require('./handlers/steamFreeHandler');
-const { setupEpicFreeNotifier }  = require('./handlers/epicFreeHandler'); 
+const { setupSteamFreeNotifier } = require('./handlers/notice/steamFreeHandler');
+const { setupEpicFreeNotifier }  = require('./handlers/notice/epicFreeHandler'); 
 
 // ── 重構後的音樂模組 ───────────────────────────────────────
 const { setupUnifiedCommands }   = require('./handlers/musicplayer/unifiedQueue');
