@@ -164,8 +164,18 @@ async function getSteamFreeGames() {
 function buildMessage(game) {
   let endDateDisplay = game.endDate;
   if (!['未知 / 隨時結束', 'N/A'].includes(game.endDate)) {
-    const endTimestamp = Math.floor(new Date(game.endDate).getTime() / 1000);
-    if (!isNaN(endTimestamp)) endDateDisplay = `<t:${endTimestamp}:f> (<t:${endTimestamp}:R>)`;
+    const dateObj = new Date(game.endDate);
+    const endTimestamp = Math.floor(dateObj.getTime() / 1000);
+    
+    if (!isNaN(endTimestamp)) {
+      // 手動提取年、月、日來固定格式，避免 Discord 自動排版走鐘
+      const y = dateObj.getFullYear();
+      const m = dateObj.getMonth() + 1;
+      const d = dateObj.getDate();
+      
+      // 組合：固定日期字串 + Discord 動態倒數標籤
+      endDateDisplay = `${y}年${m}月${d}日 (<t:${endTimestamp}:R>)`;
+    }
   }
 
   const priceText = game.originalPrice !== '未知' ? `~~${game.originalPrice}~~` : '未知';
