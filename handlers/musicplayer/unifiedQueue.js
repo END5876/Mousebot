@@ -16,9 +16,11 @@ const {
   ButtonStyle,
   SlashCommandBuilder,
   MessageFlags,
+  PermissionFlagsBits,
 } = require('discord.js');
 
 const { setMusicPlayer, stopMusicLayer, startSilenceLayer } = require('../audioManager');
+const voiceMonitor = require('./voiceActivityMonitor');
 
 // ════════════════════════════════════════════════════════
 //  引擎注入（由各 handler 在 setup 時呼叫）
@@ -150,7 +152,28 @@ function stopAll(guildId) {
   loopSettings.delete(guildId);
   controlMsgs.delete(guildId);
   stopMusicLayer(guildId);
+  // 注意：這裡不清理 voiceMonitor！
+  // 因為 stopAll() 只代表「停止播放」，機器人仍留在語音頻道內，
+  // 閒置監控（頻道空 30 分 / 靜音 60 分）必須持續運作，
+  // 直到機器人真正離開頻道（見 Disconnected 事件與 voiceMonitor 自身的 onStop 觸發）為止。
   console.log(`⏹️ [UnifiedQueue] 停止播放 (${guildId})`);
+}
+
+// ════════════════════════════════════════════════════════
+//  閒置自動離開的共用 onStop callback 產生器
+//  （被 ensureConnection() 與 /idlemonitor enable 共用，
+//    避免兩處各自維護一份邏輯而日後修改不同步）
+// ════════════════════════════════════════════════════════
+function _createIdleStopHandler(guildId, connection, channel) {
+  return (gId, reason) => {
+    console.log(`🔌 [UnifiedQueue] 閒置自動斷線 (${gId}): ${reason}`);
+    stopAll(gId);
+    try { connection.destroy(); } catch {}
+    connections.delete(gId);
+    channel.send(
+      `⏹️ 已因閒置自動停止播放並離開語音頻道\n📌 原因：${reason}`
+    ).catch(() => {});
+  };
 }
 
 // ════════════════════════════════════════════════════════
@@ -300,6 +323,15 @@ async function ensureConnection(interaction) {
 
   startSilenceLayer(guildId);
 
+  // ── 啟動閒置自動停止監控 ─────────────────────────────
+  voiceMonitor.startMonitoring({
+    guildId,
+    connection,
+    channel: voiceChannel,
+    client: interaction.client,
+    onStop: _createIdleStopHandler(guildId, connection, interaction.channel),
+  });
+
   connection.on(VoiceConnectionStatus.Disconnected, async () => {
     try {
       await Promise.race([
@@ -310,6 +342,7 @@ async function ensureConnection(interaction) {
       console.warn(`⚠️ [UnifiedQueue] 語音連線斷開 (${guildId})`);
       try { connection.destroy(); } catch {}
       stopAll(guildId);
+      voiceMonitor.stopMonitoring(guildId); // 真正斷線時才清理閒置監控計時器
       connections.delete(guildId);
       interaction.channel.send('❌ 語音連線已斷開，請重新使用指令播放').catch(() => {});
     }
@@ -401,7 +434,7 @@ function cleanUrl(rawUrl) {
     // 處理 Bilibili 網址：保留分P，刪除所有追蹤碼
     if (urlObj.hostname.includes('bilibili.com')) {
       const p = urlObj.searchParams.get('p');
-      urlObj.search = ''; 
+      urlObj.search = '';
       if (p) urlObj.searchParams.set('p', p);
       return urlObj.toString();
     }
@@ -835,6 +868,86 @@ function setupUnifiedCommands(client) {
       if (!np) return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
       const embed = _buildEmbed(interaction.guildId);
       await interaction.reply({ embeds: [embed] });
+    },
+  });
+
+  // ── /idlemonitor（管理員專用：開關閒置自動離開功能）──────
+  client.commands.set('idlemonitor', {
+    data: new SlashCommandBuilder()
+      .setName('idlemonitor')
+      .setDescription('管理閒置自動離開語音頻道功能（僅管理員可用）')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addSubcommand(sub =>
+        sub.setName('enable').setDescription('開啟閒置自動離開功能')
+      )
+      .addSubcommand(sub =>
+        sub.setName('disable').setDescription('關閉閒置自動離開功能')
+      )
+      .addSubcommand(sub =>
+        sub.setName('status').setDescription('查看目前閒置監控狀態')
+      ),
+    async execute(interaction) {
+      // 執行期權限二次檢查（防止管理員在「整合」設定中覆寫了指令權限）
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+        return interaction.reply({
+          content: '❌ 只有管理員可以使用此指令',
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+
+      const guildId = interaction.guildId;
+      const sub = interaction.options.getSubcommand();
+
+      if (sub === 'status') {
+        const enabled = voiceMonitor.isEnabled(guildId);
+        return interaction.reply({
+          content: `📊 閒置自動離開功能目前狀態：${enabled ? '✅ 開啟' : '❌ 關閉'}`,
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+
+      const enable = sub === 'enable';
+      voiceMonitor.setEnabled(guildId, enable);
+
+      if (enable) {
+        // 若機器人目前已在語音頻道內，立即啟動監控（不需等下次重新連線）
+        const connection = connections.get(guildId) || getVoiceConnection(guildId);
+        let monitorStarted = false;
+
+        if (connection) {
+          const channelId = connection.joinConfig?.channelId;
+          const voiceChannel = channelId ? interaction.guild.channels.cache.get(channelId) : null;
+
+          if (voiceChannel) {
+            voiceMonitor.startMonitoring({
+              guildId,
+              connection,
+              channel: voiceChannel,
+              client: interaction.client,
+              onStop: _createIdleStopHandler(guildId, connection, interaction.channel),
+            });
+            monitorStarted = true;
+          }
+        }
+
+        // 誠實反映本次操作是否真的立即生效，避免管理員被誤導
+        const statusNote = monitorStarted
+          ? '（已立即套用於目前的語音連線）'
+          : '（目前機器人不在語音頻道內，將於下次 /play 時套用）';
+
+        await interaction.reply({
+          content: `✅ 閒置自動離開功能已開啟\n${statusNote}\n頻道空 30 分鐘 / 靜音 60 分鐘將自動停止播放並離開`,
+          flags: MessageFlags.Ephemeral,
+        });
+      } else {
+        // 立即停止當前監控計時器（若有正在跑的）
+        voiceMonitor.stopMonitoring(guildId);
+
+        await interaction.reply({
+          content: '❌ 閒置自動離開功能已關閉\n（機器人將不再因頻道閒置而自動離開）',
+          flags: MessageFlags.Ephemeral,
+        });
+      }
     },
   });
 
