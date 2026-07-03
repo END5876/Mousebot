@@ -10,7 +10,7 @@ const CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 分鐘檢查一次
 const LOG_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 // ── 資料存檔設定 ──────────────────────────────────────────
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+const DATA_DIR = path.join(__dirname, '..', '..', 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const NOTIFIED_FILE = path.join(DATA_DIR, 'epicnotified.json');
