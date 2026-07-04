@@ -84,19 +84,20 @@ async function fetchJson(url, retries = 3, delayMs = 3000) {
 }
 
 // ── 取得 Epic 限免遊戲清單 (官方 API) ──────────────────────
+// 註：此函式不再印出「取得 N elements / 篩選完成」routine log，
+//     只保留真正異常狀況（API 格式跑掉）的警告，
+//     routine 摘要 log 改由 checkAndNotify() 在「有新遊戲」時才印。
 async function getEpicFreeGames() {
   try {
-    // 呼叫 Epic 官方 GraphQL 轉換的 REST API，直接指定台灣與繁體中文
     const url = 'https://store-site-backend-static-ipv4.ak.epicgames.com/freeGamesPromotions?locale=zh-Hant&country=TW&allowCountries=TW';
     const data = await fetchJson(url);
-    
+
     const elements = data?.data?.Catalog?.searchStore?.elements;
     if (!Array.isArray(elements)) {
       console.warn('[EpicFree] ⚠️ API 回傳格式異常，elements 非陣列，實際結構:', JSON.stringify(data)?.slice(0, 200));
       return [];
     }
 
-    console.log(`[EpicFree] 取得 ${elements.length} 個 elements，開始篩選...`);
     const freeGames = [];
     const now = new Date();
 
@@ -114,10 +115,7 @@ async function getEpicFreeGames() {
       const isInWindow   = now >= startDate && now < endDate;
       const isFree       = discountPrice === 0 || discountPrice === null;
 
-      if (!isInWindow || !isFree) {
-        console.log(`[EpicFree] 略過 "${game.title}" — 時間內: ${isInWindow}, 免費: ${isFree} (discountPrice: ${discountPrice})`);
-        continue;
-      }
+      if (!isInWindow || !isFree) continue;
 
       // 處理遊戲敘述過長
       let finalDesc = game.description || '快去 Epic Games 領取！';
@@ -155,7 +153,6 @@ async function getEpicFreeGames() {
       });
     }
 
-    console.log(`[EpicFree] 篩選完成，共找到 ${freeGames.length} 款限免遊戲`);
     return freeGames;
   } catch (e) {
     console.error('⚠️ [EpicFree] 獲取 Epic 限免遊戲失敗:', e.message);
@@ -166,18 +163,15 @@ async function getEpicFreeGames() {
 // ── 建立 Embed 與按鈕 ─────────────────────────────────────
 function buildMessage(game) {
   let endDateDisplay = '未知 / 隨時結束';
-  
+
   if (game.endDate) {
     const dateObj = new Date(game.endDate);
     const endTimestamp = Math.floor(dateObj.getTime() / 1000);
-    
+
     if (!isNaN(endTimestamp)) {
-      // 手動提取年、月、日來固定格式，避免 Discord 自動排版走鐘
       const y = dateObj.getFullYear();
       const m = dateObj.getMonth() + 1;
       const d = dateObj.getDate();
-      
-      // 組合：固定日期字串 + Discord 動態倒數標籤
       endDateDisplay = `${y}年${m}月${d}日 (<t:${endTimestamp}:R>)`;
     }
   }
@@ -189,7 +183,7 @@ function buildMessage(game) {
     .setTitle(game.name)
     .setURL(game.url)
     .setDescription(game.description)
-    .setColor(0xFFFFFF) // Epic 的品牌色系（深灰色，深色主題下清晰可見）
+    .setColor(0xFFFFFF)
     .addFields(
       { name: '💰 價格資訊', value: `${priceText} ➔ **免費**`, inline: true },
       { name: '🎮 支援平台', value: game.platforms, inline: true },
@@ -320,13 +314,15 @@ function setupEpicFreeNotifier(client) {
       return console.error('⚠️ [EpicFree] 所有設定的頻道均無法存取，跳過本次檢查');
 
     const games = await getEpicFreeGames();
-    let needsSave = false;
 
-    for (const game of games) {
-      if (notifiedGames.has(game.id)) continue;
+    // ── 只挑出「尚未通知過」的遊戲，沒有新遊戲就完全不 log ──
+    const newGames = games.filter(game => !notifiedGames.has(game.id));
+    if (newGames.length === 0) return;
 
+    console.log(`[EpicFree] 🎮 發現 ${newGames.length} 款新限免遊戲：${newGames.map(g => g.name).join('、')}`);
+
+    for (const game of newGames) {
       notifiedGames.set(game.id, Date.now());
-      needsSave = true;
 
       const results = await Promise.allSettled(
         channels.map(ch => ch.send(buildMessage(game)))
@@ -341,7 +337,7 @@ function setupEpicFreeNotifier(client) {
       });
     }
 
-    if (needsSave) saveNotifiedGames();
+    saveNotifiedGames();
   }
 
   client.once('clientReady', () => {
