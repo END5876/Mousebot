@@ -165,7 +165,7 @@ function _buildSearchComponents(results) {
     label      : r.title.slice(0, 100),
     description: `${r.platform} · ${r.author} · ${r.duration}`.slice(0, 100),
     value      : String(i),
-    emoji      : r.platform === 'YouTube' ? '📺' : '📹',
+    emoji      : r.platform === 'YouTube' ? '🎬' : '📺',
   }));
 
   const selectRow = new ActionRowBuilder().addComponents(
@@ -200,7 +200,7 @@ async function _handleOnlineSearch(interaction, keyword, guildId) {
 
   await interaction.editReply({
     embeds: [
-      new EmbedBuilder().setColor(0x1DB954).setDescription(`🔍 正在搜尋「${keyword}」...`)
+      new EmbedBuilder().setColor(0x1DB954).setDescription(`🔍 正在搜尋「${keyword}」（YouTube + Bilibili）...`)
     ],
     components: [],
   });
@@ -225,9 +225,9 @@ async function _handleOnlineSearch(interaction, keyword, guildId) {
     embeds: [
       new EmbedBuilder()
         .setColor(0x1DB954)
-        .setTitle(`🔍 搜尋結果：「${keyword}」`)
+        .setTitle(`🔍 搜尋結果：「${keyword}」（YouTube + Bilibili）`)
         .setDescription(listText)
-        .setFooter({ text: '請於 60 秒內從下方選單選擇，或按取消' })
+        .setFooter({ text: '請於 60 秒內從下方選單選擇（🎬 YouTube / 📺 Bilibili），或按取消' })
     ],
     components: _buildSearchComponents(results),
   }).catch(() => null);
@@ -381,11 +381,12 @@ function _getAcCached(keyword) {
   return null;
 }
 
-function _raceYoutubeSearch(engine, keyword) {
+function _raceOnlineSearch(engine, keyword) {
   const key = keyword.toLowerCase();
 
   let inflight = _acInFlight.get(key);
   if (!inflight) {
+    // searchMulti 已改為同時搜尋 YouTube + Bilibili，各取 AC_RESULT_LIMIT 筆
     inflight = engine.searchMulti(keyword, AC_RESULT_LIMIT)
       .then(results => {
         _acCache.set(key, { results, timestamp: Date.now() });
@@ -444,13 +445,13 @@ async function handleAutocomplete(interaction) {
 
   // 保底：一定會顯示的「送出後搜尋」選項，即時搜尋失敗/逾時時墊底用
   const fallbackSearchChoice = {
-    name : `🔍 搜尋線上：「${focusedRaw}」（YouTube）`,
+    name : `🔍 搜尋線上：「${focusedRaw}」（YouTube + Bilibili）`,
     value: (SEARCH_MARKER + focusedRaw).slice(0, 100),
   };
 
   // 關鍵字太短不觸發即時搜尋，避免單字查詢意義不大又浪費資源
-  const ytEngine = _engines.bilibili;
-  if (focused.trim().length < AC_MIN_KEYWORD_LEN || !ytEngine) {
+  const onlineEngine = _engines.bilibili; // bilibili engine 同時處理 YouTube + Bilibili
+  if (focused.trim().length < AC_MIN_KEYWORD_LEN || !onlineEngine) {
     const choices = fileChoices.length > 0
       ? [...fileChoices, fallbackSearchChoice]
       : [fallbackSearchChoice, ...fileChoices];
@@ -461,29 +462,30 @@ async function handleAutocomplete(interaction) {
   // 先看快取，命中就直接回傳，零延遲
   const cached = _getAcCached(focused);
   if (cached) {
-    const ytChoices = cached.slice(0, AC_RESULT_LIMIT).map(r => ({
-      name : `🎬 ${r.title} · ${r.author} (${r.duration})`.slice(0, 100),
+    // searchMulti 回傳 YouTube 前 5 筆 + Bilibili 前 5 筆
+    const onlineChoices = cached.map(r => ({
+      name : `${r.platform === 'YouTube' ? '🎬' : '📺'} ${r.title} · ${r.author} (${r.duration})`.slice(0, 100),
       value: r.url.slice(0, 100),
     }));
-    const choices = [...fileChoices, ...ytChoices, fallbackSearchChoice];
+    const choices = [...fileChoices, ...onlineChoices, fallbackSearchChoice];
     interaction.respond(choices.slice(0, 25)).catch(() => {});
     return true;
   }
 
-  // 沒快取，搶時間即時查詢
-  let ytResults = null;
+  // 沒快取，搶時間即時查詢（YouTube + Bilibili 各前 5 筆）
+  let onlineResults = null;
   try {
-    ytResults = await _raceYoutubeSearch(ytEngine, focusedRaw.trim());
+    onlineResults = await _raceOnlineSearch(onlineEngine, focusedRaw.trim());
   } catch {
-    ytResults = null;
+    onlineResults = null;
   }
 
-  if (ytResults && ytResults.length > 0) {
-    const ytChoices = ytResults.slice(0, AC_RESULT_LIMIT).map(r => ({
-      name : `🎬 ${r.title} · ${r.author} (${r.duration})`.slice(0, 100),
+  if (onlineResults && onlineResults.length > 0) {
+    const onlineChoices = onlineResults.map(r => ({
+      name : `${r.platform === 'YouTube' ? '🎬' : '📺'} ${r.title} · ${r.author} (${r.duration})`.slice(0, 100),
       value: r.url.slice(0, 100),
     }));
-    const choices = [...fileChoices, ...ytChoices, fallbackSearchChoice];
+    const choices = [...fileChoices, ...onlineChoices, fallbackSearchChoice];
     interaction.respond(choices.slice(0, 25)).catch(() => {});
     return true;
   }
