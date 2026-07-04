@@ -1,5 +1,5 @@
 // handlers/onlineMusicHandler.js
-// 職責：引擎初始化、playStream、getInfo、快取流程、串流 fallback、重試邏輯
+// 職責：引擎初始化、playStream、getInfo、快取流程、串流 fallback、重試邏輯、線上搜尋(searchMulti)
 // 依賴：musicCache.js、musicAntiBot.js、unifiedQueue.js
 
 const {
@@ -25,6 +25,9 @@ const MAX_CONSECUTIVE_ERRORS = 5;
 
 // ── 超過此秒數則只串流，不下載快取 ───────────────────────
 const MAX_CACHE_DURATION_SEC = 7 * 60; // 420 秒
+
+// ── 搜尋逾時保護（避免 yt-dlp 卡住導致整個搜尋流程無限等待）──
+const SEARCH_TIMEOUT_MS = 15_000;
 
 // ── 進程 & 錯誤計數 ───────────────────────────────────────
 const activeProcesses = new Map(); // guildId -> ChildProcess
@@ -120,6 +123,110 @@ async function getInfo(url) {
 
     ytdlp.on('error', err => reject(new Error('執行 yt-dlp 失敗: ' + err.message)));
   });
+}
+
+// ════════════════════════════════════════════════════════
+//  searchOnePlatform — 搜尋單一平台（內部工具，不對外匯出）
+//
+//  ⚠️ 注意：這裡刻意不呼叫 antiBot.buildInfoArgs()，因為該函式
+//  內部依賴 antiBot.isYouTubeUrl(url) 判斷平台以套用對應 headers/cookies，
+//  而搜尋時傳入的是 "ytsearch5:關鍵字" 這種偽 URL，不是真正網址，
+//  isYouTubeUrl() 的正規表達式比對不到，行為不可預期。
+//  因此搜尋改用最基本的 yt-dlp 參數，若日後遇到搜尋被平台擋
+//  （出現驗證碼 / 403 等錯誤），需要另外補上對應的 headers/cookies 參數。
+// ════════════════════════════════════════════════════════
+function _searchOnePlatform(searchPrefix, keyword, limit) {
+  return new Promise((resolve) => {
+    const query = `${searchPrefix}${limit}:${keyword}`;
+    const args = [
+      query,
+      '--flat-playlist',   // 只拿列表資訊，不逐筆完整解析 → 速度快，但時長多半是「未知」
+      '--dump-json',
+      '--no-warnings',
+      '--socket-timeout', '10',
+    ];
+
+    const ytdlp = spawn(ytdlpPath, args, { windowsHide: true });
+    let data = '', errorData = '';
+    let finished = false;
+
+    // ── 逾時保護：避免 yt-dlp 卡住讓整個 searchMulti 永久等待 ──
+    const timer = setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      console.warn(`⚠️ [Search] ${searchPrefix} 搜尋逾時（超過 ${SEARCH_TIMEOUT_MS / 1000}s），強制終止`);
+      try { ytdlp.kill('SIGKILL'); } catch {}
+      resolve([]);
+    }, SEARCH_TIMEOUT_MS);
+
+    ytdlp.stdout.on('data', c => { data      += c.toString(); });
+    ytdlp.stderr.on('data', c => { errorData += c.toString(); });
+
+    ytdlp.on('close', code => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+
+      if (code !== 0 || !data.trim()) {
+        console.warn(`⚠️ [Search] ${searchPrefix} 搜尋失敗 (code=${code}): ${errorData.slice(0, 200)}`);
+        resolve([]); // 失敗回空陣列，不讓另一平台的搜尋結果被拖累
+        return;
+      }
+
+      const lines = data.trim().split('\n').filter(Boolean);
+      const results = [];
+      const isYT = searchPrefix === 'ytsearch';
+
+      for (const line of lines) {
+        try {
+          const info = JSON.parse(line);
+
+          const url = info.webpage_url
+            || info.url
+            || (isYT  && info.id ? `https://www.youtube.com/watch?v=${info.id}` : null)
+            || (!isYT && info.id ? `https://www.bilibili.com/video/${info.id}`   : null);
+
+          if (!url) continue;
+
+          const thumb = info.thumbnail
+            || (Array.isArray(info.thumbnails) && info.thumbnails.length
+                  ? info.thumbnails[info.thumbnails.length - 1].url
+                  : null);
+
+          results.push({
+            platform : isYT ? 'YouTube' : 'Bilibili',
+            title    : info.title || '未知標題',
+            author   : info.uploader || info.channel || info.creator || '未知作者',
+            duration : formatDuration(info.duration), // flat-playlist 模式下通常是「未知」
+            url,
+            thumbnail: thumb,
+          });
+        } catch {
+          // 忽略單行解析錯誤，不影響其他結果
+        }
+      }
+      resolve(results);
+    });
+
+    ytdlp.on('error', err => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      console.warn(`⚠️ [Search] ${searchPrefix} 執行 yt-dlp 失敗: ${err.message}`);
+      resolve([]);
+    });
+  });
+}
+
+// ════════════════════════════════════════════════════════
+//  searchMulti — 僅搜尋 YouTube
+//  @param {string} keyword  搜尋關鍵字
+//  @param {number} limit    抓取筆數（預設 5）
+//  @returns {Promise<Array>} YouTube 搜尋結果
+// ════════════════════════════════════════════════════════
+async function searchMulti(keyword, limit = 5) {
+  const ytResults = await _searchOnePlatform('ytsearch', keyword, limit);
+  return ytResults;
 }
 
 // ════════════════════════════════════════════════════════
@@ -335,7 +442,8 @@ async function setupOnlineMusicEngine() {
     console.warn('⚠️ [OnlineMusic] 引擎可能無法正常運作');
   }
 
-  registerEngine('bilibili', { playStream, getInfo });
+  // ── 引擎注入：新增 searchMulti，供 unifiedQueue.js 的線上搜尋功能呼叫 ──
+  registerEngine('bilibili', { playStream, getInfo, searchMulti });
 }
 
 // ════════════════════════════════════════════════════════
@@ -361,6 +469,8 @@ process.on('uncaughtException', (err) => {
 module.exports = {
   setupOnlineMusicEngine,
   cleanupProcess,
+  getInfo,
+  searchMulti,
   getCachedPath: cache.getCachedPath,
   downloadAndCache: (url, title, onProgress) => {
     const args = antiBot.isYouTubeUrl(url)
