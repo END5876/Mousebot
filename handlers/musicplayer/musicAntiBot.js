@@ -256,6 +256,25 @@ function buildBilibiliArgs(url, streamMode = true) {
   return args;
 }
 
+// ════════════════════════════════════════════════════════
+//  Bilibili 搜尋專用參數（僅 headers/cookies，不含下載/播放旗標）
+// ════════════════════════════════════════════════════════
+function buildBilibiliSearchArgs() {
+  const args = [];
+
+  _appendCookieArgs(args, BILIBILI_COOKIES_FILE, BILIBILI_COOKIE_HEADER);
+
+  args.push(
+    '--user-agent', BILIBILI_HEADERS['User-Agent'],
+    '--referer',    BILIBILI_HEADERS['Referer'],
+    '--add-header', `Origin:${BILIBILI_HEADERS['Origin']}`,
+    '--add-header', `Accept:${BILIBILI_HEADERS['Accept']}`,
+    '--no-check-certificate',
+  );
+
+  return args;
+}
+
 function buildInfoArgs(url) {
   const base = ['--dump-json', '--no-playlist', '--no-warnings', '--skip-download'];
 
@@ -332,6 +351,7 @@ module.exports = {
   buildYouTubeArgs,
   classifyYouTubeError,
   buildBilibiliArgs,
+  buildBilibiliSearchArgs,   // ★ 新增匯出
   classifyBilibiliError,
   buildInfoArgs,
   getCookieStatus: () => ({

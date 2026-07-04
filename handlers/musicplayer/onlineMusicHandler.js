@@ -26,10 +26,13 @@ const MAX_CONSECUTIVE_ERRORS = 5;
 // ── 超過此秒數則只串流，不下載快取 ───────────────────────
 const MAX_CACHE_DURATION_SEC = 7 * 60; // 420 秒
 
-// ── 搜尋逾時保護（避免 yt-dlp 卡住導致整個搜尋流程無限等待）──
-const SEARCH_TIMEOUT_MS = 15_000;
+// ── 搜尋逾時保護 ─────────────────────────────────────────
+// ★ 修改：YouTube 用 flat-playlist 很快，Bilibili 需要逐一完整解析較慢，
+//   兩個平台分開設定逾時，避免共用一個過短的時間卡住 Bilibili
+const SEARCH_TIMEOUT_MS_YT   = 15_000;
+const SEARCH_TIMEOUT_MS_BILI = 25_000;
 
-// ── 新增：getInfo 逾時保護 ────────────────────────────────
+// ── getInfo 逾時保護 ──────────────────────────────────────
 const GET_INFO_TIMEOUT_MS = 15_000;
 
 // ── 進程 & 錯誤計數 ───────────────────────────────────────
@@ -95,9 +98,9 @@ async function getInfo(url) {
     const args  = antiBot.buildInfoArgs(url);
     const ytdlp = spawn(ytdlpPath, args);
     let data = '', errorData = '';
-    let finished = false; // ★ 新增
+    let finished = false;
 
-    // ★ 新增：逾時保護
+    // 逾時保護
     const timer = setTimeout(() => {
       if (finished) return;
       finished = true;
@@ -110,9 +113,9 @@ async function getInfo(url) {
     ytdlp.stderr.on('data', c => { errorData += c.toString(); });
 
     ytdlp.on('close', code => {
-      if (finished) return;   // ★ 新增
-      finished = true;        // ★ 新增
-      clearTimeout(timer);    // ★ 新增
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
 
       if (code !== 0) {
         console.error('yt-dlp 錯誤輸出:', errorData);
@@ -139,35 +142,39 @@ async function getInfo(url) {
     });
 
     ytdlp.on('error', err => {
-      if (finished) return;   // ★ 新增
-      finished = true;        // ★ 新增
-      clearTimeout(timer);    // ★ 新增
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
       reject(new Error('執行 yt-dlp 失敗: ' + err.message));
     });
   });
 }
 
 // ════════════════════════════════════════════════════════
-//  searchOnePlatform — 搜尋單一平台（內部工具，不對外匯出）
-//
-//  ⚠️ 注意：這裡刻意不呼叫 antiBot.buildInfoArgs()，因為該函式
-//  內部依賴 antiBot.isYouTubeUrl(url) 判斷平台以套用對應 headers/cookies，
-//  而搜尋時傳入的是 "ytsearch5:關鍵字" 這種偽 URL，不是真正網址，
-//  isYouTubeUrl() 的正規表達式比對不到，行為不可預期。
-//  因此搜尋改用最基本的 yt-dlp 參數，若日後遇到搜尋被平台擋
-//  （出現驗證碼 / 403 等錯誤），需要另外補上對應的 headers/cookies 參數。
+//  _searchOnePlatform — 搜尋單一平台（內部工具，不對外匯出）
 // ════════════════════════════════════════════════════════
 function _searchOnePlatform(searchPrefix, keyword, limit) {
   return new Promise((resolve) => {
     const query = `${searchPrefix}${limit}:${keyword}`;
+    const isYT  = searchPrefix === 'ytsearch';
+
     const args = [
-      query,
-      '--flat-playlist',   // 只拿列表資訊，不逐筆完整解析 → 速度快，但時長多半是「未知」
       '--dump-json',
       '--no-warnings',
       '--socket-timeout', '10',
     ];
 
+    if (isYT) {
+      // YouTube：flat-playlist 已足夠拿到完整資訊，維持快速模式
+      args.push('--flat-playlist');
+    } else {
+      // Bilibili：flat-playlist 只回傳純網址，移除以取得完整 metadata
+      args.push(...antiBot.buildBilibiliSearchArgs());
+    }
+
+    args.push(query); // query（搜尋字串）放最後，與其他 build*Args() 慣例一致
+
+    const timeoutMs = isYT ? SEARCH_TIMEOUT_MS_YT : SEARCH_TIMEOUT_MS_BILI;
     const ytdlp = spawn(ytdlpPath, args, { windowsHide: true });
     let data = '', errorData = '';
     let finished = false;
@@ -176,10 +183,10 @@ function _searchOnePlatform(searchPrefix, keyword, limit) {
     const timer = setTimeout(() => {
       if (finished) return;
       finished = true;
-      console.warn(`⚠️ [Search] ${searchPrefix} 搜尋逾時（超過 ${SEARCH_TIMEOUT_MS / 1000}s），強制終止`);
+      console.warn(`⚠️ [Search] ${searchPrefix} 搜尋逾時（超過 ${timeoutMs / 1000}s），強制終止`);
       try { ytdlp.kill('SIGKILL'); } catch {}
       resolve([]);
-    }, SEARCH_TIMEOUT_MS);
+    }, timeoutMs);
 
     ytdlp.stdout.on('data', c => { data      += c.toString(); });
     ytdlp.stderr.on('data', c => { errorData += c.toString(); });
@@ -197,7 +204,6 @@ function _searchOnePlatform(searchPrefix, keyword, limit) {
 
       const lines = data.trim().split('\n').filter(Boolean);
       const results = [];
-      const isYT = searchPrefix === 'ytsearch';
 
       for (const line of lines) {
         try {
@@ -217,9 +223,9 @@ function _searchOnePlatform(searchPrefix, keyword, limit) {
 
           results.push({
             platform : isYT ? 'YouTube' : 'Bilibili',
-            title    : info.title || '未知標題',
+            title    : info.title    || '未知標題',
             author   : info.uploader || info.channel || info.creator || '未知作者',
-            duration : formatDuration(info.duration), // flat-playlist 模式下通常是「未知」
+            duration : formatDuration(info.duration),
             url,
             thumbnail: thumb,
           });
@@ -241,14 +247,18 @@ function _searchOnePlatform(searchPrefix, keyword, limit) {
 }
 
 // ════════════════════════════════════════════════════════
-//  searchMulti — 僅搜尋 YouTube
+//  searchMulti — 同時搜尋 YouTube + Bilibili
 //  @param {string} keyword  搜尋關鍵字
-//  @param {number} limit    抓取筆數（預設 5）
-//  @returns {Promise<Array>} YouTube 搜尋結果
+//  @param {number} limit    每個平台抓取筆數（預設 5）
+//  @returns {Promise<Array>} YouTube 前 limit 筆 + Bilibili 前 limit 筆
 // ════════════════════════════════════════════════════════
 async function searchMulti(keyword, limit = 5) {
-  const ytResults = await _searchOnePlatform('ytsearch', keyword, limit);
-  return ytResults;
+  // 同時搜尋 YouTube 與 Bilibili，兩平台各取 limit 筆
+  const [ytResults, biliResults] = await Promise.all([
+    _searchOnePlatform('ytsearch',   keyword, limit),
+    _searchOnePlatform('bilisearch', keyword, limit),
+  ]);
+  return [...ytResults, ...biliResults];
 }
 
 // ════════════════════════════════════════════════════════
@@ -447,7 +457,7 @@ function _handleStreamError(guildId, item, player, retryCount, errorMessage, sil
   }
 }
 
-// ★ 新增：清理指定 guild 的錯誤計數，供 stopAll 呼叫，避免長期累積
+// 清理指定 guild 的錯誤計數，供 stopAll 呼叫，避免長期累積
 function clearErrorCount(guildId) {
   errorCounts.delete(guildId);
 }
@@ -475,8 +485,8 @@ async function setupOnlineMusicEngine() {
     playStream,
     getInfo,
     searchMulti,
-    clearErrorCount,                          // ★ 補上
-    resetYtClient: antiBot.resetYtClient,      // ★ 補上（需確認 musicAntiBot.js 是否已定義此函式）
+    clearErrorCount,
+    resetYtClient: antiBot.resetYtClient,
   });
 }
 
@@ -504,7 +514,7 @@ module.exports = {
   setupOnlineMusicEngine,
   cleanupProcess,
   clearErrorCount,
-  resetYtClient: antiBot.resetYtClient,   // ★ 新增（同上，需確認 musicAntiBot.js 是否已定義此函式）
+  resetYtClient: antiBot.resetYtClient,
   getInfo,
   searchMulti,
   getCachedPath: cache.getCachedPath,
