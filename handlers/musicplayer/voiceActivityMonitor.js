@@ -16,6 +16,11 @@ const monitors = new Map();
 // guildId -> boolean（未設定時預設為 true，即預設開啟，延續現有行為）
 const enabledGuilds = new Map();
 
+// ★ 修正：全域單例旗標，確保 voiceStateUpdate 監聽器整個 process 只註冊一次，
+//   避免每個 guild 各自呼叫 client.on(...) 導致監聽器疊加、觸發
+//   MaxListenersExceededWarning（Node.js 預設上限為 10 個監聽器）
+let _globalVoiceStateListenerRegistered = false;
+
 function isEnabled(guildId) {
   return enabledGuilds.has(guildId) ? enabledGuilds.get(guildId) : true;
 }
@@ -42,6 +47,30 @@ function _countHumanMembers(channel, botId) {
 }
 
 /**
+ * ★ 修正：全域單例的 voiceStateUpdate 監聽器。
+ * 只在整個 process 生命週期內註冊一次，內部透過遍歷 monitors Map
+ * 動態比對頻道 ID，取代「每個 guild 各自綁定一個監聽器」的作法。
+ * 使用者解除靜音（unmute）視為活躍訊號，作為 speaking 事件的防禦性補強。
+ */
+function _ensureGlobalVoiceStateListener(client) {
+  if (_globalVoiceStateListenerRegistered) return;
+  _globalVoiceStateListenerRegistered = true;
+
+  client.on('voiceStateUpdate', (oldState, newState) => {
+    if (newState.member?.user?.bot) return;
+    if (!(oldState.selfMute && !newState.selfMute)) return;
+
+    for (const state of monitors.values()) {
+      if (newState.channelId === state.channelId) {
+        state.lastSpeakTime = Date.now();
+      }
+    }
+  });
+
+  console.log('✅ [VoiceMonitor] 全域 voiceStateUpdate 監聽器已註冊（單例，僅一次）');
+}
+
+/**
  * 開始監控指定 guild 的語音頻道活動
  * 若該 guild 的閒置監控功能已被管理員關閉，則不會啟動任何計時器。
  */
@@ -53,6 +82,9 @@ function startMonitoring({ guildId, connection, channel, client, onStop }) {
 
   // 若已有舊的監控，先清掉避免重複計時器
   stopMonitoring(guildId);
+
+  // ★ 修正：改為確保全域監聽器已註冊，取代原本每個 guild 各自 client.on(...)
+  _ensureGlobalVoiceStateListener(client);
 
   const now   = Date.now();
   const botId = client.user.id;
@@ -66,6 +98,7 @@ function startMonitoring({ guildId, connection, channel, client, onStop }) {
     intervalId      : null,
     speakingHandler : null,
     connection,
+    // ★ 修正：voiceStateHandler 欄位已移除，改由全域單例監聽器處理
   };
 
   // ── 監聽「有人開始說話」事件，更新最後說話時間 ──────────
@@ -124,6 +157,9 @@ function stopMonitoring(guildId) {
   if (state.connection && state.speakingHandler) {
     try { state.connection.receiver.speaking.off('start', state.speakingHandler); } catch {}
   }
+  // ★ 修正：不再需要解除 voiceStateUpdate 綁定，
+  //   因為全域監聽器透過 monitors Map 動態判斷，
+  //   guild 被刪除後自然不會再被處理到（monitors.delete 在下方執行）
   monitors.delete(guildId);
   console.log(`🛑 [VoiceMonitor] 停止監控 guild ${guildId}`);
 }

@@ -139,10 +139,15 @@ function stopAll(guildId) {
   loopSettings.delete(guildId);
   controlMsgs.delete(guildId);
   stopMusicLayer(guildId);
-  // 注意：這裡不清理 voiceMonitor！
-  // 因為 stopAll() 只代表「停止播放」，機器人仍留在語音頻道內，
-  // 閒置監控（頻道空 30 分 / 靜音 60 分）必須持續運作，
-  // 直到機器人真正離開頻道（見 Disconnected 事件與 voiceMonitor 自身的 onStop 觸發）為止。
+
+  if (_engines.bilibili && typeof _engines.bilibili.clearErrorCount === 'function') {
+    _engines.bilibili.clearErrorCount(guildId);
+  }
+  // ★ 新增：同時重置 YouTube client 輪替狀態，避免下次播放新影片時延續舊的失敗策略
+  if (_engines.bilibili && typeof _engines.bilibili.resetYtClient === 'function') {
+    _engines.bilibili.resetYtClient(guildId);
+  }
+
   console.log(`⏹️ [UnifiedQueue] 停止播放 (${guildId})`);
 }
 
@@ -249,7 +254,7 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
     } else {
       const engine = _engines.local;
       if (!engine) throw new Error('local engine 未注入');
-      engine.playStream(guildId, item, player, { silent });
+      await engine.playStream(guildId, item, player, { silent }); // ★ 補上 await
     }
   } catch (err) {
     console.error('❌ [UnifiedQueue] 引擎啟動失敗:', err.message);
