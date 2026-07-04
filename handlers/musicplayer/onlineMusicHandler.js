@@ -29,6 +29,9 @@ const MAX_CACHE_DURATION_SEC = 7 * 60; // 420 秒
 // ── 搜尋逾時保護（避免 yt-dlp 卡住導致整個搜尋流程無限等待）──
 const SEARCH_TIMEOUT_MS = 15_000;
 
+// ── 新增：getInfo 逾時保護 ────────────────────────────────
+const GET_INFO_TIMEOUT_MS = 15_000;
+
 // ── 進程 & 錯誤計數 ───────────────────────────────────────
 const activeProcesses = new Map(); // guildId -> ChildProcess
 const errorCounts     = new Map(); // guildId -> number
@@ -92,11 +95,25 @@ async function getInfo(url) {
     const args  = antiBot.buildInfoArgs(url);
     const ytdlp = spawn(ytdlpPath, args);
     let data = '', errorData = '';
+    let finished = false; // ★ 新增
+
+    // ★ 新增：逾時保護
+    const timer = setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      console.warn(`⚠️ [getInfo] 逾時（超過 ${GET_INFO_TIMEOUT_MS / 1000}s），強制終止: ${url}`);
+      try { ytdlp.kill('SIGKILL'); } catch {}
+      reject(new Error('取得影片資訊逾時，請確認網址是否正確或稍後再試'));
+    }, GET_INFO_TIMEOUT_MS);
 
     ytdlp.stdout.on('data', c => { data      += c.toString(); });
     ytdlp.stderr.on('data', c => { errorData += c.toString(); });
 
     ytdlp.on('close', code => {
+      if (finished) return;   // ★ 新增
+      finished = true;        // ★ 新增
+      clearTimeout(timer);    // ★ 新增
+
       if (code !== 0) {
         console.error('yt-dlp 錯誤輸出:', errorData);
         if (antiBot.isYouTubeUrl(url)) {
@@ -121,7 +138,12 @@ async function getInfo(url) {
       } catch { reject(new Error('解析影片資訊失敗')); }
     });
 
-    ytdlp.on('error', err => reject(new Error('執行 yt-dlp 失敗: ' + err.message)));
+    ytdlp.on('error', err => {
+      if (finished) return;   // ★ 新增
+      finished = true;        // ★ 新增
+      clearTimeout(timer);    // ★ 新增
+      reject(new Error('執行 yt-dlp 失敗: ' + err.message));
+    });
   });
 }
 
@@ -425,6 +447,11 @@ function _handleStreamError(guildId, item, player, retryCount, errorMessage, sil
   }
 }
 
+// ★ 新增：清理指定 guild 的錯誤計數，供 stopAll 呼叫，避免長期累積
+function clearErrorCount(guildId) {
+  errorCounts.delete(guildId);
+}
+
 async function setupOnlineMusicEngine() {
   antiBot.initCookies();
   cache.ensureCacheDir();
@@ -442,8 +469,15 @@ async function setupOnlineMusicEngine() {
     console.warn('⚠️ [OnlineMusic] 引擎可能無法正常運作');
   }
 
-  // ── 引擎注入：新增 searchMulti，供 unifiedQueue.js 的線上搜尋功能呼叫 ──
-  registerEngine('bilibili', { playStream, getInfo, searchMulti });
+  // ── 引擎注入：補上缺漏的 clearErrorCount 與 resetYtClient，
+  //   避免 playback.js 透過 _engines.bilibili 呼叫時永遠是 undefined ──
+  registerEngine('bilibili', {
+    playStream,
+    getInfo,
+    searchMulti,
+    clearErrorCount,                          // ★ 補上
+    resetYtClient: antiBot.resetYtClient,      // ★ 補上（需確認 musicAntiBot.js 是否已定義此函式）
+  });
 }
 
 // ════════════════════════════════════════════════════════
@@ -469,6 +503,8 @@ process.on('uncaughtException', (err) => {
 module.exports = {
   setupOnlineMusicEngine,
   cleanupProcess,
+  clearErrorCount,
+  resetYtClient: antiBot.resetYtClient,   // ★ 新增（同上，需確認 musicAntiBot.js 是否已定義此函式）
   getInfo,
   searchMulti,
   getCachedPath: cache.getCachedPath,
