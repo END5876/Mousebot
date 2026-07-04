@@ -11,6 +11,7 @@ const {
 
 const { _engines, SEARCH_MARKER, activeSearchMessages } = require('./state');
 const { enqueue, ensureConnection, updateControlPanel } = require('./playback');
+const voiceMonitor = require('../voiceActivityMonitor'); // ★ 修改 1：新增 import
 
 // ════════════════════════════════════════════════════════
 //  Fisher-Yates 洗牌
@@ -98,7 +99,8 @@ function cleanUrl(rawUrl) {
       return urlObj.toString();
     }
 
-    if (urlObj.hostname.includes('youtube.com')) {
+    // ★ 修改 2：加入 youtu.be 短網址判斷
+    if (urlObj.hostname.includes('youtube.com') || urlObj.hostname === 'youtu.be') {
       urlObj.searchParams.delete('list');
       urlObj.searchParams.delete('index');
       urlObj.searchParams.delete('start_radio');
@@ -218,7 +220,8 @@ async function _handleOnlineSearch(interaction, keyword, guildId) {
     .map((r, i) => `**${i + 1}.** [${r.platform}] [${r.title}](${r.url})\n　└ ${r.author} · ${r.duration}`)
     .join('\n\n');
 
-  await interaction.editReply({
+  // ★ 修改 3：editReply 直接取回傳值，消除 editReply + fetchReply 的競態
+  const message = await interaction.editReply({
     embeds: [
       new EmbedBuilder()
         .setColor(0x1DB954)
@@ -227,9 +230,8 @@ async function _handleOnlineSearch(interaction, keyword, guildId) {
         .setFooter({ text: '請於 60 秒內從下方選單選擇，或按取消' })
     ],
     components: _buildSearchComponents(results),
-  });
+  }).catch(() => null);
 
-  const message = await interaction.fetchReply().catch(() => null);
   if (!message) return;
 
   activeSearchMessages.add(message.id);
@@ -280,6 +282,9 @@ async function _handleOnlineSearch(interaction, keyword, guildId) {
 // ════════════════════════════════════════════════════════
 async function handlePlay(interaction, input, shuffleOpt = 'no') {
   const guildId = interaction.guildId;
+
+  // ★ 修改 4：使用者主動下 /play，視為頻道仍活躍，重置靜音計時
+  voiceMonitor.touchActivity(guildId);
 
   if (input === '__ALL_LOCAL__') {
     return _handlePlayAll(interaction, shuffleOpt);
@@ -360,6 +365,16 @@ const AC_RESULT_LIMIT      = 5;
 const _acCache    = new Map(); // keyword(lowercase) -> { results, timestamp }
 const _acInFlight = new Map(); // keyword(lowercase) -> Promise
 
+// ★ 修改 5：定期清掃過期快取，避免記憶體無限累積
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of _acCache) {
+    if (now - entry.timestamp >= AC_CACHE_TTL_MS) {
+      _acCache.delete(key);
+    }
+  }
+}, AC_CACHE_TTL_MS);
+
 function _getAcCached(keyword) {
   const hit = _acCache.get(keyword);
   if (hit && Date.now() - hit.timestamp < AC_CACHE_TTL_MS) return hit.results;
@@ -414,7 +429,10 @@ async function handleAutocomplete(interaction) {
           f.filename.toLowerCase().includes(focused)
         )
         .slice(0, 24)
-        .map(f => ({ name: `📁 ${f.name}`, value: f.filename }))
+        .map(f => ({
+          name : `📁 ${f.name}`.slice(0, 100),   // ★ 修正：補上截斷
+          value: f.filename.slice(0, 100),        // ★ 修正：補上截斷
+        }))
     : [];
 
   // 空白輸入：只顯示本地清單，不觸發線上搜尋

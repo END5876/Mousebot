@@ -60,6 +60,9 @@ function setupUnifiedCommands(client) {
       return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
     }
 
+    // ★ 使用者操作控制面板按鈕，視為頻道仍活躍，重置閒置計時器
+    voiceMonitor.touchActivity(guildId);
+
     try {
       switch (interaction.customId) {
         case 'uq_skip': {

@@ -11,6 +11,13 @@ const path = require('path');
 // ════════════════════════════════════════════════════════
 const WARP_PROXY = process.env.WARP_PROXY_URL;
 
+// ★ 修改 1：啟動時明確記錄 proxy 使用狀態
+if (WARP_PROXY) {
+  console.log(`✅ [Proxy] 已設定 WARP_PROXY_URL，YouTube 請求將透過 Proxy 轉發: ${WARP_PROXY}`);
+} else {
+  console.log('ℹ️ [Proxy] 未設定 WARP_PROXY_URL，YouTube 請求將直接使用本地網路連線');
+}
+
 // ════════════════════════════════════════════════════════
 //  Cookies 檔案路徑（僅保留「已存在的外部檔案」路徑，不自動建立）
 // ════════════════════════════════════════════════════════
@@ -183,7 +190,11 @@ function resetYtClient(guildId) {
 
 function buildYouTubeArgs(url, strategy, streamMode = true) {
   const args = [];
-  args.push('--proxy', WARP_PROXY);
+
+  // ★ 修改 2：只有設定了才加入 --proxy，未設定則走本地網路
+  if (WARP_PROXY) {
+    args.push('--proxy', WARP_PROXY);
+  }
   args.push('--js-runtimes', 'node');
 
   if (streamMode) {
@@ -249,13 +260,16 @@ function buildInfoArgs(url) {
   const base = ['--dump-json', '--no-playlist', '--no-warnings', '--skip-download'];
 
   if (isYouTubeUrl(url)) {
-    base.push('--proxy', WARP_PROXY);
+    // ★ 修改 3：只有設定了才加入 --proxy
+    if (WARP_PROXY) {
+      base.push('--proxy', WARP_PROXY);
+    }
     base.push('--js-runtimes', 'node');
-    
+
     // 🎯 修改重點：改為尋找 default 策略
     const strategy = YT_CLIENT_STRATEGIES.find(s => s.name === 'default') || YT_CLIENT_STRATEGIES[0];
     base.push(...strategy.args);
-    
+
     if (strategy.name !== 'tv_simply') {
       _appendCookieArgs(base, YT_COOKIES_FILE, YT_COOKIE_HEADER);
     }
