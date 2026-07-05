@@ -67,7 +67,12 @@ function setupUnifiedCommands(client) {
       switch (interaction.customId) {
         case 'uq_skip': {
           const queue = queues.get(guildId) || [];
-          if (queue.length === 0) {
+          const loopMode = loopSettings.get(guildId) || 'off';
+
+          // 只有「佇列真的空了」且「循環模式關閉」時才整組停止；
+          // 否則交給 player.stop() 觸發 Idle 事件，讓 playback.js 的
+          // 循環邏輯（單曲重播 / 列表循環）接手判斷，避免跳過鍵誤殺循環設定
+          if (queue.length === 0 && loopMode === 'off') {
             stopAll(guildId);
             await interaction.reply({ content: '⏭️ 已跳過，佇列為空，停止播放', flags: MessageFlags.Ephemeral });
           } else {
@@ -195,6 +200,7 @@ function setupUnifiedCommands(client) {
   });
 
   // ── /skip ─────────────────────────────────────────────
+  // ── /skip ─────────────────────────────────────────────
   client.commands.set('skip', {
     data: new SlashCommandBuilder()
       .setName('skip')
@@ -204,7 +210,10 @@ function setupUnifiedCommands(client) {
       if (!np) return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
 
       const queue = queues.get(interaction.guildId) || [];
-      if (queue.length === 0) {
+      const loopMode = loopSettings.get(interaction.guildId) || 'off';
+
+      // 邏輯與 uq_skip 按鈕保持一致：尊重循環模式，不再無條件停止
+      if (queue.length === 0 && loopMode === 'off') {
         stopAll(interaction.guildId);
         return interaction.reply({ content: '⏭️ 已跳過，佇列為空，停止播放' });
       }
@@ -212,6 +221,7 @@ function setupUnifiedCommands(client) {
       await interaction.reply({ content: '⏭️ 跳過當前歌曲' });
     },
   });
+
 
   // ── /loop ─────────────────────────────────────────────
   client.commands.set('loop', {
