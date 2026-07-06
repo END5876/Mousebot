@@ -11,7 +11,6 @@ const path = require('path');
 // ════════════════════════════════════════════════════════
 const WARP_PROXY = process.env.WARP_PROXY_URL;
 
-// ★ 修改 1：啟動時明確記錄 proxy 使用狀態
 if (WARP_PROXY) {
   console.log(`✅ [Proxy] 已設定 WARP_PROXY_URL，YouTube 請求將透過 Proxy 轉發: ${WARP_PROXY}`);
 } else {
@@ -56,7 +55,6 @@ const YOUTUBE_HEADERS = {
 const YT_PO_TOKEN = process.env.YOUTUBE_PO_TOKEN || null;
 
 // ── YouTube player_client 優先順序策略 ───────────────────
-// 🎯 修改重點：將 default 設為第一順位，不指定參數讓 yt-dlp 自動選擇最佳客戶端繞過 DRM
 const YT_CLIENT_STRATEGIES = [
   {
     name    : 'default',
@@ -191,7 +189,6 @@ function resetYtClient(guildId) {
 function buildYouTubeArgs(url, strategy, streamMode = true) {
   const args = [];
 
-  // ★ 修改 2：只有設定了才加入 --proxy，未設定則走本地網路
   if (WARP_PROXY) {
     args.push('--proxy', WARP_PROXY);
   }
@@ -275,17 +272,36 @@ function buildBilibiliSearchArgs() {
   return args;
 }
 
+// ════════════════════════════════════════════════════════
+//  YouTube 搜尋專用參數（僅 headers/proxy/cookies，不含下載旗標）
+// ════════════════════════════════════════════════════════
+function buildYouTubeSearchArgs() {
+  const args = [];
+
+  if (WARP_PROXY) {
+    args.push('--proxy', WARP_PROXY);
+  }
+
+  _appendCookieArgs(args, YT_COOKIES_FILE, YT_COOKIE_HEADER);
+
+  args.push(
+    '--user-agent',   YOUTUBE_HEADERS['User-Agent'],
+    '--add-header',   `Accept-Language:${YOUTUBE_HEADERS['Accept-Language']}`,
+    '--no-check-certificate',
+  );
+
+  return args;
+}
+
 function buildInfoArgs(url) {
   const base = ['--dump-json', '--no-playlist', '--no-warnings', '--skip-download'];
 
   if (isYouTubeUrl(url)) {
-    // ★ 修改 3：只有設定了才加入 --proxy
     if (WARP_PROXY) {
       base.push('--proxy', WARP_PROXY);
     }
     base.push('--js-runtimes', 'node');
 
-    // 🎯 修改重點：改為尋找 default 策略
     const strategy = YT_CLIENT_STRATEGIES.find(s => s.name === 'default') || YT_CLIENT_STRATEGIES[0];
     base.push(...strategy.args);
 
@@ -351,7 +367,8 @@ module.exports = {
   buildYouTubeArgs,
   classifyYouTubeError,
   buildBilibiliArgs,
-  buildBilibiliSearchArgs,   // ★ 新增匯出
+  buildBilibiliSearchArgs,
+  buildYouTubeSearchArgs,   // ★ 新增匯出
   classifyBilibiliError,
   buildInfoArgs,
   getCookieStatus: () => ({

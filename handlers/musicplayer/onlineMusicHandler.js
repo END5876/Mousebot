@@ -27,8 +27,6 @@ const MAX_CONSECUTIVE_ERRORS = 5;
 const MAX_CACHE_DURATION_SEC = 7 * 60; // 420 秒
 
 // ── 搜尋逾時保護 ─────────────────────────────────────────
-// ★ 修改：YouTube 用 flat-playlist 很快，Bilibili 需要逐一完整解析較慢，
-//   兩個平台分開設定逾時，避免共用一個過短的時間卡住 Bilibili
 const SEARCH_TIMEOUT_MS_YT   = 15_000;
 const SEARCH_TIMEOUT_MS_BILI = 25_000;
 
@@ -100,7 +98,6 @@ async function getInfo(url) {
     let data = '', errorData = '';
     let finished = false;
 
-    // 逾時保護
     const timer = setTimeout(() => {
       if (finished) return;
       finished = true;
@@ -153,7 +150,7 @@ async function getInfo(url) {
 // ════════════════════════════════════════════════════════
 //  _searchOnePlatform — 搜尋單一平台（內部工具，不對外匯出）
 // ════════════════════════════════════════════════════════
-function _searchOnePlatform(searchPrefix, keyword, limit) {
+function _searchOnePlatform(searchPrefix, keyword, limit, fast = false) {
   return new Promise((resolve) => {
     const query = `${searchPrefix}${limit}:${keyword}`;
     const isYT  = searchPrefix === 'ytsearch';
@@ -165,10 +162,10 @@ function _searchOnePlatform(searchPrefix, keyword, limit) {
     ];
 
     if (isYT) {
-      // YouTube：flat-playlist 已足夠拿到完整資訊，維持快速模式
       args.push('--flat-playlist');
+      args.push(...antiBot.buildYouTubeSearchArgs()); // ★ 修正：補上防爬蟲參數
     } else {
-      // Bilibili：flat-playlist 只回傳純網址，移除以取得完整 metadata
+      if (fast) args.push('--flat-playlist'); // ★ 修正：僅即時搜尋時降級換速度
       args.push(...antiBot.buildBilibiliSearchArgs());
     }
 
@@ -197,7 +194,11 @@ function _searchOnePlatform(searchPrefix, keyword, limit) {
       clearTimeout(timer);
 
       if (code !== 0 || !data.trim()) {
-        console.warn(`⚠️ [Search] ${searchPrefix} 搜尋失敗 (code=${code}): ${errorData.slice(0, 200)}`);
+        // ★ 修正：改用既有的錯誤分類函式，log 會顯示具體原因，不再被完全吞掉
+        const classified = isYT
+          ? antiBot.classifyYouTubeError(errorData)
+          : antiBot.classifyBilibiliError(errorData);
+        console.warn(`⚠️ [Search] ${searchPrefix} 搜尋失敗 (code=${code}): ${classified.msg}`);
         resolve([]); // 失敗回空陣列，不讓另一平台的搜尋結果被拖累
         return;
       }
@@ -248,16 +249,17 @@ function _searchOnePlatform(searchPrefix, keyword, limit) {
 
 // ════════════════════════════════════════════════════════
 //  searchMulti — 同時搜尋 YouTube + Bilibili
-//  @param {string} keyword  搜尋關鍵字
-//  @param {number} limit    每個平台抓取筆數（預設 5）
-//  @returns {Promise<Array>} YouTube 前 limit 筆 + Bilibili 前 limit 筆
 // ════════════════════════════════════════════════════════
-async function searchMulti(keyword, limit = 5) {
-  // 同時搜尋 YouTube 與 Bilibili，兩平台各取 limit 筆
-  const [ytResults, biliResults] = await Promise.all([
-    _searchOnePlatform('ytsearch',   keyword, limit),
-    _searchOnePlatform('bilisearch', keyword, limit),
-  ]);
+async function searchMulti(keyword, limit = 5, fast = false, platforms = ['youtube', 'bilibili']) {
+  const tasks = [
+    platforms.includes('youtube')
+      ? _searchOnePlatform('ytsearch', keyword, limit, fast)
+      : Promise.resolve([]),
+    platforms.includes('bilibili')
+      ? _searchOnePlatform('bilisearch', keyword, limit, fast)
+      : Promise.resolve([]),
+  ];
+  const [ytResults, biliResults] = await Promise.all(tasks);
   return [...ytResults, ...biliResults];
 }
 
@@ -269,13 +271,9 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
 
   const platform = antiBot.isYouTubeUrl(item.url) ? 'YouTube' : 'Bilibili';
 
-  // 判斷是否要跳過快取下載：
-  // 1. durationSec 不存在或為 0 (通常是直播或未知長度)
-  // 2. durationSec 超過 420 秒
   const tooLongToCache = !item.durationSec || item.durationSec > MAX_CACHE_DURATION_SEC;
 
   try {
-    // ── 1. 永遠先檢查快取 (即使超過 7 分鐘，若以前載過還是直接用) ──
     const cachedPath = cache.getCachedPath(item.url, item.title);
 
     if (cachedPath) {
@@ -284,7 +282,6 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
       return;
     }
 
-    // ── 2. 快取未命中，一律啟動即時串流播放 ──
     if (tooLongToCache) {
       const reason = !item.durationSec ? '未知長度/直播' : `長度超過 7 分鐘`;
       if (!silent) console.log(`⏭️ [${platform}] ${reason}，跳過背景下載，僅串流: ${item.title}`);
@@ -294,7 +291,6 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
 
     _fallbackStream(guildId, item, player, retryCount, silent);
 
-    // ── 3. 背景下載快取（僅限 ≤ 7 分鐘且非直播）──
     if (!tooLongToCache) {
       if (!downloadingUrls.has(item.url)) {
         downloadingUrls.add(item.url);
@@ -479,8 +475,6 @@ async function setupOnlineMusicEngine() {
     console.warn('⚠️ [OnlineMusic] 引擎可能無法正常運作');
   }
 
-  // ── 引擎注入：補上缺漏的 clearErrorCount 與 resetYtClient，
-  //   避免 playback.js 透過 _engines.bilibili 呼叫時永遠是 undefined ──
   registerEngine('bilibili', {
     playStream,
     getInfo,

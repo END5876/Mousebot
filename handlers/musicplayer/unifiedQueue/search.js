@@ -11,7 +11,7 @@ const {
 
 const { _engines, SEARCH_MARKER, activeSearchMessages } = require('./state');
 const { enqueue, ensureConnection, updateControlPanel } = require('./playback');
-const voiceMonitor = require('../voiceActivityMonitor'); // ★ 修改 1：新增 import
+const voiceMonitor = require('../voiceActivityMonitor');
 
 // ════════════════════════════════════════════════════════
 //  Fisher-Yates 洗牌
@@ -99,7 +99,6 @@ function cleanUrl(rawUrl) {
       return urlObj.toString();
     }
 
-    // ★ 修改 2：加入 youtu.be 短網址判斷
     if (urlObj.hostname.includes('youtube.com') || urlObj.hostname === 'youtu.be') {
       urlObj.searchParams.delete('list');
       urlObj.searchParams.delete('index');
@@ -191,6 +190,8 @@ function _buildSearchComponents(results) {
 //  觸發時機：
 //    1. autocomplete 階段來不及即時搜尋完成（逾時／節流跳過）
 //    2. 本地找不到對應檔案
+//  ★ 注意：這裡呼叫 searchMulti(keyword, 5) 未帶 fast/platforms 參數，
+//    因此維持「YouTube + Bilibili 完整解析」的原始行為，不受即時搜尋修改影響
 // ════════════════════════════════════════════════════════
 async function _handleOnlineSearch(interaction, keyword, guildId) {
   const engine = _engines.bilibili;
@@ -220,7 +221,6 @@ async function _handleOnlineSearch(interaction, keyword, guildId) {
     .map((r, i) => `**${i + 1}.** [${r.platform}] [${r.title}](${r.url})\n　└ ${r.author} · ${r.duration}`)
     .join('\n\n');
 
-  // ★ 修改 3：editReply 直接取回傳值，消除 editReply + fetchReply 的競態
   const message = await interaction.editReply({
     embeds: [
       new EmbedBuilder()
@@ -283,7 +283,6 @@ async function _handleOnlineSearch(interaction, keyword, guildId) {
 async function handlePlay(interaction, input, shuffleOpt = 'no') {
   const guildId = interaction.guildId;
 
-  // ★ 修改 4：使用者主動下 /play，視為頻道仍活躍，重置靜音計時
   voiceMonitor.touchActivity(guildId);
 
   if (input === '__ALL_LOCAL__') {
@@ -356,6 +355,11 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
 //       絕不讓 Discord 端等到逾時顯示錯誤。
 //       被丟下的 yt-dlp 進程仍會在背景跑完並補進快取，
 //       供使用者下一次按鍵時直接命中。
+//
+//  ★ 修正（本次）：即時搜尋只查 YouTube，不查 Bilibili。
+//    原因：Bilibili 若用 --flat-playlist 換取速度，metadata 會全部
+//    變成「未知標題 · 未知作者 (未知)」，UX 反而更差；
+//    Bilibili 完整搜尋交給「送出後搜尋」(_handleOnlineSearch) 處理。
 // ════════════════════════════════════════════════════════
 const AC_MIN_KEYWORD_LEN   = 2;
 const AC_SEARCH_TIMEOUT_MS = 2000;
@@ -365,7 +369,6 @@ const AC_RESULT_LIMIT      = 5;
 const _acCache    = new Map(); // keyword(lowercase) -> { results, timestamp }
 const _acInFlight = new Map(); // keyword(lowercase) -> Promise
 
-// ★ 修改 5：定期清掃過期快取，避免記憶體無限累積
 setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of _acCache) {
@@ -386,8 +389,10 @@ function _raceOnlineSearch(engine, keyword) {
 
   let inflight = _acInFlight.get(key);
   if (!inflight) {
-    // searchMulti 已改為同時搜尋 YouTube + Bilibili，各取 AC_RESULT_LIMIT 筆
-    inflight = engine.searchMulti(keyword, AC_RESULT_LIMIT)
+    // ★ 修正：
+    //   第 3 參數 true      = fast 模式（YouTube 走 flat-playlist 加速；此參數對 YouTube 一律套用防爬蟲，對 Bilibili 已排除不影響）
+    //   第 4 參數 ['youtube'] = 只搜尋 YouTube，移除 Bilibili
+    inflight = engine.searchMulti(keyword, AC_RESULT_LIMIT, true, ['youtube'])
       .then(results => {
         _acCache.set(key, { results, timestamp: Date.now() });
         return results;
@@ -431,8 +436,8 @@ async function handleAutocomplete(interaction) {
         )
         .slice(0, 24)
         .map(f => ({
-          name : `📁 ${f.name}`.slice(0, 100),   // ★ 修正：補上截斷
-          value: f.filename.slice(0, 100),        // ★ 修正：補上截斷
+          name : `📁 ${f.name}`.slice(0, 100),
+          value: f.filename.slice(0, 100),
         }))
     : [];
 
@@ -444,6 +449,7 @@ async function handleAutocomplete(interaction) {
   }
 
   // 保底：一定會顯示的「送出後搜尋」選項，即時搜尋失敗/逾時時墊底用
+  // 注意：此選項送出後仍會觸發 _handleOnlineSearch，YouTube + Bilibili 都會搜尋
   const fallbackSearchChoice = {
     name : `🔍 搜尋線上：「${focusedRaw}」（YouTube + Bilibili）`,
     value: (SEARCH_MARKER + focusedRaw).slice(0, 100),
@@ -462,7 +468,7 @@ async function handleAutocomplete(interaction) {
   // 先看快取，命中就直接回傳，零延遲
   const cached = _getAcCached(focused);
   if (cached) {
-    // searchMulti 回傳 YouTube 前 5 筆 + Bilibili 前 5 筆
+    // ★ 修正：cached 內容現在只會有 YouTube 結果
     const onlineChoices = cached.map(r => ({
       name : `${r.platform === 'YouTube' ? '🎬' : '📺'} ${r.title} · ${r.author} (${r.duration})`.slice(0, 100),
       value: r.url.slice(0, 100),
@@ -472,7 +478,7 @@ async function handleAutocomplete(interaction) {
     return true;
   }
 
-  // 沒快取，搶時間即時查詢（YouTube + Bilibili 各前 5 筆）
+  // 沒快取，搶時間即時查詢（★ 修正：現在只查詢 YouTube）
   let onlineResults = null;
   try {
     onlineResults = await _raceOnlineSearch(onlineEngine, focusedRaw.trim());
