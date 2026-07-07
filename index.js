@@ -12,6 +12,9 @@ const { setupTTSCommands }       = require('./handlers/voice/ttsHandler');
 const { setupSteamFreeNotifier } = require('./handlers/notice/steamFreeHandler');
 const { setupEpicFreeNotifier }  = require('./handlers/notice/epicFreeHandler'); 
 
+// ── 導入分帳系統 ────────────────────────
+const { setupSplitbillCommands } = require('./handlers/splitbill/index');
+
 // ── 重構後的音樂模組 ───────────────────────────────────────
 const { setupUnifiedCommands }   = require('./handlers/musicplayer/unifiedQueue');
 const { setupOnlineMusicEngine } = require('./handlers/musicplayer/onlineMusicHandler');
@@ -31,7 +34,7 @@ const client = new Client({
 // ── Slash Command 集合 ─────────────────────────────────────
 client.commands = new Collection();
 
-// ── 註冊非音樂處理器（同步，順序無關）────────────────────
+// ── 註冊各模組處理器（同步，順序無關）────────────────────
 setupVoiceCommands(client);
 setupBasicCommands(client);
 setupCustomResponses(client);
@@ -41,6 +44,9 @@ setupAutoJoinCommands(client);
 setupTTSCommands(client);
 setupSteamFreeNotifier(client);
 setupEpicFreeNotifier(client);
+
+// ── 🆕 注入分帳介面與唯一的 /splitbill 指令 ───────────────
+setupSplitbillCommands(client);
 
 // ── Slash Command 互動處理 ─────────────────────────────────
 client.on('interactionCreate', async interaction => {
