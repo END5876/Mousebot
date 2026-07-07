@@ -26,12 +26,11 @@ RUN pip install --no-cache-dir -r /tmp/oww-requirements.txt
 # ── 安裝額外工具 ─────────────────────────────────────────
 RUN pip install --no-cache-dir edge-tts yt-dlp
 
-# ── 驗證安裝 + 預先下載 OWW 內建資源模型 ────────────────
+# ── 驗證安裝（移除模型下載，避免 build 階段連外網逾時） ──
 RUN python3 -c "import openwakeword; print('OWW OK')" && \
     python3 -c "import flask; print('Flask OK')" && \
     python3 -c "import websockets; print('Websockets OK')" && \
-    ffmpeg -version | head -1 && \
-    python3 -c "from openwakeword.utils import download_models; download_models(); print('OWW models OK')"
+    ffmpeg -version | head -1
 
 # ── 工作目錄 ────────────────────────────────────────────
 WORKDIR /app
@@ -81,5 +80,10 @@ RUN apt-get purge -y make g++ && apt-get autoremove -y && rm -rf /var/lib/apt/li
 # ── 複製專案檔案 ────────────────────────────────────────
 COPY . .
 
+# ── 複製並設定 entrypoint（在容器啟動時下載 OWW 模型） ──
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # ── 啟動 ────────────────────────────────────────────────
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
