@@ -148,6 +148,68 @@ async function getInfo(url) {
 }
 
 // ════════════════════════════════════════════════════════
+//  checkPlaylist（偵測網址是否為播放清單）
+//  失敗 / 逾時皆安全降級為「非播放清單」，絕不阻斷原有單曲流程
+// ════════════════════════════════════════════════════════
+async function checkPlaylist(url) {
+  return new Promise((resolve) => {
+    const args  = antiBot.buildPlaylistCheckArgs(url);
+    const ytdlp = spawn(ytdlpPath, args);
+    let data = '', errorData = '';
+    let finished = false;
+
+    const fallback = () => resolve({ isPlaylist: false, entries: [], title: null, count: 1 });
+
+    const timer = setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      console.warn(`⚠️ [checkPlaylist] 逾時，視為非播放清單: ${url}`);
+      try { ytdlp.kill('SIGKILL'); } catch {}
+      fallback();
+    }, GET_INFO_TIMEOUT_MS);
+
+    ytdlp.stdout.on('data', c => { data      += c.toString(); });
+    ytdlp.stderr.on('data', c => { errorData += c.toString(); });
+
+    ytdlp.on('close', code => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+
+      if (code !== 0 || !data.trim()) {
+        console.warn('⚠️ [checkPlaylist] 偵測失敗，視為非播放清單:', errorData.slice(-150));
+        return fallback();
+      }
+
+      try {
+        const json    = JSON.parse(data);
+        const entries = Array.isArray(json.entries) ? json.entries : null;
+
+        if (entries && entries.length > 1) {
+          resolve({
+            isPlaylist : true,
+            entries,
+            title      : json.title || '未知播放清單',
+            count      : entries.length,
+          });
+        } else {
+          fallback();
+        }
+      } catch {
+        fallback();
+      }
+    });
+
+    ytdlp.on('error', () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      fallback();
+    });
+  });
+}
+
+// ════════════════════════════════════════════════════════
 //  _searchOnePlatform — 搜尋單一平台（內部工具，不對外匯出）
 // ════════════════════════════════════════════════════════
 function _searchOnePlatform(searchPrefix, keyword, limit, fast = false) {
@@ -478,6 +540,7 @@ async function setupOnlineMusicEngine() {
   registerEngine('bilibili', {
     playStream,
     getInfo,
+    checkPlaylist, 
     searchMulti,
     clearErrorCount,
     resetYtClient: antiBot.resetYtClient,
@@ -510,6 +573,7 @@ module.exports = {
   clearErrorCount,
   resetYtClient: antiBot.resetYtClient,
   getInfo,
+  checkPlaylist,
   searchMulti,
   getCachedPath: cache.getCachedPath,
   downloadAndCache: (url, title, onProgress) => {

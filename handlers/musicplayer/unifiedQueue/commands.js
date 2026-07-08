@@ -35,9 +35,13 @@ function setupUnifiedCommands(client) {
     // 給予明確提示而非讓 Discord 顯示「互動失敗」。
     // 正常情況下，合法時間內的搜尋互動已被 awaitMessageComponent
     // 的 filter 攔截消耗掉，這裡只會接到「逾時後才點擊」的殭屍互動。
-    if ((interaction.isButton() && interaction.customId.startsWith('srch_')) ||
-        (interaction.isStringSelectMenu() && interaction.customId === 'srch_pick')) {
-      // 若此訊息目前正被 _handleOnlineSearch() 的 awaitMessageComponent()
+    
+    const ZOMBIE_BUTTON_PREFIXES = ['srch_', 'pl_', 'lm_'];
+    const ZOMBIE_SELECT_IDS      = ['srch_pick', 'lm_pick'];
+
+    if ((interaction.isButton() && ZOMBIE_BUTTON_PREFIXES.some(p => interaction.customId.startsWith(p))) ||
+        (interaction.isStringSelectMenu() && ZOMBIE_SELECT_IDS.includes(interaction.customId))) {
+      // 若此訊息目前正被 _handleOnlineSearch() 等的 awaitMessageComponent()
       // 合法等待中，就不要搶先 reply()！否則會跟它內部真正要處理選擇結果的
       // selection.update() 搶著 ACK 同一個 interaction，導致對方拿到
       // DiscordAPIError[10062] Unknown interaction。交給那邊的 collector 處理即可。
@@ -45,7 +49,7 @@ function setupUnifiedCommands(client) {
         return;
       }
       return interaction.reply({
-        content: '⌛ 此搜尋已逾時或已被處理，請重新使用 /play',
+        content: '⌛ 此選單/按鈕已逾時或已被處理，請重新使用 /play',
         flags: MessageFlags.Ephemeral,
       }).catch(() => {});
     }
@@ -55,7 +59,6 @@ function setupUnifiedCommands(client) {
 
     const guildId = interaction.guildId;
     const np = nowPlaying.get(guildId);
-
     if (!np) {
       return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
     }

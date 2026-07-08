@@ -328,6 +328,39 @@ function buildInfoArgs(url) {
   return base;
 }
 
+// ════════════════════════════════════════════════════════
+//  播放清單偵測專用參數（不加 --no-playlist，flat 模式快速列出項目）
+// ════════════════════════════════════════════════════════
+function buildPlaylistCheckArgs(url) {
+  const base = ['--flat-playlist', '--dump-single-json', '--no-warnings', '--skip-download'];
+
+  if (isYouTubeUrl(url)) {
+    if (WARP_PROXY) base.push('--proxy', WARP_PROXY);
+    base.push('--js-runtimes', 'node');
+
+    const strategy = YT_CLIENT_STRATEGIES.find(s => s.name === 'default') || YT_CLIENT_STRATEGIES[0];
+    base.push(...strategy.args);
+
+    if (strategy.name !== 'tv_simply') {
+      _appendCookieArgs(base, YT_COOKIES_FILE, YT_COOKIE_HEADER);
+    }
+    base.push('--user-agent', YOUTUBE_HEADERS['User-Agent'], '--no-check-certificate');
+  } else {
+    _appendCookieArgs(base, BILIBILI_COOKIES_FILE, BILIBILI_COOKIE_HEADER);
+    base.push(
+      '--user-agent', BILIBILI_HEADERS['User-Agent'],
+      '--referer',    BILIBILI_HEADERS['Referer'],
+      '--add-header', `Origin:${BILIBILI_HEADERS['Origin']}`,
+      '--no-check-certificate',
+      '--extractor-args', 'bilibili:getcomments=false',
+      '--extractor-args', 'bilibili:getdanmaku=false'
+    );
+  }
+
+  base.push(url);
+  return base;
+}
+
 function classifyYouTubeError(errorOutput) {
   if (errorOutput.includes('Sign in to confirm') || errorOutput.includes('not a bot')) {
     return { type: 'BOT_DETECTED',   rotate: true,  msg: 'YouTube 偵測到機器人請求，嘗試切換 client' };
@@ -368,7 +401,8 @@ module.exports = {
   classifyYouTubeError,
   buildBilibiliArgs,
   buildBilibiliSearchArgs,
-  buildYouTubeSearchArgs,   // ★ 新增匯出
+  buildYouTubeSearchArgs,
+  buildPlaylistCheckArgs,
   classifyBilibiliError,
   buildInfoArgs,
   getCookieStatus: () => ({
