@@ -56,6 +56,117 @@ function getBotMessageContext(messageId) {
 }
 
 // ════════════════════════════════════════════════════════
+//  Discord CDN 圖片網址修復機制 (新增)
+//  策略：① 優先重新 Fetch 訊息（免額外認證，成本低）
+//        ② 失敗才 Fallback 呼叫官方 refresh-urls API
+// ════════════════════════════════════════════════════════
+const ATTACHMENT_PATH_PATTERN = /cdn\.discordapp\.com\/attachments\/(\d+)\/(\d+)\/([^\s?<>"']+)/i;
+
+/**
+ * 策略一：重新 Fetch 該訊息，從 message.attachments / embeds 取得新鮮網址
+ * 原理：channel_id / message_id 寫在路徑上，不受簽名過期影響，
+ *       重新 fetch 訊息時 discord.js 回傳的網址保證是當下有效的。
+ */
+async function fetchFreshUrlFromMessage(url, client) {
+    if (!client) return null;
+    const match = url.match(ATTACHMENT_PATH_PATTERN);
+    if (!match) return null;
+
+    const [, channelId, messageId, filename] = match;
+
+    try {
+        const channel = await client.channels.fetch(channelId);
+        if (!channel?.messages) return null;
+
+        const message = await channel.messages.fetch(messageId);
+        if (!message) return null;
+
+        const attachment = message.attachments.find(
+            a => a.name === filename || a.url.includes(filename)
+        );
+        if (attachment) return attachment.proxyURL ?? attachment.url;
+
+        // 附件被撤下但仍留有 Embed 縮圖時，退一步找 Embed
+        for (const embed of message.embeds) {
+            if (embed.image?.url?.includes(filename)) return embed.image.proxyURL ?? embed.image.url;
+            if (embed.thumbnail?.url?.includes(filename)) return embed.thumbnail.proxyURL ?? embed.thumbnail.url;
+        }
+
+        return null;
+    } catch (err) {
+        // 常見原因：頻道已刪除 / Bot 無權限 / 訊息已被刪除
+        console.warn(`[resolveDiscordImageUrl] Fetch 訊息失敗 (msg:${messageId}):`, err.message);
+        return null;
+    }
+}
+
+/**
+ * 策略二（Fallback）：呼叫官方 refresh-urls API
+ * 已知限制：
+ *   1. 必須帶有效的 User-Agent，否則請求可能被拒
+ *   2. ephemeral-attachments 路徑無效（本函式的正規表達式已排除此路徑）
+ *   3. 呼叫前必須先移除舊的 ?ex=&is=&hm= 參數
+ * 需求：process.env.DISCORD_TOKEN 必須是目前登入的 Bot Token
+ *       （若你的專案用不同變數名稱儲存 Token，請自行修改此處）
+ */
+async function refreshUrlViaAPI(url) {
+    if (!process.env.DISCORD_TOKEN) {
+        console.warn('[refreshUrlViaAPI] 未設定 DISCORD_TOKEN，無法呼叫官方 API');
+        return null;
+    }
+
+    const cleanUrl = url.split('?')[0]; // 移除舊簽名參數，只留路徑本體
+
+    try {
+        const res = await fetch('https://discord.com/api/v10/attachments/refresh-urls', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bot ${process.env.DISCORD_TOKEN}`,
+                'Content-Type': 'application/json',
+                'User-Agent': 'DiscordBot (https://github.com/discordjs/discord.js, 14.x)',
+            },
+            body: JSON.stringify({ attachment_urls: [cleanUrl] }),
+        });
+
+        if (!res.ok) {
+            console.warn(`[refreshUrlViaAPI] API 回應失敗: HTTP ${res.status}`);
+            return null;
+        }
+
+        const data = await res.json();
+        const refreshed = data?.refreshed_urls?.[0]?.refreshed;
+        return refreshed || null;
+    } catch (err) {
+        console.warn('[refreshUrlViaAPI] 呼叫失敗:', err.message);
+        return null;
+    }
+}
+
+/**
+ * 主函式：綜合兩種策略，回傳一個「盡最大努力保證可用」的新鮮網址
+ * @param {string} url - 原始（缺簽名）的 Discord 圖片網址
+ * @param {import('discord.js').Client} client - discord.js Client 實例
+ * @returns {Promise<string|null>} 成功回傳新鮮網址，全部失敗回傳 null
+ */
+async function resolveDiscordImageUrl(url, client) {
+    const freshFromMessage = await fetchFreshUrlFromMessage(url, client);
+    if (freshFromMessage) {
+        console.log('[resolveDiscordImageUrl] ✅ 透過重新 Fetch 訊息取得新鮮網址');
+        return freshFromMessage;
+    }
+
+    console.log('[resolveDiscordImageUrl] ⚠️ Fetch 訊息失敗，改用 refresh-urls API 嘗試補救');
+    const freshFromAPI = await refreshUrlViaAPI(url);
+    if (freshFromAPI) {
+        console.log('[resolveDiscordImageUrl] ✅ 透過 refresh-urls API 取得新鮮網址');
+        return freshFromAPI;
+    }
+
+    console.warn('[resolveDiscordImageUrl] ❌ 兩種策略皆失敗，該圖片確實無法存取');
+    return null;
+}
+
+// ════════════════════════════════════════════════════════
 //  圖片處理 (支援網址解析與靜態圖/GIF 壓縮邏輯)
 // ════════════════════════════════════════════════════════
 async function fetchImageUrlAsBase64(url) {
@@ -160,7 +271,14 @@ async function processEmbeds(embeds) {
     return imageParts;
 }
 
-async function processImageUrls(content) {
+/**
+ * @param {string} content - 訊息文字內容
+ * @param {import('discord.js').Client} [client] - (選填) discord.js Client 實例
+ *        若有傳入，遇到缺簽名的 Discord 網址時會先嘗試自動修復，
+ *        修復成功則正常回傳圖片資料；修復失敗才回傳 missing_signature。
+ *        若不傳入 client，行為與修改前完全一致（向後相容）。
+ */
+async function processImageUrls(content, client) {
     if (!content) return [];
 
     const urlRegex = /(https?:\/\/[^\s)\]>]+)/g;
@@ -179,8 +297,20 @@ async function processImageUrls(content) {
             || isDiscordCDN;
 
         if (isLikelyImage) {
-            // 如果是 Discord CDN 且沒有簽名，標記為 missing_signature 交給外部處理
+            // 缺簽名的 Discord CDN 網址：先嘗試修復，別急著判死刑
             if (isDiscordCDN && !hasSignature) {
+                const freshUrl = await resolveDiscordImageUrl(url, client);
+
+                if (freshUrl) {
+                    // ✅ 修復成功，當作正常圖片繼續處理
+                    const imgData = await fetchImageUrlAsBase64(freshUrl);
+                    if (imgData) {
+                        imageParts.push({ type: 'image', mimeType: imgData.mimeType, data: imgData.base64 });
+                        continue;
+                    }
+                }
+
+                // 兩種策略皆失敗（或未傳入 client），才真的標記為缺簽名交給外部處理
                 imageParts.push({ type: 'missing_signature', url });
                 continue;
             }
@@ -376,6 +506,7 @@ module.exports = {
     processImageUrls,
     processEmbeds,       
     hasMissingSignature, 
+    resolveDiscordImageUrl, 
     withTyping, speakWithTTS, splitMessage,
-    replaceMentions, // ✅ 匯出新函式
+    replaceMentions,
 };

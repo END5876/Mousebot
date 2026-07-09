@@ -25,7 +25,7 @@ const {
     processEmbeds,
     hasMissingSignature,
     withTyping, speakWithTTS, splitMessage,
-    replaceMentions, 
+    replaceMentions,
 } = require('./aiUtils');
 
 const {
@@ -40,254 +40,285 @@ const {
 const SETMODE_ALLOWED_USER_ID = '598054316510806017';
 
 // ════════════════════════════════════════════════════════
-//  Slash Command 定義
+//  各 Subcommand 的實際邏輯（從原本 6 個獨立指令搬過來）
+// ════════════════════════════════════════════════════════
+
+// ── /ai ask ──
+async function handleAsk(interaction) {
+    if (!process.env.GEMINI_API_KEY) {
+        console.error('❌ 未設定 API Key');
+        await interaction.deferReply();
+        return interaction.deleteReply().catch(() => {});
+    }
+
+    const userId     = interaction.user.id;
+    const userName   = interaction.user.username;
+    const guildId    = interaction.guildId;
+    const botId      = interaction.client.user.id;
+    const attachment = interaction.options.getAttachment('image');
+    const mode       = getUserMode(userId, interaction.options.getString('question'));
+
+    await interaction.deferReply();
+
+    try {
+        const rawQuestion = interaction.options.getString('question');
+        const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
+
+        // ✅ 補上 interaction.client，讓 processImageUrls 內部可嘗試修復缺簽名網址
+        const urlImagePartsRaw = await processImageUrls(question, interaction.client);
+        const urlImageParts = urlImagePartsRaw.map(part => {
+            if (part.type === 'missing_signature') {
+                return {
+                    type: 'text',
+                    text: '[系統提示：使用者傳送的 Discord 圖片網址缺少了安全簽名參數(?ex=...&is=...)，導致權限不足無法讀取。請直接吐槽使用者複製連結時把後面的參數弄丟了，叫他重新上傳圖片或給完整的連結。]'
+                };
+            }
+            return part;
+        });
+
+        let attachmentParts = [];
+        if (attachment)
+            attachmentParts = await processAttachments(new Map([[attachment.id, attachment]]));
+
+        const imageParts = [...emojiParts, ...urlImageParts, ...attachmentParts];
+
+        const answer = await getGeminiResponse(userId, question, imageParts, interaction.channel, interaction.id, botId, null, mode);
+        const chunks = splitMessage(answer);
+
+        const replyMsg = await interaction.editReply({ content: chunks[0] });
+        recordBotMessageContext(replyMsg.id, mode, userId, userName);
+
+        for (let i = 1; i < chunks.length; i++) {
+            const followUpMsg = await interaction.followUp({ content: chunks[i], fetchReply: true });
+            recordBotMessageContext(followUpMsg.id, mode, userId, userName);
+        }
+
+        await speakWithTTS(interaction, answer, guildId);
+    } catch (error) {
+        console.error('/ai ask error:', error.message);
+        await interaction.deleteReply().catch(() => {});
+    }
+}
+
+// ── /ai clear ──
+async function handleClear(interaction) {
+    const userId = interaction.user.id;
+    const mode = selectMode(userId, '');
+    clearUserMemory(userId);
+    await interaction.reply({ content: MODE_MAP[mode].getClearMemoryMessage() });
+}
+
+// ── /ai tts ──
+async function handleTts(interaction) {
+    const guildId = interaction.guildId;
+    if (!guildId)
+        return interaction.reply({ content: '❌ 此指令只能在伺服器中使用', flags: MessageFlags.Ephemeral });
+
+    const current = isAITTSEnabled(guildId);
+    setAITTSEnabled(guildId, !current);
+    const status = !current ? '🔊 已開啟' : '🔇 已關閉';
+    await interaction.reply({ content: `${status} AI 回覆朗讀功能` });
+}
+
+// ── /ai mode ──
+// 注意：原本靠 setDMPermission(false) 擋 DM，現在改成手動檢查 guildId
+async function handleMode(interaction) {
+    if (!interaction.guildId) {
+        return interaction.reply({
+            content: '❌ 此指令只能在伺服器中使用',
+            flags: MessageFlags.Ephemeral,
+        });
+    }
+
+    if (interaction.user.id !== SETMODE_ALLOWED_USER_ID) {
+        return interaction.reply({
+            content: '❌ 你沒有權限使用此指令。',
+            flags: MessageFlags.Ephemeral,
+        });
+    }
+
+    const targetUser = interaction.options.getUser('target') ?? interaction.user;
+    const selected   = interaction.options.getString('mode')?.trim().toLowerCase() ?? null;
+    const targetId   = targetUser.id;
+
+    if (!selected) {
+        setUserMode(targetId, null);
+        const defaultMode = selectMode(targetId, '');
+        return interaction.reply({
+            content: `🔄 已重置 **${targetUser.username}** 的模式為預設：**${getModeName(defaultMode)}**`,
+            flags: MessageFlags.Ephemeral,
+        });
+    }
+
+    const matched = AVAILABLE_MODES.find(m => m.toLowerCase() === selected);
+    if (!matched) {
+        return interaction.reply({
+            content: `❌ 無效的模式名稱：\`${selected}\``,
+            flags: MessageFlags.Ephemeral,
+        });
+    }
+
+    setUserMode(targetId, matched);
+    return interaction.reply({
+        content: `✅ 已將 **${targetUser.username}** 的 AI 模式設為：**${getModeName(matched)}**`,
+        flags: MessageFlags.Ephemeral,
+    });
+}
+
+// ── /ai chance set ──
+async function handleChanceSet(interaction) {
+    const guildId = interaction.guildId;
+    const raw = interaction.options.getNumber('percent');
+
+    if (raw === null) {
+        const defaultChance = resetReplyChance(guildId);
+        return interaction.reply({
+            content: `🔄 已重置本伺服器的隨機回覆機率為預設值：**${(defaultChance * 100).toFixed(1)}%**`,
+            flags: MessageFlags.Ephemeral,
+        });
+    }
+
+    const chance = raw / 100;
+    const result = setReplyChance(guildId, chance);
+
+    if (!result.success) {
+        return interaction.reply({
+            content: `❌ 設定失敗：${result.error}`,
+            flags: MessageFlags.Ephemeral,
+        });
+    }
+
+    const display = (result.chance * 100).toFixed(1);
+
+    let hint = '';
+    if (result.chance === 0)      hint = '\n> ⚠️ 機率為 0%，AI 將不會主動隨機回覆。';
+    else if (result.chance === 1) hint = '\n> ⚠️ 機率為 100%，AI 將對每則訊息都隨機回覆。';
+    else if (result.chance > 0.5) hint = '\n> ⚠️ 機率偏高，AI 可能會非常頻繁地回覆。';
+
+    return interaction.reply({
+        content: `✅ 已將本伺服器的 AI 隨機回覆機率設為 **${display}%**${hint}`,
+        flags: MessageFlags.Ephemeral,
+    });
+}
+
+// ── /ai chance toggle ──
+async function handleChanceToggle(interaction) {
+    const channelId = interaction.channelId;
+    const { disabled } = toggleChannel(channelId);
+    const channelMention = `<#${channelId}>`;
+
+    return interaction.reply({
+        content: disabled
+            ? `🔕 已關閉 ${channelMention} 的 AI 隨機回覆（@ 提及仍有效）`
+            : `🔔 已開啟 ${channelMention} 的 AI 隨機回覆`,
+        flags: MessageFlags.Ephemeral,
+    });
+}
+
+// ════════════════════════════════════════════════════════
+//  合併後的單一 /ai 指令
 // ════════════════════════════════════════════════════════
 const slashCommands = [
-
-    // ── /ai ──
     {
         data: new SlashCommandBuilder()
             .setName('ai')
-            .setDescription('詢問 AI 問題')
-            .addStringOption(opt =>
-                opt.setName('question').setDescription('你想問的問題').setRequired(true)
+            .setDescription('AI 相關指令')
+
+            // /ai ask <question> [image]
+            .addSubcommand(sub =>
+                sub.setName('ask')
+                    .setDescription('詢問 AI 問題')
+                    .addStringOption(opt =>
+                        opt.setName('question').setDescription('你想問的問題').setRequired(true)
+                    )
+                    .addAttachmentOption(opt =>
+                        opt.setName('image').setDescription('附上圖片（選填）').setRequired(false)
+                    )
             )
-            .addAttachmentOption(opt =>
-                opt.setName('image').setDescription('附上圖片（選填）').setRequired(false)
+
+            // /ai clear
+            .addSubcommand(sub =>
+                sub.setName('clear').setDescription('清除你與 AI 的對話記憶')
+            )
+
+            // /ai tts
+            .addSubcommand(sub =>
+                sub.setName('tts').setDescription('切換 AI 回覆是否自動朗讀（語音頻道）')
+            )
+
+            // /ai mode <target?> <mode?>
+            .addSubcommand(sub =>
+                sub.setName('mode')
+                    .setDescription('設定指定使用者的 AI 人格模式')
+                    .addUserOption(opt =>
+                        opt.setName('target')
+                            .setDescription('要設定的使用者（不填則設定自己）')
+                            .setRequired(false)
+                    )
+                    .addStringOption(opt =>
+                        opt.setName('mode')
+                            .setDescription('模式名稱（不填則重置為預設）')
+                            .setRequired(false)
+                    )
+            )
+
+            // /ai chance set|toggle
+            .addSubcommandGroup(group =>
+                group.setName('chance')
+                    .setDescription('AI 隨機回覆機率相關設定')
+                    .addSubcommand(sub =>
+                        sub.setName('set')
+                            .setDescription('設定本伺服器的 AI 隨機回覆機率')
+                            .addNumberOption(opt =>
+                                opt.setName('percent')
+                                    .setDescription(`機率 0~100（%），不填則重置為預設值 ${(DEFAULT_CHANCE * 100).toFixed(0)}%`)
+                                    .setMinValue(0)
+                                    .setMaxValue(100)
+                                    .setRequired(false)
+                            )
+                    )
+                    .addSubcommand(sub =>
+                        sub.setName('toggle')
+                            .setDescription('切換本頻道的 AI 隨機回覆開關（不影響其他頻道）')
+                    )
             ),
 
         async execute(interaction) {
-            if (!process.env.GEMINI_API_KEY) {
-                console.error('❌ 未設定 API Key');
-                await interaction.deferReply();
-                return interaction.deleteReply().catch(() => {});
-            }
+            const group = interaction.options.getSubcommandGroup(false);
+            const sub   = interaction.options.getSubcommand();
 
-            const userId     = interaction.user.id;
-            const userName   = interaction.user.username;
-            const guildId    = interaction.guildId;
-            const botId      = interaction.client.user.id;
-            const attachment = interaction.options.getAttachment('image');
-            const mode       = getUserMode(userId, interaction.options.getString('question'));
-
-            await interaction.deferReply();
-
-            try {
-                const rawQuestion = interaction.options.getString('question');
-                const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
-
-                const urlImagePartsRaw = await processImageUrls(question);
-                const urlImageParts = urlImagePartsRaw.map(part => {
-                    if (part.type === 'missing_signature') {
-                        return {
-                            type: 'text',
-                            text: '[系統提示：使用者傳送的 Discord 圖片網址缺少了安全簽名參數(?ex=...&is=...)，導致權限不足無法讀取。請直接吐槽使用者複製連結時把後面的參數弄丟了，叫他重新上傳圖片或給完整的連結。]'
-                        };
-                    }
-                    return part;
-                });
-
-                let attachmentParts = [];
-                if (attachment)
-                    attachmentParts = await processAttachments(new Map([[attachment.id, attachment]]));
-
-                const imageParts = [...emojiParts, ...urlImageParts, ...attachmentParts];
-
-                const answer = await getGeminiResponse(userId, question, imageParts, interaction.channel, interaction.id, botId, null, mode);
-                const chunks = splitMessage(answer);
-
-                const replyMsg = await interaction.editReply({ content: chunks[0] });
-                recordBotMessageContext(replyMsg.id, mode, userId, userName);
-
-                for (let i = 1; i < chunks.length; i++) {
-                    const followUpMsg = await interaction.followUp({ content: chunks[i], fetchReply: true });
-                    recordBotMessageContext(followUpMsg.id, mode, userId, userName);
+            // ── chance set / chance toggle：手動補回 Administrator + Guild-only 限制 ──
+            if (group === 'chance') {
+                if (!interaction.guildId) {
+                    return interaction.reply({
+                        content: '❌ 此指令只能在伺服器中使用',
+                        flags: MessageFlags.Ephemeral,
+                    });
+                }
+                if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+                    return interaction.reply({
+                        content: '❌ 你沒有權限使用此指令。',
+                        flags: MessageFlags.Ephemeral,
+                    });
                 }
 
-                await speakWithTTS(interaction, answer, guildId);
-            } catch (error) {
-                console.error('Slash command /ai error:', error.message);
-                await interaction.deleteReply().catch(() => {});
+                if (sub === 'set')    return handleChanceSet(interaction);
+                if (sub === 'toggle') return handleChanceToggle(interaction);
+            }
+
+            switch (sub) {
+                case 'ask':   return handleAsk(interaction);
+                case 'clear': return handleClear(interaction);
+                case 'tts':   return handleTts(interaction);
+                case 'mode':  return handleMode(interaction);
+                default:
+                    return interaction.reply({
+                        content: '❌ 未知的子指令。',
+                        flags: MessageFlags.Ephemeral,
+                    });
             }
         }
     },
-
-    // ── /clearai ──
-    {
-        data: new SlashCommandBuilder()
-            .setName('clearai')
-            .setDescription('清除你與 AI 的對話記憶'),
-
-        async execute(interaction) {
-            const userId = interaction.user.id;
-            const mode = selectMode(userId, '');
-            clearUserMemory(userId);
-            await interaction.reply({ content: MODE_MAP[mode].getClearMemoryMessage() });
-        }
-    },
-
-    // ── /aitts ──
-    {
-        data: new SlashCommandBuilder()
-            .setName('aitts')
-            .setDescription('切換 AI 回覆是否自動朗讀（語音頻道）'),
-
-        async execute(interaction) {
-            const guildId = interaction.guildId;
-            if (!guildId)
-                return interaction.reply({ content: '❌ 此指令只能在伺服器中使用', flags: MessageFlags.Ephemeral });
-
-            const current = isAITTSEnabled(guildId);
-            setAITTSEnabled(guildId, !current);
-            const status = !current ? '🔊 已開啟' : '🔇 已關閉';
-            await interaction.reply({ content: `${status} AI 回覆朗讀功能` });
-        }
-    },
-
-    // ── /setmode ──
-    {
-        data: new SlashCommandBuilder()
-            .setName('setmode')
-            .setDescription('設定指定使用者的 AI 人格模式')
-            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-            .setDMPermission(false)
-            .addUserOption(opt =>
-                opt.setName('target')
-                    .setDescription('要設定的使用者（不填則設定自己）')
-                    .setRequired(false)
-            )
-            .addStringOption(opt =>
-                opt.setName('mode')
-                    .setDescription('模式名稱（不填則重置為預設）')
-                    .setRequired(false)
-            ),
-
-        async execute(interaction) {
-            if (interaction.user.id !== SETMODE_ALLOWED_USER_ID) {
-                return interaction.reply({
-                    content: '❌ 你沒有權限使用此指令。',
-                    flags: MessageFlags.Ephemeral,
-                });
-            }
-
-            const targetUser = interaction.options.getUser('target') ?? interaction.user;
-            const selected   = interaction.options.getString('mode')?.trim().toLowerCase() ?? null;
-            const targetId   = targetUser.id;
-
-            if (!selected) {
-                setUserMode(targetId, null);
-                const defaultMode = selectMode(targetId, '');
-                return interaction.reply({
-                    content: `🔄 已重置 **${targetUser.username}** 的模式為預設：**${getModeName(defaultMode)}**`,
-                    flags: MessageFlags.Ephemeral,
-                });
-            }
-
-            const matched = AVAILABLE_MODES.find(m => m.toLowerCase() === selected);
-            if (!matched) {
-                return interaction.reply({
-                    content: `❌ 無效的模式名稱：\`${selected}\``,
-                    flags: MessageFlags.Ephemeral,
-                });
-            }
-
-            setUserMode(targetId, matched);
-            return interaction.reply({
-                content: `✅ 已將 **${targetUser.username}** 的 AI 模式設為：**${getModeName(matched)}**`,
-                flags: MessageFlags.Ephemeral,
-            });
-        }
-    },
-
-    // ── /setchance ──
-    {
-        data: new SlashCommandBuilder()
-            .setName('setchance')
-            .setDescription('設定本伺服器的 AI 隨機回覆機率')
-            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-            .setDMPermission(false)
-            .addNumberOption(opt =>
-                opt.setName('chance')
-                    .setDescription(`機率 0~100（%），不填則重置為預設值 ${(DEFAULT_CHANCE * 100).toFixed(0)}%`)
-                    .setMinValue(0)
-                    .setMaxValue(100)
-                    .setRequired(false)
-            ),
-
-        async execute(interaction) {
-            const guildId = interaction.guildId;
-            if (!guildId) {
-                return interaction.reply({
-                    content: '❌ 此指令只能在伺服器中使用',
-                    flags: MessageFlags.Ephemeral,
-                });
-            }
-
-            const raw = interaction.options.getNumber('chance');
-
-            if (raw === null) {
-                const defaultChance = resetReplyChance(guildId);
-                return interaction.reply({
-                    content: `🔄 已重置本伺服器的隨機回覆機率為預設值：**${(defaultChance * 100).toFixed(1)}%**`,
-                    flags: MessageFlags.Ephemeral,
-                });
-            }
-
-            const chance = raw / 100;
-            const result = setReplyChance(guildId, chance);
-
-            if (!result.success) {
-                return interaction.reply({
-                    content: `❌ 設定失敗：${result.error}`,
-                    flags: MessageFlags.Ephemeral,
-                });
-            }
-
-            const display = (result.chance * 100).toFixed(1);
-
-            let hint = '';
-            if (result.chance === 0)      hint = '\n> ⚠️ 機率為 0%，AI 將不會主動隨機回覆。';
-            else if (result.chance === 1) hint = '\n> ⚠️ 機率為 100%，AI 將對每則訊息都隨機回覆。';
-            else if (result.chance > 0.5) hint = '\n> ⚠️ 機率偏高，AI 可能會非常頻繁地回覆。';
-
-            return interaction.reply({
-                content: `✅ 已將本伺服器的 AI 隨機回覆機率設為 **${display}%**${hint}`,
-                flags: MessageFlags.Ephemeral,
-            });
-        }
-    },
-
-    // ── /togglechance ──
-    {
-        data: new SlashCommandBuilder()
-            .setName('togglechance')
-            .setDescription('切換本頻道的 AI 隨機回覆開關（不影響其他頻道）')
-            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-            .setDMPermission(false),
-
-        async execute(interaction) {
-            const guildId   = interaction.guildId;
-            const channelId = interaction.channelId;
-
-            if (!guildId) {
-                return interaction.reply({
-                    content: '❌ 此指令只能在伺服器中使用',
-                    flags: MessageFlags.Ephemeral,
-                });
-            }
-
-            const { disabled } = toggleChannel(channelId);
-            const channelMention = `<#${channelId}>`;
-
-            return interaction.reply({
-                content: disabled
-                    ? `🔕 已關閉 ${channelMention} 的 AI 隨機回覆（@ 提及仍有效）`
-                    : `🔔 已開啟 ${channelMention} 的 AI 隨機回覆`,
-                flags: MessageFlags.Ephemeral,
-            });
-        }
-    },
-
 ];
 
 // ════════════════════════════════════════════════════════
@@ -328,7 +359,6 @@ function setupAICommands(client) {
 
         // ── @ 提及（頻道停用不影響此區塊）──
         if (isMentioned) {
-            // 將提及轉換為名字，並濾掉機器人自己
             const rawQuestion = replaceMentions(message, botId);
 
             if (!rawQuestion && !hasAttachment && !hasLikelyImageLink) {
@@ -359,7 +389,8 @@ function setupAICommands(client) {
                 const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
 
                 const embedParts = await processEmbeds(message.embeds);
-                const urlImagePartsRaw = await processImageUrls(question);
+                // ✅ 補上 client，讓 processImageUrls 內部可嘗試修復缺簽名網址
+                const urlImagePartsRaw = await processImageUrls(question, client);
 
                 const urlImageParts = [];
                 for (const part of urlImagePartsRaw) {
@@ -400,7 +431,7 @@ function setupAICommands(client) {
 
             if (hasReference) {
                 let isReplyingToOther = false;
-                
+
                 if (message.mentions.repliedUser) {
                     isReplyingToOther = message.mentions.repliedUser.id !== botId;
                 } else {
@@ -411,19 +442,13 @@ function setupAICommands(client) {
                 }
 
                 if (isReplyingToOther) {
-                    return; 
+                    return;
                 }
             }
 
             if (isChannelDisabled(channelId)) return;
 
-            //  將提及轉換為名字
             const rawCleaned = replaceMentions(message, botId);
-
-            if (hasMissingSignature(rawCleaned)) {
-                console.log(`[Random Reply] 偵測到缺少簽名的 Discord 網址，已過濾隨機回覆。`);
-                return;
-            }
 
             if (!rawCleaned && !hasAttachment) return;
 
@@ -437,7 +462,18 @@ function setupAICommands(client) {
             if (Math.random() < chance) {
                 try {
                     const { cleanedText: cleanedContent, emojiParts } = await processCustomEmojis(rawCleaned);
-                    const urlImageParts = await processImageUrls(cleanedContent);
+                    // ✅ 補上 client，讓 processImageUrls 內部可嘗試修復缺簽名網址
+                    const urlImageParts = await processImageUrls(cleanedContent, client);
+
+                    // ⚠️ 修復失敗（兩層策略都無法取得圖片）時，保守放棄本次隨機回覆
+                    // 原因：隨機回覆屬於「被動觸發」，讓 AI 主動吐槽使用者連結壞掉
+                    //       在這個情境下會顯得突兀，故選擇安靜跳過，而不是像
+                    //       /ai ask 或 @ 提及那樣讓 AI 主動提出吐槽文字。
+                    if (urlImageParts.some(part => part.type === 'missing_signature')) {
+                        console.log(`[Random Reply] 圖片修復失敗，已放棄本次隨機回覆。`);
+                        return;
+                    }
+
                     const mode = getUserMode(userId, cleanedContent);
                     const attachmentParts = await processAttachments(message.attachments);
                     const imageParts = [...emojiParts, ...urlImageParts, ...attachmentParts];
