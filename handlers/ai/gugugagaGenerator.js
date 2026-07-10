@@ -1,5 +1,4 @@
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
-const { SlashCommandBuilder } = require('discord.js');
 const { GUGU_MODE_PROMPT } = require('./modes/gugugagaMode');
 
 // 初始化 API
@@ -78,42 +77,11 @@ function getErrorMessage(error) {
 }
 
 // ════════════════════════════════════════════════════════
-//  setupGuguGenerator：注入 Slash Command + 保留事件監聽
+//  純函式模組：/gugu 已合併進 handlers/ai/aiHandler.js 的
+//  /ai gugu 子指令，這裡只保留生成邏輯供其呼叫
 // ════════════════════════════════════════════════════════
 
-function setupGuguGenerator(client) {
-
-    // ── 注入 /gugu 到 client.commands ───────────────────
-    client.commands.set('gugu', {
-        data: new SlashCommandBuilder()
-            .setName('gugu')
-            .setDescription('生成一篇咕咕嘎嘎體文章')
-            .addStringOption(opt =>
-                opt.setName('topic')
-                    .setDescription('文章主題（例如：上班、貓咪、宇宙）')
-                    .setRequired(true)
-            ),
-
-        async execute(interaction) {
-            const topic = interaction.options.getString('topic');
-
-            // 先回應避免 3 秒逾時，並顯示思考訊息
-            await interaction.reply({ content: '⏳ 我操了老鐵...' });
-
-            try {
-                const article = await generateGuguArticle(topic);
-                await interaction.editReply({ content: article });
-            } catch (error) {
-                console.error('生成咕咕嘎嘎文章時發生錯誤:', error);
-                await interaction.editReply({ content: getErrorMessage(error) });
-            }
-        }
-    });
-
-    console.log('✅ 咕咕嘎嘎生成器已啟動！');
-}
-
 module.exports = {
-    setupGuguGenerator,
-    generateGuguArticle
+    generateGuguArticle,
+    getGuguErrorMessage: getErrorMessage,
 };

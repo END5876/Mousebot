@@ -160,269 +160,288 @@ function setupUnifiedCommands(client) {
     }
   });
 
-  // ── /play ─────────────────────────────────────────────
-  client.commands.set('play', {
-    data: new SlashCommandBuilder()
-      .setName('play')
-      .setDescription('播放 Bilibili / YouTube 影片，或本地音訊檔案')
-      .addStringOption(opt =>
-        opt.setName('input')
-          .setDescription('影片網址 或 本地檔名（輸入關鍵字可搜尋；選「全部本地音樂」一次加入所有）')
-          .setRequired(true)
-          .setAutocomplete(true)
-      )
-      .addStringOption(opt =>
-        opt.setName('shuffle')
-          .setDescription('全部加入時的排序方式（單首播放時忽略此選項）')
-          .setRequired(false)
-          .addChoices(
-            { name: '📋 依檔名順序（預設）', value: 'no' },
-            { name: '🔀 隨機排序', value: 'yes' },
-          )
-      ),
-    async execute(interaction) {
-      await interaction.deferReply();
-      const input = interaction.options.getString('input');
-      const shuffleOpt = interaction.options.getString('shuffle') ?? 'no';
-      await handlePlay(interaction, input, shuffleOpt);
-    },
-  });
+  client.commands.set(playCommand.data.name, playCommand);
+  client.commands.set(musicCommand.data.name, musicCommand);
 
-  // ── /stop ─────────────────────────────────────────────
-  client.commands.set('stop', {
-    data: new SlashCommandBuilder()
-      .setName('stop')
-      .setDescription('停止播放並清空佇列'),
-    async execute(interaction) {
-      if (!nowPlaying.has(interaction.guildId)) {
-        return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
-      }
-      stopAll(interaction.guildId);
-      await interaction.reply({ content: '⏹️ 已停止播放' });
-    },
-  });
+  console.log('✅ [UnifiedQueue] /play 與 /music 指令已載入');
+}
 
-  // ── /skip ─────────────────────────────────────────────
-  // ── /skip ─────────────────────────────────────────────
-  client.commands.set('skip', {
-    data: new SlashCommandBuilder()
-      .setName('skip')
-      .setDescription('跳過當前歌曲'),
-    async execute(interaction) {
-      const np = nowPlaying.get(interaction.guildId);
-      if (!np) return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
+// ════════════════════════════════════════════════════════
+//  /play：獨立頂層指令（依需求維持原樣，不併入 /music）
+// ════════════════════════════════════════════════════════
+const playCommand = {
+  data: new SlashCommandBuilder()
+    .setName('play')
+    .setDescription('播放 Bilibili / YouTube 影片，或本地音訊檔案')
+    .addStringOption(opt =>
+      opt.setName('input')
+        .setDescription('影片網址 或 本地檔名（輸入關鍵字可搜尋；選「全部本地音樂」一次加入所有）')
+        .setRequired(true)
+        .setAutocomplete(true)
+    )
+    .addStringOption(opt =>
+      opt.setName('shuffle')
+        .setDescription('全部加入時的排序方式（單首播放時忽略此選項）')
+        .setRequired(false)
+        .addChoices(
+          { name: '📋 依檔名順序（預設）', value: 'no' },
+          { name: '🔀 隨機排序', value: 'yes' },
+        )
+    ),
+  async execute(interaction) {
+    return handleMusicPlay(interaction);
+  }
+};
 
-      const queue = queues.get(interaction.guildId) || [];
-      const loopMode = loopSettings.get(interaction.guildId) || 'off';
+// ════════════════════════════════════════════════════════
+//  /music 單一指令，底下掛 stop / skip / loop / queue /
+//  clear / nowplaying / local(group: list) / idle(group: enable/disable/status)
+//  （play 已依需求拆回獨立的 /play 指令）
+// ════════════════════════════════════════════════════════
+const musicCommand = {
+  data: new SlashCommandBuilder()
+    .setName('music')
+    .setDescription('音樂播放相關功能')
+    .addSubcommand(sub => sub.setName('stop').setDescription('停止播放並清空佇列'))
+    .addSubcommand(sub => sub.setName('skip').setDescription('跳過當前歌曲'))
+    .addSubcommand(sub => sub.setName('loop').setDescription('切換循環模式（關閉 → 單曲 → 列表）'))
+    .addSubcommand(sub => sub.setName('queue').setDescription('查看播放佇列'))
+    .addSubcommand(sub => sub.setName('clear').setDescription('清空播放佇列'))
+    .addSubcommand(sub => sub.setName('nowplaying').setDescription('查看目前播放的詳細資訊'))
+    .addSubcommandGroup(group =>
+      group.setName('local')
+        .setDescription('本地音樂功能')
+        .addSubcommand(sub =>
+          sub.setName('list').setDescription('列出 data/music 資料夾內所有可播放的音訊檔案')
+        )
+    )
+    .addSubcommandGroup(group =>
+      group.setName('idle')
+        .setDescription('閒置自動離開語音頻道功能（僅管理員可用）')
+        .addSubcommand(sub => sub.setName('enable').setDescription('開啟閒置自動離開功能'))
+        .addSubcommand(sub => sub.setName('disable').setDescription('關閉閒置自動離開功能'))
+        .addSubcommand(sub => sub.setName('status').setDescription('查看目前閒置監控狀態'))
+    ),
 
-      // 邏輯與 uq_skip 按鈕保持一致：尊重循環模式，不再無條件停止
-      if (queue.length === 0 && loopMode === 'off') {
-        stopAll(interaction.guildId);
-        return interaction.reply({ content: '⏭️ 已跳過，佇列為空，停止播放' });
-      }
-      np.player.stop();
-      await interaction.reply({ content: '⏭️ 跳過當前歌曲' });
-    },
-  });
+  async execute(interaction) {
+    const sub   = interaction.options.getSubcommand();
+    const group = interaction.options.getSubcommandGroup(false);
 
+    if (group === 'local')  return handleMusicLocal(interaction, sub);
+    if (group === 'idle')   return handleMusicIdle(interaction, sub);
 
-  // ── /loop ─────────────────────────────────────────────
-  client.commands.set('loop', {
-    data: new SlashCommandBuilder()
-      .setName('loop')
-      .setDescription('切換循環模式（關閉 → 單曲 → 列表）'),
-    async execute(interaction) {
-      const np = nowPlaying.get(interaction.guildId);
-      if (!np) return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
+    switch (sub) {
+      case 'stop':         return handleMusicStop(interaction);
+      case 'skip':         return handleMusicSkip(interaction);
+      case 'loop':          return handleMusicLoop(interaction);
+      case 'queue':         return handleMusicQueue(interaction);
+      case 'clear':         return handleMusicClear(interaction);
+      case 'nowplaying':    return handleMusicNowPlaying(interaction);
+    }
+  }
+};
 
-      const cur = loopSettings.get(interaction.guildId) || 'off';
-      const next = cur === 'off' ? 'one' : cur === 'one' ? 'all' : 'off';
-      loopSettings.set(interaction.guildId, next);
+// ── /play ──────────────────────────────────────────
+async function handleMusicPlay(interaction) {
+  await interaction.deferReply();
+  const input = interaction.options.getString('input');
+  const shuffleOpt = interaction.options.getString('shuffle') ?? 'no';
+  await handlePlay(interaction, input, shuffleOpt);
+}
 
-      const loopText = next === 'one' ? '🔂 單曲循環已開啟' : next === 'all' ? '🔁 列表循環已開啟' : '❌ 循環已關閉';
-      const description = next === 'one' ? '當前歌曲將會不斷重複播放' : next === 'all' ? '播放完所有歌曲後將重新開始' : '播放完當前歌曲後繼續播放佇列';
+// ── /music stop ──────────────────────────────────────────
+async function handleMusicStop(interaction) {
+  if (!nowPlaying.has(interaction.guildId)) {
+    return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
+  }
+  stopAll(interaction.guildId);
+  await interaction.reply({ content: '⏹️ 已停止播放' });
+}
 
-      await interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(next === 'off' ? 0xFF0000 : 0x1DB954)
-            .setTitle(loopText)
-            .setDescription(description)
-            .addFields({
-              name: '正在播放',
-              value: np.item.type === 'bilibili'
-                ? `[${np.item.title}](${np.item.url})`
-                : `**${np.item.title}**`,
-              inline: false,
-            })
-            .setTimestamp()
-        ]
-      });
-      await updateControlPanel(interaction.guildId, interaction.channel);
-    },
-  });
+// ── /music skip ──────────────────────────────────────────
+async function handleMusicSkip(interaction) {
+  const np = nowPlaying.get(interaction.guildId);
+  if (!np) return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
 
-  // ── /queue ────────────────────────────────────────────
-  client.commands.set('queue', {
-    data: new SlashCommandBuilder()
-      .setName('queue')
-      .setDescription('查看播放佇列'),
-    async execute(interaction) {
-      const np = nowPlaying.get(interaction.guildId);
-      const queueList = queues.get(interaction.guildId) || [];
-      const loopMode = loopSettings.get(interaction.guildId) || 'off';
+  const queue = queues.get(interaction.guildId) || [];
+  const loopMode = loopSettings.get(interaction.guildId) || 'off';
 
-      if (!np && queueList.length === 0) {
-        return interaction.reply({ content: '❌ 目前沒有播放音樂且佇列為空', flags: MessageFlags.Ephemeral });
-      }
+  // 邏輯與 uq_skip 按鈕保持一致：尊重循環模式，不再無條件停止
+  if (queue.length === 0 && loopMode === 'off') {
+    stopAll(interaction.guildId);
+    return interaction.reply({ content: '⏭️ 已跳過，佇列為空，停止播放' });
+  }
+  np.player.stop();
+  await interaction.reply({ content: '⏭️ 跳過當前歌曲' });
+}
 
-      let loopText = '❌ 關閉';
-      if (loopMode === 'one') loopText = '🔂 單曲循環';
-      if (loopMode === 'all') loopText = '🔁 列表循環';
+// ── /music loop ───────────────────────────────────────────
+async function handleMusicLoop(interaction) {
+  const np = nowPlaying.get(interaction.guildId);
+  if (!np) return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
 
-      const embed = new EmbedBuilder()
-        .setColor(0x1DB954)
-        .setTitle('🎵 播放佇列')
-        .setTimestamp();
+  const cur = loopSettings.get(interaction.guildId) || 'off';
+  const next = cur === 'off' ? 'one' : cur === 'one' ? 'all' : 'off';
+  loopSettings.set(interaction.guildId, next);
 
-      if (np) {
-        embed.addFields({
-          name: '🎧 正在播放',
+  const loopText = next === 'one' ? '🔂 單曲循環已開啟' : next === 'all' ? '🔁 列表循環已開啟' : '❌ 循環已關閉';
+  const description = next === 'one' ? '當前歌曲將會不斷重複播放' : next === 'all' ? '播放完所有歌曲後將重新開始' : '播放完當前歌曲後繼續播放佇列';
+
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(next === 'off' ? 0xFF0000 : 0x1DB954)
+        .setTitle(loopText)
+        .setDescription(description)
+        .addFields({
+          name: '正在播放',
           value: np.item.type === 'bilibili'
-            ? `[${np.item.title}](${np.item.url})\n作者: ${np.item.author || '未知'}`
+            ? `[${np.item.title}](${np.item.url})`
             : `**${np.item.title}**`,
           inline: false,
-        });
-      }
-      embed.addFields({ name: '循環模式', value: loopText, inline: true });
-
-      if (queueList.length > 0) {
-        const listText = queueList.map((t, i) =>
-          t.type === 'bilibili'
-            ? `${i + 1}. [${t.title}](${t.url})`
-            : `${i + 1}. **${t.title}**`
-        ).join('\n');
-        embed.addFields({
-          name: `📋 佇列 (${queueList.length} 首)`,
-          value: listText.length > 1024 ? listText.slice(0, 1021) + '...' : listText,
-          inline: false,
-        });
-      }
-
-      await interaction.reply({ embeds: [embed] });
-    },
+        })
+        .setTimestamp()
+    ]
   });
+  await updateControlPanel(interaction.guildId, interaction.channel);
+}
 
-  // ── /clear ────────────────────────────────────────────
-  client.commands.set('clear', {
-    data: new SlashCommandBuilder()
-      .setName('clear')
-      .setDescription('清空播放佇列'),
-    async execute(interaction) {
-      const queue = queues.get(interaction.guildId);
-      if (!queue || queue.length === 0) {
-        return interaction.reply({ content: '❌ 佇列已經是空的', flags: MessageFlags.Ephemeral });
-      }
-      const count = queue.length;
-      queues.set(interaction.guildId, []);
-      await interaction.reply({ content: `🗑️ 已清空佇列 (${count} 首)` });
-    },
-  });
+// ── /music queue ──────────────────────────────────────────
+async function handleMusicQueue(interaction) {
+  const np = nowPlaying.get(interaction.guildId);
+  const queueList = queues.get(interaction.guildId) || [];
+  const loopMode = loopSettings.get(interaction.guildId) || 'off';
 
-  // ── /nowplaying ───────────────────────────────────────
-  client.commands.set('nowplaying', {
-    data: new SlashCommandBuilder()
-      .setName('nowplaying')
-      .setDescription('查看目前播放的詳細資訊'),
-    async execute(interaction) {
-      const np = nowPlaying.get(interaction.guildId);
-      if (!np) return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
-      const embed = _buildEmbed(interaction.guildId);
-      await interaction.reply({ embeds: [embed] });
-    },
-  });
+  if (!np && queueList.length === 0) {
+    return interaction.reply({ content: '❌ 目前沒有播放音樂且佇列為空', flags: MessageFlags.Ephemeral });
+  }
 
-  // ── /idlemonitor（管理員專用：開關閒置自動離開功能）──────
-  client.commands.set('idlemonitor', {
-    data: new SlashCommandBuilder()
-      .setName('idlemonitor')
-      .setDescription('管理閒置自動離開語音頻道功能（僅管理員可用）')
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-      .addSubcommand(sub =>
-        sub.setName('enable').setDescription('開啟閒置自動離開功能')
-      )
-      .addSubcommand(sub =>
-        sub.setName('disable').setDescription('關閉閒置自動離開功能')
-      )
-      .addSubcommand(sub =>
-        sub.setName('status').setDescription('查看目前閒置監控狀態')
-      ),
-    async execute(interaction) {
-      // 執行期權限二次檢查（防止管理員在「整合」設定中覆寫了指令權限）
-      if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
-        return interaction.reply({
-          content: '❌ 只有管理員可以使用此指令',
-          flags: MessageFlags.Ephemeral,
+  let loopText = '❌ 關閉';
+  if (loopMode === 'one') loopText = '🔂 單曲循環';
+  if (loopMode === 'all') loopText = '🔁 列表循環';
+
+  const embed = new EmbedBuilder()
+    .setColor(0x1DB954)
+    .setTitle('🎵 播放佇列')
+    .setTimestamp();
+
+  if (np) {
+    embed.addFields({
+      name: '🎧 正在播放',
+      value: np.item.type === 'bilibili'
+        ? `[${np.item.title}](${np.item.url})\n作者: ${np.item.author || '未知'}`
+        : `**${np.item.title}**`,
+      inline: false,
+    });
+  }
+  embed.addFields({ name: '循環模式', value: loopText, inline: true });
+
+  if (queueList.length > 0) {
+    const listText = queueList.map((t, i) =>
+      t.type === 'bilibili'
+        ? `${i + 1}. [${t.title}](${t.url})`
+        : `${i + 1}. **${t.title}**`
+    ).join('\n');
+    embed.addFields({
+      name: `📋 佇列 (${queueList.length} 首)`,
+      value: listText.length > 1024 ? listText.slice(0, 1021) + '...' : listText,
+      inline: false,
+    });
+  }
+
+  await interaction.reply({ embeds: [embed] });
+}
+
+// ── /music clear ──────────────────────────────────────────
+async function handleMusicClear(interaction) {
+  const queue = queues.get(interaction.guildId);
+  if (!queue || queue.length === 0) {
+    return interaction.reply({ content: '❌ 佇列已經是空的', flags: MessageFlags.Ephemeral });
+  }
+  const count = queue.length;
+  queues.set(interaction.guildId, []);
+  await interaction.reply({ content: `🗑️ 已清空佇列 (${count} 首)` });
+}
+
+// ── /music nowplaying ─────────────────────────────────────
+async function handleMusicNowPlaying(interaction) {
+  const np = nowPlaying.get(interaction.guildId);
+  if (!np) return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
+  const embed = _buildEmbed(interaction.guildId);
+  await interaction.reply({ embeds: [embed] });
+}
+
+// ── /music local list ─────────────────────────────────────
+// 延遲 require 避免與 localMusicHandler.js → unifiedQueue/index.js 形成循環依賴
+async function handleMusicLocal(interaction, sub) {
+  if (sub === 'list') {
+    const { buildLocalListReply } = require('../localMusicHandler');
+    await interaction.reply(buildLocalListReply());
+  }
+}
+
+// ── /music idle enable / disable / status（管理員專用） ──
+async function handleMusicIdle(interaction, sub) {
+  // 執行期權限二次檢查（防止管理員在「整合」設定中覆寫了指令權限）
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    return interaction.reply({
+      content: '❌ 只有管理員可以使用此指令',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  const guildId = interaction.guildId;
+
+  if (sub === 'status') {
+    const enabled = voiceMonitor.isEnabled(guildId);
+    return interaction.reply({
+      content: `📊 閒置自動離開功能目前狀態：${enabled ? '✅ 開啟' : '❌ 關閉'}`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  const enable = sub === 'enable';
+  voiceMonitor.setEnabled(guildId, enable);
+
+  if (enable) {
+    // 若機器人目前已在語音頻道內，立即啟動監控（不需等下次重新連線）
+    const connection = connections.get(guildId) || getVoiceConnection(guildId);
+    let monitorStarted = false;
+
+    if (connection) {
+      const channelId = connection.joinConfig?.channelId;
+      const voiceChannel = channelId ? interaction.guild.channels.cache.get(channelId) : null;
+
+      if (voiceChannel) {
+        voiceMonitor.startMonitoring({
+          guildId,
+          connection,
+          channel: voiceChannel,
+          client: interaction.client,
+          onStop: _createIdleStopHandler(guildId, connection, interaction.channel),
         });
+        monitorStarted = true;
       }
+    }
 
-      const guildId = interaction.guildId;
-      const sub = interaction.options.getSubcommand();
+    // 誠實反映本次操作是否真的立即生效，避免管理員被誤導
+    const statusNote = monitorStarted
+      ? '（已立即套用於目前的語音連線）'
+      : '（目前機器人不在語音頻道內，將於下次 /play 時套用）';
 
-      if (sub === 'status') {
-        const enabled = voiceMonitor.isEnabled(guildId);
-        return interaction.reply({
-          content: `📊 閒置自動離開功能目前狀態：${enabled ? '✅ 開啟' : '❌ 關閉'}`,
-          flags: MessageFlags.Ephemeral,
-        });
-      }
+    await interaction.reply({
+      content: `✅ 閒置自動離開功能已開啟\n${statusNote}\n頻道空 30 分鐘 / 靜音 60 分鐘將自動停止播放並離開`,
+      flags: MessageFlags.Ephemeral,
+    });
+  } else {
+    // 立即停止當前監控計時器（若有正在跑的）
+    voiceMonitor.stopMonitoring(guildId);
 
-      const enable = sub === 'enable';
-      voiceMonitor.setEnabled(guildId, enable);
-
-      if (enable) {
-        // 若機器人目前已在語音頻道內，立即啟動監控（不需等下次重新連線）
-        const connection = connections.get(guildId) || getVoiceConnection(guildId);
-        let monitorStarted = false;
-
-        if (connection) {
-          const channelId = connection.joinConfig?.channelId;
-          const voiceChannel = channelId ? interaction.guild.channels.cache.get(channelId) : null;
-
-          if (voiceChannel) {
-            voiceMonitor.startMonitoring({
-              guildId,
-              connection,
-              channel: voiceChannel,
-              client: interaction.client,
-              onStop: _createIdleStopHandler(guildId, connection, interaction.channel),
-            });
-            monitorStarted = true;
-          }
-        }
-
-        // 誠實反映本次操作是否真的立即生效，避免管理員被誤導
-        const statusNote = monitorStarted
-          ? '（已立即套用於目前的語音連線）'
-          : '（目前機器人不在語音頻道內，將於下次 /play 時套用）';
-
-        await interaction.reply({
-          content: `✅ 閒置自動離開功能已開啟\n${statusNote}\n頻道空 30 分鐘 / 靜音 60 分鐘將自動停止播放並離開`,
-          flags: MessageFlags.Ephemeral,
-        });
-      } else {
-        // 立即停止當前監控計時器（若有正在跑的）
-        voiceMonitor.stopMonitoring(guildId);
-
-        await interaction.reply({
-          content: '❌ 閒置自動離開功能已關閉\n（機器人將不再因頻道閒置而自動離開）',
-          flags: MessageFlags.Ephemeral,
-        });
-      }
-    },
-  });
-
-  console.log('✅ [UnifiedQueue] 所有 Slash Commands 已載入');
+    await interaction.reply({
+      content: '❌ 閒置自動離開功能已關閉\n（機器人將不再因頻道閒置而自動離開）',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
 }
 
 module.exports = {
