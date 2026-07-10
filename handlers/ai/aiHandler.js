@@ -25,7 +25,7 @@ const {
     processEmbeds,
     hasMissingSignature,
     withTyping, speakWithTTS, splitMessage,
-    replaceMentions,
+    replaceMentions, 
 } = require('./aiUtils');
 
 const {
@@ -37,13 +37,111 @@ const {
     toggleChannel,
 } = require('./aiChance');
 
+const { generateGuguArticle, getGuguErrorMessage } = require('./gugugagaGenerator');
+
 const SETMODE_ALLOWED_USER_ID = '598054316510806017';
 
 // ════════════════════════════════════════════════════════
-//  各 Subcommand 的實際邏輯（從原本 6 個獨立指令搬過來）
+//  /ai 單一指令，底下掛 ask / clear / tts / mode / chance(group) / gugu
 // ════════════════════════════════════════════════════════
+const aiCommand = {
+    data: new SlashCommandBuilder()
+        .setName('ai')
+        .setDescription('AI 對話相關功能')
 
-// ── /ai ask ──
+        // ── /ai ask ──
+        .addSubcommand(sub =>
+            sub.setName('ask')
+                .setDescription('詢問 AI 問題')
+                .addStringOption(opt =>
+                    opt.setName('question').setDescription('你想問的問題').setRequired(true)
+                )
+                .addAttachmentOption(opt =>
+                    opt.setName('image').setDescription('附上圖片（選填）').setRequired(false)
+                )
+        )
+
+        // ── /ai clear ──
+        .addSubcommand(sub =>
+            sub.setName('clear')
+                .setDescription('清除你與 AI 的對話記憶')
+        )
+
+        // ── /ai tts ──
+        .addSubcommand(sub =>
+            sub.setName('tts')
+                .setDescription('切換 AI 回覆是否自動朗讀（語音頻道）')
+        )
+
+        // ── /ai mode ──
+        .addSubcommand(sub =>
+            sub.setName('mode')
+                .setDescription('設定指定使用者的 AI 人格模式')
+                .addUserOption(opt =>
+                    opt.setName('target')
+                        .setDescription('要設定的使用者（不填則設定自己）')
+                        .setRequired(false)
+                )
+                .addStringOption(opt =>
+                    opt.setName('mode')
+                        .setDescription('模式名稱（不填則重置為預設）')
+                        .setRequired(false)
+                )
+        )
+
+        // ── /ai chance set / toggle（子指令群組） ──
+        .addSubcommandGroup(group =>
+            group.setName('chance')
+                .setDescription('AI 隨機回覆機率設定')
+                .addSubcommand(sub =>
+                    sub.setName('set')
+                        .setDescription('設定本伺服器的 AI 隨機回覆機率')
+                        .addNumberOption(opt =>
+                            opt.setName('chance')
+                                .setDescription(`機率 0~100（%），不填則重置為預設值 ${(DEFAULT_CHANCE * 100).toFixed(0)}%`)
+                                .setMinValue(0)
+                                .setMaxValue(100)
+                                .setRequired(false)
+                        )
+                )
+                .addSubcommand(sub =>
+                    sub.setName('toggle')
+                        .setDescription('切換本頻道的 AI 隨機回覆開關（不影響其他頻道）')
+                )
+        )
+
+        // ── /ai gugu ──
+        .addSubcommand(sub =>
+            sub.setName('gugu')
+                .setDescription('生成一篇咕咕嘎嘎體文章')
+                .addStringOption(opt =>
+                    opt.setName('topic')
+                        .setDescription('文章主題（例如：上班、貓咪、宇宙）')
+                        .setRequired(true)
+                )
+        )
+
+        .setDefaultMemberPermissions(null), // 個別子指令權限在 execute() 內手動判斷
+
+    async execute(interaction) {
+        const sub   = interaction.options.getSubcommand();
+        const group = interaction.options.getSubcommandGroup(false);
+
+        if (group === 'chance') {
+            return handleChanceSet(interaction);
+        }
+
+        switch (sub) {
+            case 'ask':   return handleAsk(interaction);
+            case 'clear': return handleClear(interaction);
+            case 'tts':   return handleTTS(interaction);
+            case 'mode':  return handleMode(interaction);
+            case 'gugu':  return handleGugu(interaction);
+        }
+    }
+};
+
+// ── /ai ask ──────────────────────────────────────────────
 async function handleAsk(interaction) {
     if (!process.env.GEMINI_API_KEY) {
         console.error('❌ 未設定 API Key');
@@ -95,12 +193,12 @@ async function handleAsk(interaction) {
 
         await speakWithTTS(interaction, answer, guildId);
     } catch (error) {
-        console.error('/ai ask error:', error.message);
+        console.error('Slash command /ai error:', error.message);
         await interaction.deleteReply().catch(() => {});
     }
 }
 
-// ── /ai clear ──
+// ── /ai clear ────────────────────────────────────────────
 async function handleClear(interaction) {
     const userId = interaction.user.id;
     const mode = selectMode(userId, '');
@@ -108,8 +206,8 @@ async function handleClear(interaction) {
     await interaction.reply({ content: MODE_MAP[mode].getClearMemoryMessage() });
 }
 
-// ── /ai tts ──
-async function handleTts(interaction) {
+// ── /ai tts ──────────────────────────────────────────────
+async function handleTTS(interaction) {
     const guildId = interaction.guildId;
     if (!guildId)
         return interaction.reply({ content: '❌ 此指令只能在伺服器中使用', flags: MessageFlags.Ephemeral });
@@ -120,8 +218,7 @@ async function handleTts(interaction) {
     await interaction.reply({ content: `${status} AI 回覆朗讀功能` });
 }
 
-// ── /ai mode ──
-// 注意：原本靠 setDMPermission(false) 擋 DM，現在改成手動檢查 guildId
+// ── /ai mode（僅限 SETMODE_ALLOWED_USER_ID） ────────────
 async function handleMode(interaction) {
     if (!interaction.guildId) {
         return interaction.reply({
@@ -165,10 +262,46 @@ async function handleMode(interaction) {
     });
 }
 
-// ── /ai chance set ──
+// ── 權限檢查小工具：/ai chance set / toggle 僅限管理員 ──
+// （子指令群組無法個別套用 setDefaultMemberPermissions，改為手動檢查）
+function isAdmin(interaction) {
+    return interaction.guild && interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
+}
+
+// ── /ai chance set / toggle ─────────────────────────────
 async function handleChanceSet(interaction) {
     const guildId = interaction.guildId;
-    const raw = interaction.options.getNumber('percent');
+    if (!guildId) {
+        return interaction.reply({
+            content: '❌ 此指令只能在伺服器中使用',
+            flags: MessageFlags.Ephemeral,
+        });
+    }
+
+    if (!isAdmin(interaction)) {
+        return interaction.reply({
+            content: '❌ 你沒有權限使用此指令。',
+            flags: MessageFlags.Ephemeral,
+        });
+    }
+
+    const chanceSub = interaction.options.getSubcommand();
+
+    if (chanceSub === 'toggle') {
+        const channelId = interaction.channelId;
+        const { disabled } = toggleChannel(channelId);
+        const channelMention = `<#${channelId}>`;
+
+        return interaction.reply({
+            content: disabled
+                ? `🔕 已關閉 ${channelMention} 的 AI 隨機回覆（@ 提及仍有效）`
+                : `🔔 已開啟 ${channelMention} 的 AI 隨機回覆`,
+            flags: MessageFlags.Ephemeral,
+        });
+    }
+
+    // chanceSub === 'set'
+    const raw = interaction.options.getNumber('chance');
 
     if (raw === null) {
         const defaultChance = resetReplyChance(guildId);
@@ -201,133 +334,26 @@ async function handleChanceSet(interaction) {
     });
 }
 
-// ── /ai chance toggle ──
-async function handleChanceToggle(interaction) {
-    const channelId = interaction.channelId;
-    const { disabled } = toggleChannel(channelId);
-    const channelMention = `<#${channelId}>`;
+// ── /ai gugu ─────────────────────────────────────────────
+async function handleGugu(interaction) {
+    const topic = interaction.options.getString('topic');
 
-    return interaction.reply({
-        content: disabled
-            ? `🔕 已關閉 ${channelMention} 的 AI 隨機回覆（@ 提及仍有效）`
-            : `🔔 已開啟 ${channelMention} 的 AI 隨機回覆`,
-        flags: MessageFlags.Ephemeral,
-    });
+    await interaction.reply({ content: '⏳ 我操了老鐵...' });
+
+    try {
+        const article = await generateGuguArticle(topic);
+        await interaction.editReply({ content: article });
+    } catch (error) {
+        console.error('生成咕咕嘎嘎文章時發生錯誤:', error);
+        await interaction.editReply({ content: getGuguErrorMessage(error) });
+    }
 }
-
-// ════════════════════════════════════════════════════════
-//  合併後的單一 /ai 指令
-// ════════════════════════════════════════════════════════
-const slashCommands = [
-    {
-        data: new SlashCommandBuilder()
-            .setName('ai')
-            .setDescription('AI 相關指令')
-
-            // /ai ask <question> [image]
-            .addSubcommand(sub =>
-                sub.setName('ask')
-                    .setDescription('詢問 AI 問題')
-                    .addStringOption(opt =>
-                        opt.setName('question').setDescription('你想問的問題').setRequired(true)
-                    )
-                    .addAttachmentOption(opt =>
-                        opt.setName('image').setDescription('附上圖片（選填）').setRequired(false)
-                    )
-            )
-
-            // /ai clear
-            .addSubcommand(sub =>
-                sub.setName('clear').setDescription('清除你與 AI 的對話記憶')
-            )
-
-            // /ai tts
-            .addSubcommand(sub =>
-                sub.setName('tts').setDescription('切換 AI 回覆是否自動朗讀（語音頻道）')
-            )
-
-            // /ai mode <target?> <mode?>
-            .addSubcommand(sub =>
-                sub.setName('mode')
-                    .setDescription('設定指定使用者的 AI 人格模式')
-                    .addUserOption(opt =>
-                        opt.setName('target')
-                            .setDescription('要設定的使用者（不填則設定自己）')
-                            .setRequired(false)
-                    )
-                    .addStringOption(opt =>
-                        opt.setName('mode')
-                            .setDescription('模式名稱（不填則重置為預設）')
-                            .setRequired(false)
-                    )
-            )
-
-            // /ai chance set|toggle
-            .addSubcommandGroup(group =>
-                group.setName('chance')
-                    .setDescription('AI 隨機回覆機率相關設定')
-                    .addSubcommand(sub =>
-                        sub.setName('set')
-                            .setDescription('設定本伺服器的 AI 隨機回覆機率')
-                            .addNumberOption(opt =>
-                                opt.setName('percent')
-                                    .setDescription(`機率 0~100（%），不填則重置為預設值 ${(DEFAULT_CHANCE * 100).toFixed(0)}%`)
-                                    .setMinValue(0)
-                                    .setMaxValue(100)
-                                    .setRequired(false)
-                            )
-                    )
-                    .addSubcommand(sub =>
-                        sub.setName('toggle')
-                            .setDescription('切換本頻道的 AI 隨機回覆開關（不影響其他頻道）')
-                    )
-            ),
-
-        async execute(interaction) {
-            const group = interaction.options.getSubcommandGroup(false);
-            const sub   = interaction.options.getSubcommand();
-
-            // ── chance set / chance toggle：手動補回 Administrator + Guild-only 限制 ──
-            if (group === 'chance') {
-                if (!interaction.guildId) {
-                    return interaction.reply({
-                        content: '❌ 此指令只能在伺服器中使用',
-                        flags: MessageFlags.Ephemeral,
-                    });
-                }
-                if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
-                    return interaction.reply({
-                        content: '❌ 你沒有權限使用此指令。',
-                        flags: MessageFlags.Ephemeral,
-                    });
-                }
-
-                if (sub === 'set')    return handleChanceSet(interaction);
-                if (sub === 'toggle') return handleChanceToggle(interaction);
-            }
-
-            switch (sub) {
-                case 'ask':   return handleAsk(interaction);
-                case 'clear': return handleClear(interaction);
-                case 'tts':   return handleTts(interaction);
-                case 'mode':  return handleMode(interaction);
-                default:
-                    return interaction.reply({
-                        content: '❌ 未知的子指令。',
-                        flags: MessageFlags.Ephemeral,
-                    });
-            }
-        }
-    },
-];
 
 // ════════════════════════════════════════════════════════
 //  setupAICommands
 // ════════════════════════════════════════════════════════
 function setupAICommands(client) {
-    for (const cmd of slashCommands) {
-        client.commands.set(cmd.data.name, cmd);
-    }
+    client.commands.set(aiCommand.data.name, aiCommand);
 
     client.on('messageCreate', async message => {
         if (message.author.bot) return;
@@ -359,6 +385,7 @@ function setupAICommands(client) {
 
         // ── @ 提及（頻道停用不影響此區塊）──
         if (isMentioned) {
+            // 將提及轉換為名字，並濾掉機器人自己
             const rawQuestion = replaceMentions(message, botId);
 
             if (!rawQuestion && !hasAttachment && !hasLikelyImageLink) {
@@ -431,7 +458,7 @@ function setupAICommands(client) {
 
             if (hasReference) {
                 let isReplyingToOther = false;
-
+                
                 if (message.mentions.repliedUser) {
                     isReplyingToOther = message.mentions.repliedUser.id !== botId;
                 } else {
@@ -442,12 +469,13 @@ function setupAICommands(client) {
                 }
 
                 if (isReplyingToOther) {
-                    return;
+                    return; 
                 }
             }
 
             if (isChannelDisabled(channelId)) return;
 
+            //  將提及轉換為名字
             const rawCleaned = replaceMentions(message, botId);
 
             if (!rawCleaned && !hasAttachment) return;

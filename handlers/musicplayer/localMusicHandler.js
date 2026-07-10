@@ -149,6 +149,35 @@ function playStream(guildId, item, player, { silent = false } = {}) {
 }
 
 // ════════════════════════════════════════════════════════
+//  buildLocalListReply：組出「本地音樂清單」的回覆內容
+//  供 unifiedQueue/commands.js 的 /music local list 呼叫
+//  （/locallist 已合併進 /music local list）
+// ════════════════════════════════════════════════════════
+function buildLocalListReply() {
+  const musicFiles = getMusicFiles();
+
+  if (musicFiles.length === 0) {
+    return {
+      content: '❌ data/music 資料夾內沒有可播放的音訊檔案\n支援格式：`.mp3` `.wav` `.ogg` `.flac` `.m4a` `.aac`',
+      flags: MessageFlags.Ephemeral,
+    };
+  }
+
+  const listText = musicFiles
+    .map((f, i) => `${i + 1}. **${f.name}** — \`${f.filename}\` (${getFileSize(f.filePath)})`)
+    .join('\n');
+
+  const embed = new EmbedBuilder()
+    .setColor(0x1DB954)
+    .setTitle(`📁 本地音樂清單 (共 ${musicFiles.length} 首)`)
+    .setDescription(listText.length > 4096 ? listText.slice(0, 4093) + '...' : listText)
+    .setFooter({ text: '可使用 /play 指令播放（可直接選擇自動完成）' })
+    .setTimestamp();
+
+  return { embeds: [embed] };
+}
+
+// ════════════════════════════════════════════════════════
 //  setupLocalMusicEngine
 // ════════════════════════════════════════════════════════
 function setupLocalMusicEngine(client) {
@@ -166,37 +195,7 @@ function setupLocalMusicEngine(client) {
     handleAutocomplete(interaction);
   });
 
-  // ── /locallist ────────────────────────────────────────
-  client.commands.set('locallist', {
-    data: new SlashCommandBuilder()
-      .setName('locallist')
-      .setDescription('列出 data/music 資料夾內所有可播放的音訊檔案'),
-    async execute(interaction) {
-      const musicFiles = getMusicFiles();
-
-      if (musicFiles.length === 0) {
-        return interaction.reply({
-          content: '❌ data/music 資料夾內沒有可播放的音訊檔案\n支援格式：`.mp3` `.wav` `.ogg` `.flac` `.m4a` `.aac`',
-          flags: MessageFlags.Ephemeral,
-        });
-      }
-
-      const listText = musicFiles
-        .map((f, i) => `${i + 1}. **${f.name}** — \`${f.filename}\` (${getFileSize(f.filePath)})`)
-        .join('\n');
-
-      const embed = new EmbedBuilder()
-        .setColor(0x1DB954)
-        .setTitle(`📁 本地音樂清單 (共 ${musicFiles.length} 首)`)
-        .setDescription(listText.length > 4096 ? listText.slice(0, 4093) + '...' : listText)
-        .setFooter({ text: '可使用 /play 指令播放（可直接選擇自動完成）' })
-        .setTimestamp();
-
-      await interaction.reply({ embeds: [embed] });
-    },
-  });
-
-  console.log('✅ [LocalMusic] 引擎與 /locallist 指令已載入');
+  console.log('✅ [LocalMusic] 引擎已載入（清單功能已合併進 /music local list）');
 }
 
 module.exports = {
@@ -204,4 +203,5 @@ module.exports = {
   getMusicFiles,
   getTrackInfo,
   playStream,
+  buildLocalListReply,
 };

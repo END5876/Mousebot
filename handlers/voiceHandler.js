@@ -99,17 +99,45 @@ function buildSilenceMenu(guildId) {
 }
 
 // ════════════════════════════════════════════════════════
-//  setupVoiceCommands
+//  /voice 單一指令，底下掛 join / leave / status /
+//  stt(group: start/stop) / silence / record-button
 // ════════════════════════════════════════════════════════
-function setupVoiceCommands(client) {
+const voiceCommand = {
+  data: new SlashCommandBuilder()
+    .setName('voice')
+    .setDescription('語音頻道相關功能')
+    .addSubcommand(sub => sub.setName('join').setDescription('讓 Bot 加入你目前所在的語音頻道'))
+    .addSubcommand(sub => sub.setName('leave').setDescription('讓 Bot 離開語音頻道'))
+    .addSubcommand(sub => sub.setName('status').setDescription('查看 Bot 目前的語音頻道狀態'))
+    .addSubcommandGroup(group =>
+      group.setName('stt')
+        .setDescription('STT 語音辨識功能')
+        .addSubcommand(sub => sub.setName('start').setDescription('啟動 STT 語音辨識監聽（喚醒詞）'))
+        .addSubcommand(sub => sub.setName('stop').setDescription('停止 STT 語音辨識監聽'))
+    )
+    .addSubcommand(sub => sub.setName('silence').setDescription('管理靜音防踢功能'))
+    .addSubcommand(sub => sub.setName('record-button').setDescription('發送手動錄音按鈕')),
 
-  // ── /join ─────────────────────────────────────────────
-  client.commands.set('join', {
-    data: new SlashCommandBuilder()
-      .setName('join')
-      .setDescription('讓 Bot 加入你目前所在的語音頻道'),
+  async execute(interaction) {
+    const sub   = interaction.options.getSubcommand();
+    const group = interaction.options.getSubcommandGroup(false);
 
-    async execute(interaction) {
+    if (group === 'stt') {
+      return handleStt(interaction, sub);
+    }
+
+    switch (sub) {
+      case 'join':           return handleJoin(interaction);
+      case 'leave':          return handleLeave(interaction);
+      case 'status':         return handleStatus(interaction);
+      case 'silence':        return handleSilenceCommand(interaction);
+      case 'record-button':  return handleRecordButton(interaction);
+    }
+  }
+};
+
+// ── /voice join ──────────────────────────────────────────
+async function handleJoin(interaction) {
       const voiceChannel = interaction.member?.voice?.channel;
 
       if (!voiceChannel) {
@@ -156,7 +184,7 @@ function setupVoiceCommands(client) {
         console.log(`✅ 已加入語音頻道：${voiceChannel.name} (${voiceChannel.guild.name})`);
 
         await interaction.reply(
-          `✅ 已加入語音頻道：**${voiceChannel.name}**\n💡 可用 \`/stt start\`（喚醒詞）或 \`/heyjqn\`（按鈕手動錄音）`
+          `✅ 已加入語音頻道：**${voiceChannel.name}**\n💡 可用 \`/voice stt start\`（喚醒詞）或 \`/voice record-button\`（按鈕手動錄音）`
         );
 
       } catch (error) {
@@ -166,16 +194,10 @@ function setupVoiceCommands(client) {
           flags: MessageFlags.Ephemeral
         });
       }
-    }
-  });
+}
 
-  // ── /leave ────────────────────────────────────────────
-  client.commands.set('leave', {
-    data: new SlashCommandBuilder()
-      .setName('leave')
-      .setDescription('讓 Bot 離開語音頻道'),
-
-    async execute(interaction) {
+// ── /voice leave ─────────────────────────────────────────
+async function handleLeave(interaction) {
       const guildId    = interaction.guildId;
       const connection = getVoiceConnection(guildId);
 
@@ -207,16 +229,10 @@ function setupVoiceCommands(client) {
 
       console.log(`👋 已離開語音頻道 (${interaction.guild.name})`);
       await interaction.reply('👋 已離開語音頻道');
-    }
-  });
+}
 
-  // ── /voice ────────────────────────────────────────────
-  client.commands.set('voice', {
-    data: new SlashCommandBuilder()
-      .setName('voice')
-      .setDescription('查看 Bot 目前的語音頻道狀態'),
-
-    async execute(interaction) {
+// ── /voice status ────────────────────────────────────────
+async function handleStatus(interaction) {
       const guildId    = interaction.guildId;
       const connection = getVoiceConnection(guildId);
 
@@ -250,23 +266,10 @@ function setupVoiceCommands(client) {
           )
           .setTimestamp()
       ]});
-    }
-  });
+}
 
-  // ── /stt ──────────────────────────────────────────────
-  client.commands.set('stt', {
-    data: new SlashCommandBuilder()
-      .setName('stt')
-      .setDescription('管理 STT 語音辨識功能')
-      .addSubcommand(sub =>
-        sub.setName('start').setDescription('啟動 STT 語音辨識監聽（喚醒詞）')
-      )
-      .addSubcommand(sub =>
-        sub.setName('stop').setDescription('停止 STT 語音辨識監聽')
-      ),
-
-    async execute(interaction) {
-      const sub     = interaction.options.getSubcommand();
+// ── /voice stt start / stop ──────────────────────────────
+async function handleStt(interaction, sub) {
       const guildId = interaction.guildId;
 
       if (sub === 'start') {
@@ -274,7 +277,7 @@ function setupVoiceCommands(client) {
 
         if (!connection) {
           return interaction.reply({
-            content: '❌ Bot 尚未加入語音頻道，請先使用 `/join`',
+            content: '❌ Bot 尚未加入語音頻道，請先使用 `/voice join`',
             flags: MessageFlags.Ephemeral
           });
         }
@@ -331,22 +334,16 @@ function setupVoiceCommands(client) {
 
         await interaction.reply('⏹️ STT 語音辨識已停止');
       }
-    }
-  });
+}
 
-  // ── /heyjqn ───────────────────────────────────────────
-  client.commands.set('heyjqn', {
-    data: new SlashCommandBuilder()
-      .setName('heyjqn')
-      .setDescription('發送手動錄音按鈕'),
-
-    async execute(interaction) {
+// ── /voice record-button（原 /heyjqn） ───────────────────
+async function handleRecordButton(interaction) {
       const guildId    = interaction.guildId;
       const connection = getVoiceConnection(guildId);
 
       if (!connection) {
         return interaction.reply({
-          content: '❌ Bot 尚未加入語音頻道，請先使用 `/join`',
+          content: '❌ Bot 尚未加入語音頻道，請先使用 `/voice join`',
           flags: MessageFlags.Ephemeral
         });
       }
@@ -364,22 +361,16 @@ function setupVoiceCommands(client) {
         content: '✅ 已送出手動錄音按鈕',
         components: [buildHeyJqnButton(guildId, false)],
       });
-    }
-  });
+}
 
-  // ── /silence（選單式）────────────────────────────────
-  client.commands.set('silence', {
-    data: new SlashCommandBuilder()
-      .setName('silence')
-      .setDescription('管理靜音防踢功能'),
-
-    async execute(interaction) {
+// ── /voice silence（選單式） ─────────────────────────────
+async function handleSilenceCommand(interaction) {
       const guildId    = interaction.guildId;
       const connection = getVoiceConnection(guildId);
 
       if (!connection) {
         return interaction.reply({
-          content: '❌ Bot 必須先加入語音頻道才能使用靜音功能，請先使用 `/join`',
+          content: '❌ Bot 必須先加入語音頻道才能使用靜音功能，請先使用 `/voice join`',
           flags: MessageFlags.Ephemeral,
         });
       }
@@ -396,8 +387,13 @@ function setupVoiceCommands(client) {
         components: [buildSilenceMenu(guildId)],
         flags: MessageFlags.Ephemeral,
       });
-    }
-  });
+}
+
+// ════════════════════════════════════════════════════════
+//  setupVoiceCommands：註冊合併後的 /voice 指令 + 按鈕/選單監聽
+// ════════════════════════════════════════════════════════
+function setupVoiceCommands(client) {
+  client.commands.set(voiceCommand.data.name, voiceCommand);
 
   // ── interactionCreate: silence 選單（防重複註冊）──────
   if (!silenceMenuBound) {
@@ -414,7 +410,7 @@ function setupVoiceCommands(client) {
       if (selected === 'start') {
         const connection = getVoiceConnection(guildId);
         if (!connection) {
-          return interaction.update({ content: '❌ Bot 不在語音頻道，請先使用 `/join`', components: [] });
+          return interaction.update({ content: '❌ Bot 不在語音頻道，請先使用 `/voice join`', components: [] });
         }
         if (getActiveLayer(guildId) === 'silence') {
           return interaction.update({
@@ -450,7 +446,7 @@ function setupVoiceCommands(client) {
       else if (selected === 'auto') {
         const connection = getVoiceConnection(guildId);
         if (!connection) {
-          return interaction.update({ content: '❌ Bot 不在語音頻道，請先使用 `/join`', components: [] });
+          return interaction.update({ content: '❌ Bot 不在語音頻道，請先使用 `/voice join`', components: [] });
         }
 
         if (silenceTimers.has(guildId)) {
@@ -489,7 +485,7 @@ function setupVoiceCommands(client) {
 
       if (!connection) {
         return interaction.reply({
-          content: '❌ Bot 不在語音頻道，請先 `/join`',
+          content: '❌ Bot 不在語音頻道，請先 `/voice join`',
           flags: MessageFlags.Ephemeral
         });
       }
@@ -505,7 +501,7 @@ function setupVoiceCommands(client) {
       const { ts } = parseHeyJqnCustomId(interaction.customId);
       if (ts > 0 && Date.now() - ts > HEYJQN_BTN_TTL_MS) {
         return interaction.reply({
-          content: '⌛ 這顆按鈕已過期，請重新使用 `/heyjqn`',
+          content: '⌛ 這顆按鈕已過期，請重新使用 `/voice record-button`',
           flags: MessageFlags.Ephemeral
         });
       }
@@ -589,7 +585,7 @@ function setupVoiceCommands(client) {
     });
   }
 
-  console.log('✅ 語音指令已載入（/join /leave /voice /stt /heyjqn /silence）');
+  console.log('✅ 語音指令已載入（/voice join|leave|status|stt|silence|record-button）');
 }
 
 module.exports = {

@@ -76,53 +76,58 @@ function setupBasicCommands(client) {
         }
     });
 
-    // ── /nh ─────────────────────────────────────────────
+    // ── /nh（合併 nh / nhs / nhr）───────────────────────
     client.commands.set('nh', {
         data: new SlashCommandBuilder()
             .setName('nh')
-            .setDescription('🔞 nhentai 直接連結')
-            .addIntegerOption(opt =>
-                opt.setName('code')
-                    .setDescription('nhentai 編號')
-                    .setRequired(true)
-                    .setMinValue(1)
+            .setDescription('🔞 nhentai 相關查詢')
+            .addSubcommand(sub =>
+                sub.setName('code')
+                    .setDescription('🔞 nhentai 直接連結')
+                    .addIntegerOption(opt =>
+                        opt.setName('code')
+                            .setDescription('nhentai 編號')
+                            .setRequired(true)
+                            .setMinValue(1)
+                    )
+            )
+            .addSubcommand(sub =>
+                sub.setName('search')
+                    .setDescription('🔞 nhentai 搜尋')
+                    .addStringOption(opt =>
+                        opt.setName('query')
+                            .setDescription('搜尋關鍵字')
+                            .setRequired(true)
+                    )
+            )
+            .addSubcommand(sub =>
+                sub.setName('random')
+                    .setDescription('🔞 nhentai 隨機')
             ),
 
         async execute(interaction) {
-            const code = interaction.options.getInteger('code');
-            await interaction.reply({ content: `https://nhentai.net/g/${code}/` });
-            console.log(`🔞 nhentai 查詢: ${code}`);
-        }
-    });
+            const sub = interaction.options.getSubcommand();
 
-    // ── /nhs ─────────────────────────────────────────────
-    client.commands.set('nhs', {
-        data: new SlashCommandBuilder()
-            .setName('nhs')
-            .setDescription('🔞 nhentai 搜尋')
-            .addStringOption(opt =>
-                opt.setName('query')
-                    .setDescription('搜尋關鍵字')
-                    .setRequired(true)
-            ),
+            if (sub === 'code') {
+                const code = interaction.options.getInteger('code');
+                await interaction.reply({ content: `https://nhentai.net/g/${code}/` });
+                console.log(`🔞 nhentai 查詢: ${code}`);
+                return;
+            }
 
-        async execute(interaction) {
-            const query = interaction.options.getString('query');
-            await interaction.reply({ content: `https://nhentai.net/search/?q=${encodeURIComponent(query)}` });
-            console.log(`🔍 nhentai 搜尋: ${query}`);
-        }
-    });
+            if (sub === 'search') {
+                const query = interaction.options.getString('query');
+                await interaction.reply({ content: `https://nhentai.net/search/?q=${encodeURIComponent(query)}` });
+                console.log(`🔍 nhentai 搜尋: ${query}`);
+                return;
+            }
 
-    // ── /nhr ─────────────────────────────────────────────
-    client.commands.set('nhr', {
-        data: new SlashCommandBuilder()
-            .setName('nhr')
-            .setDescription('🔞 nhentai 隨機'),
-
-        async execute(interaction) {
-            const randomCode = getRandom(620000);
-            await interaction.reply({ content: `https://nhentai.net/g/${randomCode}/` });
-            console.log(`🎲 nhentai 隨機: ${randomCode}`);
+            if (sub === 'random') {
+                const randomCode = getRandom(620000);
+                await interaction.reply({ content: `https://nhentai.net/g/${randomCode}/` });
+                console.log(`🎲 nhentai 隨機: ${randomCode}`);
+                return;
+            }
         }
     });
 
