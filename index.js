@@ -6,11 +6,10 @@ const { setupVoiceCommands }     = require('./handlers/voiceHandler');
 const { setupBasicCommands }     = require('./handlers/commandHandler');
 const { setupCustomResponses }   = require('./handlers/responseHandler');
 const { setupAICommands }        = require('./handlers/ai/aiHandler');
-const { setupGuguGenerator }     = require('./handlers/ai/gugugagaGenerator');
+// gugugagaGenerator.js 現在只匯出純函式，/gugu 已合併進 /ai gugu，由 setupAICommands 註冊
 const { setupAutoJoinCommands }  = require('./handlers/autoJoinHandler');
 const { setupTTSCommands }       = require('./handlers/voice/ttsHandler');
-const { setupSteamFreeNotifier } = require('./handlers/notice/steamFreeHandler');
-const { setupEpicFreeNotifier }  = require('./handlers/notice/epicFreeHandler'); 
+const { setupNoticeCommands }    = require('./handlers/notice/noticeHandler');
 
 // ── 導入分帳系統 ────────────────────────
 const { setupSplitbillCommands } = require('./handlers/splitbill/index');
@@ -39,11 +38,9 @@ setupVoiceCommands(client);
 setupBasicCommands(client);
 setupCustomResponses(client);
 setupAICommands(client);
-setupGuguGenerator(client);
 setupAutoJoinCommands(client);
 setupTTSCommands(client);
-setupSteamFreeNotifier(client);
-setupEpicFreeNotifier(client);
+setupNoticeCommands(client);
 
 // ── 🆕 注入分帳介面與唯一的 /splitbill 指令 ───────────────
 setupSplitbillCommands(client);
@@ -115,8 +112,8 @@ client.once('clientReady', async () => {
   // ── 音樂引擎初始化（需 async，在 ready 後執行）──────────
   // 順序重要：先注入引擎，再載入統一指令
   await setupOnlineMusicEngine(); // 1. 注入 online 引擎（含 yt-dlp 檢查）
-  setupLocalMusicEngine(client);  // 2. 注入 local 引擎 + /locallist 指令
-  setupUnifiedCommands(client);   // 3. 載入所有統一音樂指令
+  setupLocalMusicEngine(client);  // 2. 注入 local 引擎（/music local list 由 setupUnifiedCommands 註冊）
+  setupUnifiedCommands(client);   // 3. 載入合併後的 /music 指令
 
   console.log(`⚡ 已載入 ${client.commands.size} 個 Slash Commands`);
 
