@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { registerEngine, handleAutocomplete } = require('./unifiedQueue');
+const logger = require('../../utils/logger');
 
 // ── 音樂資料夾路徑 ────────────────────────────────────────
 const MUSIC_DIR = path.join(__dirname, '..', '..', 'data', 'music');
@@ -195,7 +196,7 @@ function setupLocalMusicEngine(client) {
     handleAutocomplete(interaction);
   });
 
-  console.log('✅ [LocalMusic] 引擎已載入（清單功能已合併進 /music local list）');
+  logger.debug('LocalMusic', '引擎已載入（清單功能已合併進 /music local list）');
 }
 
 module.exports = {

@@ -26,6 +26,7 @@ const {
 
 const { getGeminiResponseVoice } = require('./ai/aiHandler');
 const { playTTS } = require('./voice/ttsHandler');
+const bootSummary = require('../utils/bootSummary');
 
 // 改用 audioManager 統一管理靜音層
 const {
@@ -585,7 +586,7 @@ function setupVoiceCommands(client) {
     });
   }
 
-  console.log('✅ 語音指令已載入（/voice join|leave|status|stt|silence|record-button）');
+  bootSummary.report('語音頻道 (/voice)', 'ok', 'join / leave / stt / silence / record-button');
 }
 
 module.exports = {

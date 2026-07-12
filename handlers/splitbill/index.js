@@ -1,6 +1,7 @@
 'use strict';
 
 const { MessageFlags } = require('discord.js');
+const bootSummary = require('../../utils/bootSummary');
 const splitbillCmd = require('./commands/splitbill');
 const expenseUI = require('./interactions/expenseUI');
 const memberUI = require('./interactions/memberUI');
@@ -39,7 +40,7 @@ function setupSplitbillCommands(client) {
     }
   });
 
-  console.log(`✅ 面板版分帳系統已載入（統一入口：/splitbill）`);
+  bootSummary.report('分帳系統 (/splitbill)', 'ok', '多行程/多幣別記帳與結算');
 }
 
 /**

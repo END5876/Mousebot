@@ -14,6 +14,8 @@ const { registerEngine, stopAll } = require('./unifiedQueue');
 
 const cache   = require('./musicCache');
 const antiBot = require('./musicAntiBot');
+const logger  = require('../../utils/logger');
+const bootSummary = require('../../utils/bootSummary');
 
 const execAsync = promisify(exec);
 const ytdlpPath = 'yt-dlp';
@@ -46,20 +48,20 @@ const downloadingUrls = new Set();
 async function checkYtDlp() {
   try {
     const { stdout } = await execAsync(`${ytdlpPath} --version`);
-    console.log(`✅ yt-dlp 版本: ${stdout.trim()}`);
+    logger.debug('OnlineMusic', `yt-dlp 版本: ${stdout.trim()}`);
     return true;
   } catch {
-    console.error('❌ yt-dlp 未安裝');
+    logger.error('OnlineMusic', 'yt-dlp 未安裝');
     return false;
   }
 }
 
 async function checkFFmpeg() {
   for (const p of ['ffmpeg', '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg']) {
-    try { await execAsync(`${p} -version`); console.log(`✅ FFmpeg: ${p}`); return true; }
+    try { await execAsync(`${p} -version`); logger.debug('OnlineMusic', `FFmpeg: ${p}`); return true; }
     catch {}
   }
-  console.error('❌ FFmpeg 未找到');
+  logger.error('OnlineMusic', 'FFmpeg 未找到');
   return false;
 }
 
@@ -528,13 +530,15 @@ async function setupOnlineMusicEngine() {
 
   if (ytdlpOk && ffmpegOk) {
     const { bilibili, youtube, poToken } = antiBot.getCookieStatus();
-    console.log('✅ [OnlineMusic] 引擎已就緒');
-    console.log(bilibili ? '✅ Bilibili Cookies 已配置'  : '⚠️ 未配置 Bilibili Cookies');
-    console.log(youtube  ? '✅ YouTube Cookies 已配置'   : '⚠️ 未配置 YouTube Cookies（使用無帳號模式）');
-    console.log(poToken  ? '✅ YouTube PO Token 已配置'  : '⚠️ 未配置 YouTube PO Token（mweb client 將跳過）');
-    console.log(`📂 [Cache] 快取資料夾: ${cache.CACHE_DIR} (上限 ${cache.MAX_CACHE_SIZE_MB} MB)`);
+    const cookieBits = [
+      `Bilibili ${bilibili ? '✓' : '✗'}`,
+      `YouTube ${youtube ? '✓' : '✗（無帳號模式）'}`,
+      `PO Token ${poToken ? '✓' : '✗'}`,
+    ].join('、');
+    bootSummary.report('線上音樂 (YouTube/Bilibili)', 'ok', `yt-dlp + FFmpeg 就緒｜${cookieBits}`);
+    logger.debug('OnlineMusic', `快取資料夾: ${cache.CACHE_DIR}（上限 ${cache.MAX_CACHE_SIZE_MB} MB）`);
   } else {
-    console.warn('⚠️ [OnlineMusic] 引擎可能無法正常運作');
+    bootSummary.report('線上音樂 (YouTube/Bilibili)', 'warn', 'yt-dlp 或 FFmpeg 未就緒，功能可能無法正常運作');
   }
 
   registerEngine('bilibili', {

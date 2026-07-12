@@ -12,6 +12,8 @@ const {
   StringSelectMenuOptionBuilder,
   MessageFlags,
 } = require('discord.js');
+const logger = require('../utils/logger');
+const bootSummary = require('../utils/bootSummary');
 
 // ─── 狀態管理 ───────────────────────────────────────────
 let autoJoinEnabled = true;
@@ -68,7 +70,7 @@ async function joinTargetChannel(client) {
       }
     }
 
-    console.log(`🔊 自動加入語音頻道: ${channel.name} (${channelId})`);
+    logger.debug('AutoJoin', `嘗試加入語音頻道: ${channel.name} (${channelId})`);
     destroyExistingConnection(guildId);
     await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -82,7 +84,7 @@ async function joinTargetChannel(client) {
 
     try {
       await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
-      console.log(`✅ 已加入語音頻道: ${channel.name}`);
+      logger.success('AutoJoin', `已加入語音頻道: ${channel.name}`);
     } catch (readyErr) {
       console.error('❌ 等待連線就緒失敗:', readyErr.message);
       destroyExistingConnection(guildId);
@@ -130,7 +132,7 @@ function startAutoJoinCheck(client) {
       const isInTargetChannel = botMember?.voice?.channelId === channelId;
 
       if (!isInTargetChannel) {
-        console.log('🔄 Bot 不在目標頻道，嘗試自動加入...');
+        logger.debug('AutoJoin', 'Bot 不在目標頻道，嘗試自動加入...');
         await joinTargetChannel(client);
       }
     } catch (err) {
@@ -138,7 +140,7 @@ function startAutoJoinCheck(client) {
     }
   }, CHECK_INTERVAL_MS);
 
-  console.log(`✅ 自動加入檢查已啟動（每 ${CHECK_INTERVAL_MS / 1000} 秒）`);
+  logger.debug('AutoJoin', `檢查已啟動（每 ${CHECK_INTERVAL_MS / 1000} 秒）`);
 }
 
 function stopAutoJoinCheck() {
@@ -177,10 +179,17 @@ function setupAutoJoinCommands(client) {
 
   // ── Bot 就緒時啟動自動加入 ───────────────────────────
   client.once('clientReady', async () => {
-    console.log('🚀 Bot 就緒，啟動自動加入功能...');
+    logger.debug('AutoJoin', 'Bot 就緒，啟動自動加入功能...');
     startAutoJoinCheck(client);
 
-    console.log(`⏳ 等待 ${STARTUP_DELAY_MS / 1000} 秒後加入語音頻道...`);
+    const targetChannelId = process.env.TARGET_VOICE_CHANNEL_ID;
+    bootSummary.report(
+      '自動加入語音頻道',
+      targetChannelId ? 'ok' : 'off',
+      targetChannelId ? `每 ${CHECK_INTERVAL_MS / 1000} 秒檢查一次` : '未設定 TARGET_VOICE_CHANNEL_ID'
+    );
+
+    logger.debug('AutoJoin', `等待 ${STARTUP_DELAY_MS / 1000} 秒後加入語音頻道...`);
     setTimeout(() => {
       if (autoJoinEnabled) joinTargetChannel(client);
     }, STARTUP_DELAY_MS);
