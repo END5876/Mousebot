@@ -1,6 +1,7 @@
 const path = require('path');
 const fs   = require('fs');
 const { LOVER_MODE_USER_IDS, DEVELOPER_MODE_USER_IDS } = require('./aiSettings');
+const logger = require('../../utils/logger');
 
 // ════════════════════════════════════════════════════════
 //  常數
@@ -18,14 +19,14 @@ function loadModes() {
     try {
         if (!fs.existsSync(MODES_FILE_PATH)) {
             fs.writeFileSync(MODES_FILE_PATH, '{}', 'utf-8');
-            console.log('[ModeSelector] 已建立 userModes.json');
+            logger.debug('ModeSelector', '已建立 userModes.json');
             return new Map();
         }
         const raw = fs.readFileSync(MODES_FILE_PATH, 'utf-8');
         const obj = JSON.parse(raw);
         return new Map(Object.entries(obj));
     } catch (err) {
-        console.error('[ModeSelector] 載入 userModes.json 失敗：', err.message);
+        logger.warn('ModeSelector', `載入 userModes.json 失敗：${err.message}`);
         return new Map();
     }
 }
@@ -36,13 +37,13 @@ function saveModes(map) {
         const obj = Object.fromEntries(map);
         fs.writeFileSync(MODES_FILE_PATH, JSON.stringify(obj, null, 2), 'utf-8');
     } catch (err) {
-        console.error('[ModeSelector] 寫入 userModes.json 失敗：', err.message);
+        logger.error('ModeSelector', `寫入 userModes.json 失敗：${err.message}`);
     }
 }
 
 // 啟動時載入
 const userModeOverride = loadModes();
-console.log(`[ModeSelector] 已載入 ${userModeOverride.size} 筆使用者模式設定`);
+logger.debug('ModeSelector', `已載入 ${userModeOverride.size} 筆使用者模式設定`);
 
 // ════════════════════════════════════════════════════════
 //  模式操作

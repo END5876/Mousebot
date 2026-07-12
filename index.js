@@ -1,5 +1,7 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, REST, Routes, Collection, MessageFlags } = require('discord.js');
+const logger = require('./utils/logger');
+const bootSummary = require('./utils/bootSummary');
 
 // ── 導入所有處理器 ─────────────────────────────────────────
 const { setupVoiceCommands }     = require('./handlers/voiceHandler');
@@ -92,22 +94,21 @@ async function registerSlashCommands() {
   const commands = [...client.commands.values()].map(cmd => cmd.data.toJSON());
 
   try {
-    console.log('🔄 正在註冊 Slash Commands...');
+    logger.debug('Boot', '正在註冊 Slash Commands...');
     await rest.put(
       Routes.applicationCommands(process.env.CLIENT_ID),
       { body: commands }
     );
-    console.log(`✅ Slash Commands 註冊完成（共 ${commands.length} 個）`);
+    bootSummary.report('Slash Commands 註冊', 'ok', `已同步 ${commands.length} 個指令到 Discord`);
   } catch (err) {
+    bootSummary.report('Slash Commands 註冊', 'off', `註冊失敗: ${err.message}`);
     console.error('❌ Slash Commands 註冊失敗:', err);
   }
 }
 
 // ── Bot 啟動 ───────────────────────────────────────────────
 client.once('clientReady', async () => {
-  console.log(`✅ Bot 已登入為 ${client.user.tag}`);
-  console.log(`📊 已加入 ${client.guilds.cache.size} 個伺服器`);
-  console.log(`🤖 AI 功能已啟用 (Gemini API)`);
+  logger.success('Discord', `已登入為 ${client.user.tag}（${client.guilds.cache.size} 個伺服器）`);
 
   // ── 音樂引擎初始化（需 async，在 ready 後執行）──────────
   // 順序重要：先注入引擎，再載入統一指令
@@ -115,14 +116,15 @@ client.once('clientReady', async () => {
   setupLocalMusicEngine(client);  // 2. 注入 local 引擎（/music local list 由 setupUnifiedCommands 註冊）
   setupUnifiedCommands(client);   // 3. 載入合併後的 /music 指令
 
-  console.log(`⚡ 已載入 ${client.commands.size} 個 Slash Commands`);
-
   client.user.setPresence({
     activities: [{ name: '逼逼 機油好難喝', type: 2 }],
     status: 'online'
   });
 
   await registerSlashCommands();
+
+  // ── 所有模組都已回報狀態，統一印出開機摘要 ────────────
+  bootSummary.print();
 });
 
 // ── 錯誤處理 ──────────────────────────────────────────────

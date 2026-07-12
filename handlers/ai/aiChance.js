@@ -1,5 +1,6 @@
 const fs   = require('fs');
 const path = require('path');
+const logger = require('../../utils/logger');
 
 // ════════════════════════════════════════════════════════
 //  路徑設定
@@ -36,12 +37,12 @@ function loadReplyChance() {
         if (fs.existsSync(CHANCE_PATH)) {
             const data = JSON.parse(fs.readFileSync(CHANCE_PATH, 'utf-8'));
             chanceMap  = new Map(Object.entries(data));
-            console.log(`[ReplyChance] 已載入 ${chanceMap.size} 筆伺服器設定`);
+            logger.debug('ReplyChance', `已載入 ${chanceMap.size} 筆伺服器設定`);
         } else {
-            console.log('[ReplyChance] 找不到設定檔，使用預設值');
+            logger.debug('ReplyChance', '找不到設定檔，使用預設值');
         }
     } catch (err) {
-        console.error('[ReplyChance] 載入失敗，使用預設值：', err.message);
+        logger.warn('ReplyChance', `載入失敗，使用預設值：${err.message}`);
     }
 }
 
@@ -50,12 +51,12 @@ function loadDisabledChannels() {
         if (fs.existsSync(DISABLED_PATH)) {
             const data = JSON.parse(fs.readFileSync(DISABLED_PATH, 'utf-8'));
             disabledChannels = new Set(Array.isArray(data) ? data : []);
-            console.log(`[ReplyChance] 已載入 ${disabledChannels.size} 個停用頻道`);
+            logger.debug('ReplyChance', `已載入 ${disabledChannels.size} 個停用頻道`);
         } else {
-            console.log('[ReplyChance] 找不到頻道停用設定檔，預設全部啟用');
+            logger.debug('ReplyChance', '找不到頻道停用設定檔，預設全部啟用');
         }
     } catch (err) {
-        console.error('[ReplyChance] 頻道停用設定載入失敗：', err.message);
+        logger.warn('ReplyChance', `頻道停用設定載入失敗：${err.message}`);
     }
 }
 

@@ -4,6 +4,7 @@
 
 const { SlashCommandBuilder, ChannelType, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const { createNoticeService, createPollingLoop } = require('./noticeService');
+const bootSummary = require('../../utils/bootSummary');
 
 const steamProvider = require('./steamFreeHandler');
 const epicProvider  = require('./epicFreeHandler');
@@ -224,7 +225,17 @@ function setupNoticeCommands(client) {
   steamPolling.start();
   epicPolling.start();
 
-  console.log('✅ [Notify] /notify 指令已載入（Steam + Epic 限免通知）');
+  const steamCount = steamService.listChannels().length;
+  const epicCount  = epicService.listChannels().length;
+  const totalCount = steamCount + epicCount;
+
+  bootSummary.report(
+    '限免通知 (/notify)',
+    totalCount > 0 ? 'ok' : 'off',
+    totalCount > 0
+      ? `Steam ${steamCount} 頻道、Epic ${epicCount} 頻道`
+      : '尚未設定任何通知頻道，用 /notify channel 新增'
+  );
 }
 
 module.exports = { setupNoticeCommands };

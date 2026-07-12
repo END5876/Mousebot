@@ -19,6 +19,7 @@ const {
   _createIdleStopHandler,
 } = require('./playback');
 const { handlePlay, handleAutocomplete } = require('./search');
+const bootSummary = require('../../../utils/bootSummary');
 
 // ════════════════════════════════════════════════════════
 //  setupUnifiedCommands
@@ -163,7 +164,7 @@ function setupUnifiedCommands(client) {
   client.commands.set(playCommand.data.name, playCommand);
   client.commands.set(musicCommand.data.name, musicCommand);
 
-  console.log('✅ [UnifiedQueue] /play 與 /music 指令已載入');
+  bootSummary.report('音樂播放 (/play, /music)', 'ok', 'YouTube / Bilibili / 本地音樂佇列已就緒');
 }
 
 // ════════════════════════════════════════════════════════

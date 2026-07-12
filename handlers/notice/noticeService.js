@@ -8,6 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const logger = require('../../utils/logger');
 
 const MAX_AGE_DAYS = 90;
 
@@ -35,9 +36,9 @@ function createNoticeService({ label, notifiedFileName, channelFileName }) {
       } else if (Array.isArray(parsed)) {
         parsed.forEach(id => notifiedGames.set(id, Date.now()));
       }
-      console.log(`[${label}] 已載入 ${notifiedGames.size} 筆通知記錄`);
+      logger.debug(label, `已載入 ${notifiedGames.size} 筆通知記錄`);
     } catch (e) {
-      console.error(`⚠️ [${label}] 讀取已通知清單失敗:`, e.message);
+      logger.warn(label, `讀取已通知清單失敗: ${e.message}`);
     }
   }
 
@@ -52,9 +53,9 @@ function createNoticeService({ label, notifiedFileName, channelFileName }) {
         notifyChannelIds = [config.channelId];
       }
       if (notifyChannelIds.length > 0)
-        console.log(`[${label}] 已載入 ${notifyChannelIds.length} 個通知頻道`);
+        logger.debug(label, `已載入 ${notifyChannelIds.length} 個通知頻道`);
     } catch (e) {
-      console.error(`⚠️ [${label}] 讀取頻道設定失敗:`, e.message);
+      logger.warn(label, `讀取頻道設定失敗: ${e.message}`);
     }
   }
 
@@ -184,11 +185,11 @@ function createPollingLoop({ client, service, getFreeGames, buildMessage, idFiel
 
   function start() {
     client.once('clientReady', () => {
-      console.log(`[${service.label}] Bot 啟動時間：${new Date().toLocaleString('zh-TW')}`);
+      logger.debug(service.label, `Bot 啟動時間：${new Date().toLocaleString('zh-TW')}`);
       if (service.channelIds.length === 0) {
-        console.warn(`⚠️ [${service.label}] 尚未設定通知頻道，請使用 /notify channel 新增。`);
+        logger.debug(service.label, '尚未設定通知頻道，請使用 /notify channel 新增。');
       } else {
-        console.log(`✅ ${service.label} 限免通知已啟用（${service.channelIds.length} 個頻道，每 ${checkIntervalMs / 60000} 分鐘檢查）`);
+        logger.debug(service.label, `限免通知已啟用（${service.channelIds.length} 個頻道，每 ${checkIntervalMs / 60000} 分鐘檢查）`);
       }
       checkAndNotify().catch(err => console.error(`⚠️ [${service.label}] 啟動時檢查失敗:`, err.message));
       setInterval(

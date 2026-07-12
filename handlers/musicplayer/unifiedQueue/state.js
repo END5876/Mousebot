@@ -3,6 +3,8 @@
 // 此檔案被 playback.js / search.js / commands.js 共同 require，
 // 確保三者操作的是同一份 Map 實例（單例狀態）。
 
+const logger = require('../../../utils/logger');
+
 // ════════════════════════════════════════════════════════
 //  引擎注入（由各 handler 在 setup 時呼叫）
 // ════════════════════════════════════════════════════════
@@ -10,7 +12,7 @@ const _engines = { bilibili: null, local: null };
 
 function registerEngine(type, engine) {
   _engines[type] = engine;
-  console.log(`✅ [UnifiedQueue] 引擎已注入: ${type}`);
+  logger.debug('UnifiedQueue', `引擎已注入: ${type}`);
 }
 
 // ════════════════════════════════════════════════════════

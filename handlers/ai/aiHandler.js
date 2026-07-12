@@ -38,6 +38,7 @@ const {
 } = require('./aiChance');
 
 const { generateGuguArticle, getGuguErrorMessage } = require('./gugugagaGenerator');
+const bootSummary = require('../../utils/bootSummary');
 
 const SETMODE_ALLOWED_USER_ID = '598054316510806017';
 
@@ -354,6 +355,12 @@ async function handleGugu(interaction) {
 // ════════════════════════════════════════════════════════
 function setupAICommands(client) {
     client.commands.set(aiCommand.data.name, aiCommand);
+
+    bootSummary.report(
+        'AI 對話 (/ai)',
+        process.env.GEMINI_API_KEY ? 'ok' : 'off',
+        process.env.GEMINI_API_KEY ? 'Gemini API 已連線，9 種人格模式可用' : '未設定 GEMINI_API_KEY，AI 功能停用'
+    );
 
     client.on('messageCreate', async message => {
         if (message.author.bot) return;

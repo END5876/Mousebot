@@ -6,6 +6,8 @@ const { execSync, spawn } = require('child_process');
 const fs   = require('fs');
 const path = require('path');
 const http = require('http');
+const logger = require('../../utils/logger');
+const bootSummary = require('../../utils/bootSummary');
 const dns  = require('dns').promises;
 
 // audioManager 統一管理 TTS 層
@@ -102,10 +104,10 @@ async function resolveSoVITSHost() {
     const addresses = await resolver.resolve4(SOVITS_HOST);
     cachedSoVITSIP = addresses[0];
     cacheExpireAt  = now + DNS_CACHE_TTL_MS;
-    console.log(`🌐 [DNS] ${SOVITS_HOST} → ${cachedSoVITSIP}`);
+    logger.debug('SoVITS-DNS', `${SOVITS_HOST} → ${cachedSoVITSIP}`);
     return cachedSoVITSIP;
   } catch (err) {
-    console.warn(`⚠️ [DNS] 解析失敗: ${err.message}，使用原始 hostname`);
+    logger.debug('SoVITS-DNS', `解析失敗: ${err.message}，使用原始 hostname`);
     return SOVITS_HOST;
   }
 }
@@ -661,18 +663,25 @@ function buildModelChoices() {
 // ════════════════════════════════════════════════════════
 function setupTTSCommands(client) {
   const count = loadModelsFromEnv();
-  console.log(`📦 從 .env 載入了 ${count} 個 TTS 模型: ${Object.keys(TTS_MODELS).join(', ')}`);
-  if (count === 0) console.warn('⚠️ 未找到任何 SOVITS_MODEL_* 設定，請檢查 .env');
+  logger.debug('TTS', `從 .env 載入了 ${count} 個 TTS 模型: ${Object.keys(TTS_MODELS).join(', ')}`);
+  if (count === 0) logger.debug('TTS', '未找到任何 SOVITS_MODEL_* 設定');
 
   hasEdgeTTS = checkEdgeTTS();
-  console.log(hasEdgeTTS ? '✅ edge-tts 已就緒（作為 fallback）' : '⚠️ edge-tts 未安裝，fallback 不可用');
-  console.log(`🎙️ GPT-SoVITS 目標: http://${SOVITS_HOST}:${SOVITS_PORT}`);
+  logger.debug('TTS', hasEdgeTTS ? 'edge-tts 已就緒（作為 fallback）' : 'edge-tts 未安裝，fallback 不可用');
+  logger.debug('TTS', `GPT-SoVITS 目標: http://${SOVITS_HOST}:${SOVITS_PORT}`);
 
+  // SoVITS 連線狀態需要非同步的 DNS + 健康檢查才會知道結果，
+  // 完成後才回報摘要（clientReady 通常會晚於這個檢查完成，時序上沒問題）
   resolveSoVITSHost().then(ip => {
-    console.log(`✅ [DNS] 預解析完成: ${SOVITS_HOST} → ${ip}`);
-    // 啟動時立即做一次健康檢查，確認 SoVITS 狀態
     checkSoVITSHealth().then(ok => {
-      console.log(ok ? '✅ [SoVITS] 服務正常' : '⚠️ [SoVITS] 服務不可用，將使用 edge-tts fallback');
+      const modelNote = count > 0 ? `${count} 個模型` : '無自訂模型';
+      if (ok) {
+        bootSummary.report('文字轉語音 (/tts)', 'ok', `GPT-SoVITS 連線正常（${ip}）｜${modelNote}`);
+      } else if (hasEdgeTTS) {
+        bootSummary.report('文字轉語音 (/tts)', 'warn', `SoVITS 離線，已 fallback 至 edge-tts｜${modelNote}`);
+      } else {
+        bootSummary.report('文字轉語音 (/tts)', 'off', 'SoVITS 離線且未安裝 edge-tts，TTS 無法運作');
+      }
     });
   });
 
@@ -753,7 +762,7 @@ function setupTTSCommands(client) {
         const connection = getVoiceConnection(guildId);
         if (!connection) {
           return interaction.reply({
-            content: '❌ Bot 不在語音頻道！請先使用 `/join` 加入',
+            content: '❌ Bot 不在語音頻道！請先使用 `/voice join` 加入',
             flags: MessageFlags.Ephemeral,
           });
         }
@@ -838,7 +847,7 @@ function setupTTSCommands(client) {
     }
   });
 
-  console.log('✅ TTS Slash Commands 已載入（/tts say / stop / model / edgevoice）');
+  logger.debug('TTS', 'Slash Commands 已載入（/tts say / stop / model / edgevoice）');
 }
 
 module.exports = { setupTTSCommands, playTTS, stopTTS };

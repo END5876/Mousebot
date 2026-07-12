@@ -5,6 +5,7 @@
 const { spawn } = require('child_process');
 const fs   = require('fs');
 const path = require('path');
+const logger = require('../../utils/logger');
 
 const ytdlpPath = 'yt-dlp';
 
@@ -19,7 +20,7 @@ const MAX_CACHE_SIZE_MB = parseInt(process.env.MAX_CACHE_SIZE_MB || '2048', 10);
 function ensureCacheDir() {
   if (!fs.existsSync(CACHE_DIR)) {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
-    console.log(`📁 [Cache] 建立快取資料夾: ${CACHE_DIR}`);
+    logger.debug('Cache', `已建立快取資料夾: ${CACHE_DIR}`);
   }
 }
 

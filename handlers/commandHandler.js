@@ -1,4 +1,5 @@
 const { EmbedBuilder, SlashCommandBuilder, MessageFlags } = require('discord.js');
+const bootSummary = require('../utils/bootSummary');
 
 const SAY_AUTHORIZED_ID = process.env.SAY_AUTHORIZED_ID;
 
@@ -160,7 +161,7 @@ function setupBasicCommands(client) {
         }
     });
 
-    console.log('✅ 基本指令已載入');
+    bootSummary.report('基本指令', 'ok', 'ping / serverinfo / say / nh');
 }
 
 module.exports = { setupBasicCommands };

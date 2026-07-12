@@ -5,6 +5,7 @@
 
 const fs   = require('fs');
 const path = require('path');
+const logger = require('../../utils/logger');
 
 // ════════════════════════════════════════════════════════
 //  Proxy 設定 (Cloudflare WARP)
@@ -12,9 +13,9 @@ const path = require('path');
 const WARP_PROXY = process.env.WARP_PROXY_URL;
 
 if (WARP_PROXY) {
-  console.log(`✅ [Proxy] 已設定 WARP_PROXY_URL，YouTube 請求將透過 Proxy 轉發: ${WARP_PROXY}`);
+  logger.debug('Proxy', `已設定 WARP_PROXY_URL，YouTube 請求將透過 Proxy 轉發: ${WARP_PROXY}`);
 } else {
-  console.log('ℹ️ [Proxy] 未設定 WARP_PROXY_URL，YouTube 請求將直接使用本地網路連線');
+  logger.debug('Proxy', '未設定 WARP_PROXY_URL，YouTube 請求將直接使用本地網路連線');
 }
 
 // ════════════════════════════════════════════════════════
@@ -99,7 +100,7 @@ function isYouTubeUrl(url) {
 
 function prepareBilibiliCookies() {
   if (fs.existsSync(COOKIES_PATH)) {
-    console.log('✅ [Bilibili] 找到 cookies.txt');
+    logger.debug('Bilibili', '找到 cookies.txt');
     BILIBILI_COOKIES_FILE  = COOKIES_PATH;
     BILIBILI_COOKIE_HEADER = null;
     return;
@@ -108,7 +109,7 @@ function prepareBilibiliCookies() {
   const biliJct    = process.env.BILIBILI_BILI_JCT;
   const dedeUserId = process.env.BILIBILI_DEDEUSERID;
   if (sessdata) {
-    console.log('✅ [Bilibili] 從環境變數載入 Cookies（記憶體模式）');
+    logger.debug('Bilibili', '從環境變數載入 Cookies（記憶體模式）');
     const parts = [`SESSDATA=${sessdata}`];
     if (biliJct)    parts.push(`bili_jct=${biliJct}`);
     if (dedeUserId) parts.push(`DedeUserID=${dedeUserId}`);
@@ -116,20 +117,20 @@ function prepareBilibiliCookies() {
     BILIBILI_COOKIE_HEADER = parts.join('; ');
     return;
   }
-  console.warn('⚠️ [Bilibili] 未找到 Cookies，播放可能失敗');
+  logger.debug('Bilibili', '未找到 Cookies，播放可能失敗');
   BILIBILI_COOKIES_FILE  = null;
   BILIBILI_COOKIE_HEADER = null;
 }
 
 function prepareYouTubeCookies() {
   if (fs.existsSync(YT_COOKIES_PATH)) {
-    console.log('✅ [YouTube] 找到 yt_cookies.txt');
+    logger.debug('YouTube', '找到 yt_cookies.txt');
     YT_COOKIES_FILE   = YT_COOKIES_PATH;
     YT_COOKIE_HEADER  = null;
     return;
   }
   if (fs.existsSync(COOKIES_PATH)) {
-    console.log('✅ [YouTube] 使用共用 cookies.txt');
+    logger.debug('YouTube', '使用共用 cookies.txt');
     YT_COOKIES_FILE   = COOKIES_PATH;
     YT_COOKIE_HEADER  = null;
     return;
@@ -137,7 +138,7 @@ function prepareYouTubeCookies() {
   const ytSessId = process.env.YOUTUBE_SESSION_ID;
   const ytVisitor = process.env.YOUTUBE_VISITOR_INFO;
   if (ytSessId || ytVisitor) {
-    console.log('✅ [YouTube] 從環境變數載入 Cookies（記憶體模式）');
+    logger.debug('YouTube', '從環境變數載入 Cookies（記憶體模式）');
     const parts = [];
     if (ytSessId)  parts.push(`SID=${ytSessId}`);
     if (ytVisitor) parts.push(`VISITOR_INFO1_LIVE=${ytVisitor}`);
@@ -145,7 +146,7 @@ function prepareYouTubeCookies() {
     YT_COOKIE_HEADER  = parts.join('; ');
     return;
   }
-  console.warn('⚠️ [YouTube] 未設定 Cookies，使用無帳號模式');
+  logger.debug('YouTube', '未設定 Cookies，使用無帳號模式');
   YT_COOKIES_FILE   = null;
   YT_COOKIE_HEADER  = null;
 }
