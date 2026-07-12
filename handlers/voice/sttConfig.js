@@ -5,6 +5,7 @@ const http = require('http');
 const fs   = require('fs');
 const path = require('path');
 const axios = require('axios');
+const bootSummary = require('../../utils/bootSummary');
 
 // ── 路徑設定 ────────────────────────────────────────────
 const WAKEUP_VOICE_PATH = path.join(__dirname, 'sttwakeupvoice.wav');
@@ -58,9 +59,9 @@ const requiredEnvVars = [
 const missingVars = requiredEnvVars.filter(v => process.env[v] === undefined);
 
 if (missingVars.length > 0) {
-  console.error(`[STT 錯誤] 缺少環境變數: ${missingVars.join(', ')}`);
+  bootSummary.report('語音辨識 STT', 'off', `缺少環境變數: ${missingVars.join(', ')}`);
 } else {
-  console.log('[STT] ✅ 所有環境變數載入成功');
+  bootSummary.report('語音辨識 STT', 'ok', '喚醒詞偵測 + Groq Whisper 已就緒');
 }
 
 // ══════════════════════════════════════════════════════════
