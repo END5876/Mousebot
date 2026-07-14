@@ -338,7 +338,7 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
   const tooLongToCache = !item.durationSec || item.durationSec > MAX_CACHE_DURATION_SEC;
 
   try {
-    const cachedPath = cache.getCachedPath(item.url, item.title);
+    const cachedPath = cache.getCachedPath(item.url, item.title, item.author);
 
     if (cachedPath) {
       if (!silent) console.log(`✅ [Cache] 快取命中，直接播放: ${path.basename(cachedPath)}`);
@@ -374,6 +374,7 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
         cache.downloadAndCache(
           item.url,
           item.title,
+          item.author,
           dlArgs,
           (progress) => {
             if (progress - lastProgress >= 20) {
@@ -580,10 +581,10 @@ module.exports = {
   checkPlaylist,
   searchMulti,
   getCachedPath: cache.getCachedPath,
-  downloadAndCache: (url, title, onProgress) => {
+  downloadAndCache: (url, title, author, onProgress) => {
     const args = antiBot.isYouTubeUrl(url)
       ? antiBot.buildYouTubeArgs(url, antiBot.YT_CLIENT_STRATEGIES[0], false)
       : antiBot.buildBilibiliArgs(url, false);
-    return cache.downloadAndCache(url, title, args, onProgress);
+    return cache.downloadAndCache(url, title, author, args, onProgress);
   },
 };
