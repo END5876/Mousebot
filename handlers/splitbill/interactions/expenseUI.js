@@ -7,6 +7,7 @@ const {
 const storage = require('../utils/storage');
 const { resolveTrip, memberDisplay } = require('../utils/tripHelper');
 const { equalSplit, fetchRealTimeRate } = require('../utils/calculator');
+const { addDeposit } = require('../utils/deposit'); 
 const { showMainMenu } = require('../commands/splitbill');
 
 module.exports = {
@@ -24,11 +25,37 @@ module.exports = {
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('exp_btn_add_start').setLabel('➕ 新增花費').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('exp_btn_deposit_start').setLabel('💰 收取訂金').setStyle(ButtonStyle.Success), // 🟢 新增預收款按鈕
         new ButtonBuilder().setCustomId('exp_btn_list').setLabel('🧾 歷史與刪除').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主控台').setStyle(ButtonStyle.Secondary)
       );
 
       return interaction.update({ embeds: [embed], components: [row] });
+    }
+
+    // 處理「收取訂金」流程 1/3：選擇收款人
+    if (customId === 'exp_btn_deposit_start') {
+      if (!trip.members || trip.members.length < 2) {
+        return interaction.reply({ content: '⚠️ 此行程成員不足兩人，無法使用訂金功能！', flags: MessageFlags.Ephemeral });
+      }
+
+      const embed = new EmbedBuilder()
+        .setColor(0x2ecc71)
+        .setTitle('💰 步驟 1/3：選擇收款人')
+        .setDescription('誰負責「代收」這筆訂金？\n*(例如：負責統一訂機票/住宿的人)*');
+
+      const selectRow = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId('exp_select_deposit_collector')
+          .setPlaceholder('選擇收款人...')
+          .addOptions(trip.members.slice(0, 25).map(m => ({ label: m.name, value: m.id })))
+      );
+
+      const navRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('exp_nav').setLabel('⬅️ 取消並返回').setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.update({ embeds: [embed], components: [selectRow, navRow] });
     }
 
     if (customId === 'exp_btn_add_start') {
@@ -63,18 +90,29 @@ module.exports = {
     }
 
     if (customId === 'exp_btn_list') {
-      if (!trip.expenses.length) {
-        return interaction.reply({ content: '📭 目前尚無任何記帳紀錄。', flags: MessageFlags.Ephemeral });
+      if (!trip.expenses.length && (!trip.deposits || !trip.deposits.length)) {
+        return interaction.reply({ content: '📭 目前尚無任何記帳或訂金紀錄。', flags: MessageFlags.Ephemeral });
       }
 
-      const recent = [...trip.expenses].sort((a, b) => b.createdAt - a.createdAt).slice(0, 10);
+      // 合併 expenses 和 deposits 來顯示歷史紀錄
+      const allRecords = [
+        ...trip.expenses.map(e => ({ ...e, type: 'expense' })),
+        ...(trip.deposits || []).map(d => ({ ...d, type: 'deposit' }))
+      ].sort((a, b) => b.createdAt - a.createdAt).slice(0, 10);
+
       const embed = new EmbedBuilder()
         .setColor(0x3498db)
         .setTitle(`🧾 「${trip.name}」最近 10 筆帳目紀錄`)
         .setDescription(
-          recent.map(e => {
-            const payers = e.payers.map(p => memberDisplay(trip, p.userId)).join('、');
-            return `\`${e.id}\` **${e.description}** — ${e.amount} ${e.currency} (${payers} 代墊)`;
+          allRecords.map(r => {
+            if (r.type === 'expense') {
+              const payers = r.payers.map(p => memberDisplay(trip, p.userId)).join('、');
+              return `\`[花費]\` **${r.description}** — ${r.amount} ${r.currency} (${payers} 代墊)`;
+            } else {
+              const payer = memberDisplay(trip, r.payerId);
+              const collector = memberDisplay(trip, r.collectorId);
+              return `\`[訂金]\` **${payer} 預付給 ${collector}** — ${r.amount} ${r.currency} ${r.note ? `(${r.note})` : ''}`;
+            }
           }).join('\n')
         );
 
@@ -82,9 +120,9 @@ module.exports = {
         new StringSelectMenuBuilder()
           .setCustomId('exp_select_delete')
           .setPlaceholder('選擇一筆帳目將其刪除...')
-          .addOptions(recent.map(e => ({
-            label: `${e.description} (${e.amount} ${e.currency})`,
-            value: e.id
+          .addOptions(allRecords.map(r => ({
+            label: r.type === 'expense' ? `[花費] ${r.description} (${r.amount} ${r.currency})` : `[訂金] ${memberDisplay(trip, r.payerId, true)} 給 ${memberDisplay(trip, r.collectorId, true)} (${r.amount})`,
+            value: `${r.type}_${r.id}`
           })))
       );
 
@@ -123,6 +161,42 @@ module.exports = {
   },
 
   async handleModal(interaction, cache) {
+    // 🟢 處理「收取訂金」流程 3/3：接收金額與備註並儲存
+    if (interaction.customId === 'exp_modal_deposit') {
+      const { guildId, user } = interaction;
+      const { trip } = resolveTrip(guildId);
+      const state = cache.get(user.id);
+
+      if (!state || !state.depositCollectorId || !state.depositPayerId) {
+        return interaction.reply({ content: '⚠️ 快取失效，請重新操作。', flags: MessageFlags.Ephemeral });
+      }
+
+      const amount = parseFloat(interaction.fields.getTextInputValue('amount'));
+      const note = interaction.fields.getTextInputValue('note');
+
+      if (isNaN(amount) || amount <= 0) {
+        return interaction.reply({ content: '⚠️ 請輸入正確的大於 0 的金額數字。', flags: MessageFlags.Ephemeral });
+      }
+
+      try {
+        const deposit = addDeposit(trip, {
+          collectorId: state.depositCollectorId,
+          payerId: state.depositPayerId,
+          amount,
+          currency: trip.baseCurrency, // 訂金預設使用基準幣別
+          note
+        });
+        
+        storage.persist();
+        cache.delete(user.id);
+
+        const msg = `✅ **預收款紀錄成功！** <@${deposit.payerId}> 預付了 ${deposit.amount} ${deposit.currency} 給 <@${deposit.collectorId}> ${note ? `(${note})` : ''}`;
+        return showMainMenu(interaction, msg);
+      } catch (err) {
+        return interaction.reply({ content: `❌ 錯誤：${err.message}`, flags: MessageFlags.Ephemeral });
+      }
+    }
+
     if (interaction.customId.startsWith('exp_modal_add_')) {
       const { guildId, user } = interaction;
       const { trip } = resolveTrip(guildId);
@@ -227,6 +301,56 @@ module.exports = {
     const { customId, guildId, values, user } = interaction;
     const { trip } = resolveTrip(guildId);
 
+    // 🟢 處理「收取訂金」流程 2/3：選擇付款人
+    if (customId === 'exp_select_deposit_collector') {
+      cache.set(user.id, { depositCollectorId: values[0] });
+      
+      const embed = new EmbedBuilder()
+        .setColor(0x2ecc71)
+        .setTitle('💰 步驟 2/3：選擇付款人')
+        .setDescription('誰「付錢」給了收款人？');
+
+      const selectRow = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId('exp_select_deposit_payer')
+          .setPlaceholder('選擇付款人...')
+          .addOptions(trip.members.filter(m => m.id !== values[0]).slice(0, 25).map(m => ({ label: m.name, value: m.id })))
+      );
+
+      return interaction.update({ embeds: [embed], components: [selectRow] });
+    }
+
+    // 🟢 處理「收取訂金」流程：彈出金額輸入 Modal
+    if (customId === 'exp_select_deposit_payer') {
+      const state = cache.get(user.id);
+      if (!state) return interaction.reply({ content: '⚠️ 快取失效。', flags: MessageFlags.Ephemeral });
+      
+      state.depositPayerId = values[0];
+
+      const modal = new ModalBuilder()
+        .setCustomId('exp_modal_deposit')
+        .setTitle('💰 步驟 3/3：輸入訂金金額');
+
+      const amountInput = new TextInputBuilder()
+        .setCustomId('amount')
+        .setLabel(`金額 (單位: ${trip.baseCurrency})`)
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+        
+      const noteInput = new TextInputBuilder()
+        .setCustomId('note')
+        .setLabel('備註 (選填，例如：機票+住宿訂金)')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false);
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(amountInput), 
+        new ActionRowBuilder().addComponents(noteInput)
+      );
+      
+      return interaction.showModal(modal);
+    }
+
     if (customId === 'exp_select_currency') {
       const selectedCurrency = values[0];
       const modal = new ModalBuilder()
@@ -279,14 +403,22 @@ module.exports = {
     }
 
     if (customId === 'exp_select_delete') {
-      const expenseId = values[0];
-      const idx = trip.expenses.findIndex(e => e.id === expenseId);
-      if (idx === -1) return interaction.reply({ content: '⚠️ 找不到此帳目。', flags: MessageFlags.Ephemeral });
+      const [type, id] = values[0].split('_', 2);
+      const realId = values[0].substring(type.length + 1); // 取得真正的 ID
 
-      const deleted = trip.expenses.splice(idx, 1)[0];
-      storage.persist();
-
-      return showMainMenu(interaction, `🗑️ 已成功刪除帳目：**${deleted.description}** (${deleted.amount} ${deleted.currency})`);
+      if (type === 'expense') {
+        const idx = trip.expenses.findIndex(e => e.id === realId);
+        if (idx === -1) return interaction.reply({ content: '⚠️ 找不到此花費帳目。', flags: MessageFlags.Ephemeral });
+        const deleted = trip.expenses.splice(idx, 1)[0];
+        storage.persist();
+        return showMainMenu(interaction, `🗑️ 已成功刪除花費：**${deleted.description}** (${deleted.amount} ${deleted.currency})`);
+      } else if (type === 'deposit') {
+        const idx = trip.deposits.findIndex(d => d.id === realId);
+        if (idx === -1) return interaction.reply({ content: '⚠️ 找不到此訂金紀錄。', flags: MessageFlags.Ephemeral });
+        const deleted = trip.deposits.splice(idx, 1)[0];
+        storage.persist();
+        return showMainMenu(interaction, `🗑️ 已成功刪除訂金紀錄：**${memberDisplay(trip, deleted.payerId, true)} 預付給 ${memberDisplay(trip, deleted.collectorId, true)}** (${deleted.amount} ${deleted.currency})`);
+      }
     }
   }
 };

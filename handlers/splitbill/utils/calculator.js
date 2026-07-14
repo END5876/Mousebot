@@ -49,13 +49,14 @@ function validatePayers(amount, payers) {
 }
 
 /**
- * 計算行程內所有成員的淨額 (已修復 Rounding Leak 版本)
+ * 計算行程內所有成員的淨額 (包含一般花費與預收款抵銷)
  */
 function calcNetBalances(trip) {
   const net = {};
-  for (const m of trip.members) net[m.id] = 0;
+  for (const m of (trip.members || [])) net[m.id] = 0;
 
-  for (const exp of trip.expenses) {
+  // 1. 計算一般花費 (expenses)
+  for (const exp of (trip.expenses || [])) {
     let payerBaseSum = 0;
     for (let i = 0; i < exp.payers.length; i++) {
       const p = exp.payers[i];
@@ -66,7 +67,9 @@ function calcNetBalances(trip) {
         baseAmount = convertPayerOrShareToBase(p.amount, exp);
         payerBaseSum += baseAmount;
       }
-      net[p.userId] = round2((net[p.userId] || 0) + baseAmount);
+      if (net[p.userId] !== undefined) {
+        net[p.userId] = round2(net[p.userId] + baseAmount);
+      }
     }
 
     let shareBaseSum = 0;
@@ -80,9 +83,26 @@ function calcNetBalances(trip) {
         baseAmount = convertPayerOrShareToBase(originalAmount, exp);
         shareBaseSum += baseAmount;
       }
-      net[s.userId] = round2((net[s.userId] || 0) - baseAmount);
+      if (net[s.userId] !== undefined) {
+        net[s.userId] = round2(net[s.userId] - baseAmount);
+      }
     }
   }
+
+  // 2.計算預收款/訂金 (deposits) 抵銷
+  if (Array.isArray(trip.deposits)) {
+    for (const d of trip.deposits) {
+      // 付款人先墊出去的錢，視為對他有利的淨額 (+)
+      if (net[d.payerId] !== undefined) {
+        net[d.payerId] = round2(net[d.payerId] + d.amountInBase);
+      }
+      // 收款人收到別人的錢，視為對他不利（欠著）的淨額 (-)
+      if (net[d.collectorId] !== undefined) {
+        net[d.collectorId] = round2(net[d.collectorId] - d.amountInBase);
+      }
+    }
+  }
+
   return net;
 }
 
