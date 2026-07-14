@@ -7,7 +7,7 @@ const {
 const storage = require('../utils/storage');
 const { resolveTrip, memberDisplay } = require('../utils/tripHelper');
 const { equalSplit, fetchRealTimeRate } = require('../utils/calculator');
-const { addDeposit } = require('../utils/deposit'); 
+const { addDeposit } = require('../utils/deposit');
 const { showMainMenu } = require('../commands/splitbill');
 
 module.exports = {
@@ -25,7 +25,7 @@ module.exports = {
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('exp_btn_add_start').setLabel('➕ 新增花費').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('exp_btn_deposit_start').setLabel('💰 收取訂金').setStyle(ButtonStyle.Success), // 🟢 新增預收款按鈕
+        new ButtonBuilder().setCustomId('exp_btn_deposit_start').setLabel('💰 收取訂金').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId('exp_btn_list').setLabel('🧾 歷史與刪除').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主控台').setStyle(ButtonStyle.Secondary)
       );
@@ -33,7 +33,6 @@ module.exports = {
       return interaction.update({ embeds: [embed], components: [row] });
     }
 
-    // 處理「收取訂金」流程 1/3：選擇收款人
     if (customId === 'exp_btn_deposit_start') {
       if (!trip.members || trip.members.length < 2) {
         return interaction.reply({ content: '⚠️ 此行程成員不足兩人，無法使用訂金功能！', flags: MessageFlags.Ephemeral });
@@ -94,7 +93,6 @@ module.exports = {
         return interaction.reply({ content: '📭 目前尚無任何記帳或訂金紀錄。', flags: MessageFlags.Ephemeral });
       }
 
-      // 合併 expenses 和 deposits 來顯示歷史紀錄
       const allRecords = [
         ...trip.expenses.map(e => ({ ...e, type: 'expense' })),
         ...(trip.deposits || []).map(d => ({ ...d, type: 'deposit' }))
@@ -161,36 +159,55 @@ module.exports = {
   },
 
   async handleModal(interaction, cache) {
-    // 🟢 處理「收取訂金」流程 3/3：接收金額與備註並儲存
-    if (interaction.customId === 'exp_modal_deposit') {
+    // 🟢 處理「收取訂金」流程 3/3：接收多人金額與備註並儲存
+    if (interaction.customId === 'exp_modal_multi_deposit') {
       const { guildId, user } = interaction;
       const { trip } = resolveTrip(guildId);
       const state = cache.get(user.id);
 
-      if (!state || !state.depositCollectorId || !state.depositPayerId) {
+      if (!state || !state.depositCollectorId || !state.depositPayerIds) {
         return interaction.reply({ content: '⚠️ 快取失效，請重新操作。', flags: MessageFlags.Ephemeral });
       }
 
-      const amount = parseFloat(interaction.fields.getTextInputValue('amount'));
-      const note = interaction.fields.getTextInputValue('note');
-
-      if (isNaN(amount) || amount <= 0) {
-        return interaction.reply({ content: '⚠️ 請輸入正確的大於 0 的金額數字。', flags: MessageFlags.Ephemeral });
+      let note = '預收款/訂金';
+      // 如果選擇人數小於 5，代表有備註欄位可以讀取
+      if (state.depositPayerIds.length < 5) {
+        try {
+          const inputNote = interaction.fields.getTextInputValue('dep_note');
+          if (inputNote) note = inputNote;
+        } catch (e) {} // 忽略錯誤
       }
 
+      const depositsAdded = [];
+      let totalAmount = 0;
+
       try {
-        const deposit = addDeposit(trip, {
-          collectorId: state.depositCollectorId,
-          payerId: state.depositPayerId,
-          amount,
-          currency: trip.baseCurrency, // 訂金預設使用基準幣別
-          note
-        });
+        for (let i = 0; i < state.depositPayerIds.length; i++) {
+          const amountStr = interaction.fields.getTextInputValue(`dep_amount_${i}`);
+          const amount = parseFloat(amountStr);
+          
+          if (isNaN(amount) || amount <= 0) {
+            throw new Error(`第 ${i + 1} 筆金額格式錯誤，必須大於 0。`);
+          }
+
+          const deposit = addDeposit(trip, {
+            collectorId: state.depositCollectorId,
+            payerId: state.depositPayerIds[i],
+            amount,
+            currency: trip.baseCurrency,
+            note
+          });
+          
+          depositsAdded.push(deposit);
+          totalAmount += amount;
+        }
         
         storage.persist();
         cache.delete(user.id);
 
-        const msg = `✅ **預收款紀錄成功！** <@${deposit.payerId}> 預付了 ${deposit.amount} ${deposit.currency} 給 <@${deposit.collectorId}> ${note ? `(${note})` : ''}`;
+        const payerMentions = depositsAdded.map(d => `<@${d.payerId}>(${d.amount})`).join('、');
+        const msg = `✅ **預收款紀錄成功！** <@${state.depositCollectorId}> 共收了 ${totalAmount} ${trip.baseCurrency}。\n付款人：${payerMentions}\n備註：${note}`;
+        
         return showMainMenu(interaction, msg);
       } catch (err) {
         return interaction.reply({ content: `❌ 錯誤：${err.message}`, flags: MessageFlags.Ephemeral });
@@ -284,7 +301,6 @@ module.exports = {
         payers.push({ userId: state.tempPayerIds[i], amount: val });
       }
 
-      // 💡 新需求：若多人代墊金額總和錯誤，清空快取並直接跳回主選單
       if (Math.abs(sum - state.amount) > 0.01) {
         cache.delete(user.id);
         return showMainMenu(interaction, `⚠️ **記帳已取消**：多人代墊金額加總 (**${sum}**) 不等於總花費 (**${state.amount}**)！請重新操作。`);
@@ -301,52 +317,61 @@ module.exports = {
     const { customId, guildId, values, user } = interaction;
     const { trip } = resolveTrip(guildId);
 
-    // 🟢 處理「收取訂金」流程 2/3：選擇付款人
+    // 🟢 處理「收取訂金」流程 2/3：選擇付款人 (支援多選)
     if (customId === 'exp_select_deposit_collector') {
       cache.set(user.id, { depositCollectorId: values[0] });
       
+      const availableMembers = trip.members.filter(m => m.id !== values[0]);
+      const maxSelect = Math.min(availableMembers.length, 5); // Discord Modal 最多 5 個輸入框
+
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
         .setTitle('💰 步驟 2/3：選擇付款人')
-        .setDescription('誰「付錢」給了收款人？');
+        .setDescription(`誰「付錢」給了收款人？\n*(💡 可多選，最多 ${maxSelect} 人)*`);
 
       const selectRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId('exp_select_deposit_payer')
-          .setPlaceholder('選擇付款人...')
-          .addOptions(trip.members.filter(m => m.id !== values[0]).slice(0, 25).map(m => ({ label: m.name, value: m.id })))
+          .setPlaceholder(`選擇付款人 (可多選，最多 ${maxSelect} 人)...`)
+          .setMinValues(1)
+          .setMaxValues(maxSelect)
+          .addOptions(availableMembers.slice(0, 25).map(m => ({ label: m.name, value: m.id })))
       );
 
       return interaction.update({ embeds: [embed], components: [selectRow] });
     }
 
-    // 🟢 處理「收取訂金」流程：彈出金額輸入 Modal
+    // 🟢 處理「收取訂金」流程：動態彈出多人金額輸入 Modal
     if (customId === 'exp_select_deposit_payer') {
       const state = cache.get(user.id);
       if (!state) return interaction.reply({ content: '⚠️ 快取失效。', flags: MessageFlags.Ephemeral });
       
-      state.depositPayerId = values[0];
+      state.depositPayerIds = values; // 儲存多個付款人 ID
 
       const modal = new ModalBuilder()
-        .setCustomId('exp_modal_deposit')
+        .setCustomId('exp_modal_multi_deposit')
         .setTitle('💰 步驟 3/3：輸入訂金金額');
 
-      const amountInput = new TextInputBuilder()
-        .setCustomId('amount')
-        .setLabel(`金額 (單位: ${trip.baseCurrency})`)
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-        
-      const noteInput = new TextInputBuilder()
-        .setCustomId('note')
-        .setLabel('備註 (選填，例如：機票+住宿訂金)')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(false);
+      // 根據選擇的人數，動態產生輸入框
+      values.forEach((id, idx) => {
+        const memberName = trip.members.find(m => m.id === id).name;
+        const amountInput = new TextInputBuilder()
+          .setCustomId(`dep_amount_${idx}`)
+          .setLabel(`${memberName} 付了多少 (${trip.baseCurrency})？`)
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(amountInput));
+      });
 
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(amountInput), 
-        new ActionRowBuilder().addComponents(noteInput)
-      );
+      // 如果選擇人數小於 5，代表還有空間放備註欄位
+      if (values.length < 5) {
+        const noteInput = new TextInputBuilder()
+          .setCustomId('dep_note')
+          .setLabel('備註 (選填，例如：機票+住宿訂金)')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false);
+        modal.addComponents(new ActionRowBuilder().addComponents(noteInput));
+      }
       
       return interaction.showModal(modal);
     }
@@ -404,7 +429,7 @@ module.exports = {
 
     if (customId === 'exp_select_delete') {
       const [type, id] = values[0].split('_', 2);
-      const realId = values[0].substring(type.length + 1); // 取得真正的 ID
+      const realId = values[0].substring(type.length + 1);
 
       if (type === 'expense') {
         const idx = trip.expenses.findIndex(e => e.id === realId);
@@ -440,16 +465,14 @@ function renderSplitMethodUI(interaction, state) {
 
 async function completeExpenseLogging(interaction, trip, state, participantIds, cache) {
   try {
-    // 取得無條件進位後的分攤結果
     const shares = equalSplit(state.amount, participantIds);
     
-    // 💡 新需求：計算進位後的總和，並將多出的零頭補給第一位代墊者
     const newTotal = shares.reduce((sum, s) => sum + s.share, 0);
     const extra = newTotal - state.amount;
     
     if (extra > 0) {
-      state.payers[0].amount += extra; // 將多收的錢算給第一位代墊者
-      state.amount = newTotal;         // 更新總花費以維持帳目平衡
+      state.payers[0].amount += extra;
+      state.amount = newTotal;
     }
 
     const amountInBase = Math.round((state.amount * state.exchangeRate + Number.EPSILON) * 100) / 100;
