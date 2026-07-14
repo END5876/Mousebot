@@ -25,26 +25,6 @@ function ensureCacheDir() {
 }
 
 // ════════════════════════════════════════════════════════
-//  將作者名稱轉為安全的資料夾名稱
-//  用途：把同一作者的快取音樂歸類到 cache/<作者>/ 底下，
-//        避免所有下載檔案平鋪在同一層造成清單混亂
-// ════════════════════════════════════════════════════════
-const UNKNOWN_AUTHOR_FOLDER = '未知作者';
-
-function sanitizeFolderName(name) {
-  const safe = String(name || '')
-    .replace(/[\\/:*?"<>|]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 60);
-  return safe || UNKNOWN_AUTHOR_FOLDER;
-}
-
-function _authorDir(author) {
-  return path.join(CACHE_DIR, sanitizeFolderName(author));
-}
-
-// ════════════════════════════════════════════════════════
 //  從 URL + title 產生穩定的快取檔名
 //  格式：<清理後的標題> [<影片ID>].mp3
 // ════════════════════════════════════════════════════════
@@ -69,54 +49,22 @@ function getCacheFilename(url, title) {
 
 // ════════════════════════════════════════════════════════
 //  檢查快取是否存在，回傳路徑或 null
-//  優先查「作者資料夾」內的新路徑；找不到時，向下相容查
-//  舊版（升級前）直接平放在 CACHE_DIR 根目錄的檔案，
-//  避免升級後既有快取被判定為未命中而重複下載
 // ════════════════════════════════════════════════════════
-function getCachedPath(url, title, author) {
+function getCachedPath(url, title) {
   ensureCacheDir();
   const filename = getCacheFilename(url, title);
-
-  const newPath = path.join(_authorDir(author), filename);
-  if (fs.existsSync(newPath)) return newPath;
-
-  const legacyPath = path.join(CACHE_DIR, filename);
-  if (fs.existsSync(legacyPath)) return legacyPath;
-
-  return null;
-}
-
-// ════════════════════════════════════════════════════════
-//  遞迴列出 CACHE_DIR 底下所有檔案（含各作者子資料夾）
-// ════════════════════════════════════════════════════════
-function _walkCacheFiles(dir) {
-  let out = [];
-  let entries;
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return out;
-  }
-  for (const entry of entries) {
-    const fp = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      out = out.concat(_walkCacheFiles(fp));
-    } else {
-      out.push(fp);
-    }
-  }
-  return out;
+  const filePath = path.join(CACHE_DIR, filename);
+  return fs.existsSync(filePath) ? filePath : null;
 }
 
 // ════════════════════════════════════════════════════════
 //  快取大小管理：超過上限時刪除最舊的檔案
-//  ★ 改為遞迴掃描，因快取現在依作者分子資料夾存放；
-//    刪除後若該作者資料夾已淨空，順手移除空資料夾
 // ════════════════════════════════════════════════════════
 function evictCacheIfNeeded() {
   try {
-    const files = _walkCacheFiles(CACHE_DIR)
-      .map(fp => {
+    const files = fs.readdirSync(CACHE_DIR)
+      .map(f => {
+        const fp   = path.join(CACHE_DIR, f);
         const stat = fs.statSync(fp);
         return { fp, mtime: stat.mtimeMs, size: stat.size };
       })
@@ -129,13 +77,6 @@ function evictCacheIfNeeded() {
       fs.unlinkSync(oldest.fp);
       totalMB -= oldest.size / 1024 / 1024;
       console.log(`🗑️ [Cache] 快取已滿，刪除舊檔: ${path.basename(oldest.fp)}`);
-
-      const parentDir = path.dirname(oldest.fp);
-      if (parentDir !== CACHE_DIR) {
-        try {
-          if (fs.readdirSync(parentDir).length === 0) fs.rmdirSync(parentDir);
-        } catch {}
-      }
     }
   } catch (err) {
     console.error('❌ [Cache] 快取清理失敗:', err);
@@ -146,22 +87,18 @@ function evictCacheIfNeeded() {
 //  下載並儲存到快取
 //  @param {string}   url
 //  @param {string}   title
-//  @param {string}   author      - 上傳者/頻道名稱，用於分類子資料夾
 //  @param {string[]} ytdlpArgs   - 由 musicAntiBot.js 組合好的完整參數
 //  @param {Function} onProgress  - (percent: number) => void
 //  @returns {Promise<string>}    - 下載完成的檔案路徑
 // ════════════════════════════════════════════════════════
-function downloadAndCache(url, title, author, ytdlpArgs, onProgress) {
+function downloadAndCache(url, title, ytdlpArgs, onProgress) {
   return new Promise((resolve, reject) => {
     ensureCacheDir();
     evictCacheIfNeeded();
 
-    const authorDir = _authorDir(author);
-    if (!fs.existsSync(authorDir)) fs.mkdirSync(authorDir, { recursive: true });
-
     const filename  = getCacheFilename(url, title);
-    const filePath  = path.join(authorDir, filename);
-    const tmpBase   = path.join(authorDir, filename.replace(/\.mp3$/, '.tmp'));
+    const filePath  = path.join(CACHE_DIR, filename);
+    const tmpBase   = path.join(CACHE_DIR, filename.replace(/\.mp3$/, '.tmp'));
     const tmpActual = tmpBase + '.mp3'; // yt-dlp 轉檔後實際產生的路徑
 
     // 將輸出路徑注入參數（替換佔位符 __OUTPUT__）
@@ -221,7 +158,6 @@ module.exports = {
   MAX_CACHE_SIZE_MB,
   ensureCacheDir,
   getCacheFilename,
-  sanitizeFolderName,
   getCachedPath,
   evictCacheIfNeeded,
   downloadAndCache,
