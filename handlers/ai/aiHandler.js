@@ -482,14 +482,13 @@ function setupAICommands(client) {
 
             if (isChannelDisabled(channelId)) return;
 
-            //  將提及轉換為名字
+            // 將提及轉換為名字
             const rawCleaned = replaceMentions(message, botId);
 
             if (!rawCleaned && !hasAttachment) return;
 
-            if (/(https?:\/\/[^\s)\]>]+)|(www\.[^\s)\]>]+)/gi.test(rawCleaned)) {
-                if (!hasLikelyImageLink) return;
-            }
+            // 只要訊息含有任何連結（包含圖片連結），隨機回覆一律不回應
+            if (/(https?:\/\/[^\s)\]>]+)|(www\.[^\s)\]>]+)/gi.test(rawCleaned)) return;
 
             if (/^!(gugu|m|stt)/.test(rawCleaned)) return;
 
@@ -497,21 +496,10 @@ function setupAICommands(client) {
             if (Math.random() < chance) {
                 try {
                     const { cleanedText: cleanedContent, emojiParts } = await processCustomEmojis(rawCleaned);
-                    // ✅ 補上 client，讓 processImageUrls 內部可嘗試修復缺簽名網址
-                    const urlImageParts = await processImageUrls(cleanedContent, client);
-
-                    // ⚠️ 修復失敗（兩層策略都無法取得圖片）時，保守放棄本次隨機回覆
-                    // 原因：隨機回覆屬於「被動觸發」，讓 AI 主動吐槽使用者連結壞掉
-                    //       在這個情境下會顯得突兀，故選擇安靜跳過，而不是像
-                    //       /ai ask 或 @ 提及那樣讓 AI 主動提出吐槽文字。
-                    if (urlImageParts.some(part => part.type === 'missing_signature')) {
-                        console.log(`[Random Reply] 圖片修復失敗，已放棄本次隨機回覆。`);
-                        return;
-                    }
 
                     const mode = getUserMode(userId, cleanedContent);
                     const attachmentParts = await processAttachments(message.attachments);
-                    const imageParts = [...emojiParts, ...urlImageParts, ...attachmentParts];
+                    const imageParts = [...emojiParts, ...attachmentParts]; 
 
                     const shortReply = await withTyping(message.channel, () =>
                         getShortResponse(userId, cleanedContent, imageParts, channel, messageId, botId, message, mode)
