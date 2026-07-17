@@ -18,7 +18,7 @@ module.exports = {
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
         .setTitle('📊 結算與淨額中心')
-        .setDescription(`當前行程：**${trip.name}**\\n請選擇結算檢視工具：`);
+        .setDescription(`當前行程：**${trip.name}**\n請選擇結算檢視工具：`);
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('set_btn_balance').setLabel('🟢 查看每人淨額').setStyle(ButtonStyle.Primary),
