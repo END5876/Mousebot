@@ -7,16 +7,38 @@ const { simplifyDebts, simplifyDebtsWithBreakdown } = require('../utils/settleme
 const { showMainMenu } = require('../commands/splitbill');
 
 /**
- * 格式化成："390065 TWD (7024 TWD + 1919811 JPY)"
- * breakdownEntries: [{currency, amount}]，amount 為原始幣別數字（可正可負，顯示時取絕對值）
+ * 格式化成："200 TWD (500 TWD - 15000 JPY)"
+ * breakdownEntries: [{currency, amount}]，amount 為原始幣別數字（保留正負號）
+ *
+ * 修正說明：
+ * 1. 原本用 Math.abs() 把每個成分都強制轉正、固定用 ' + ' 連接，
+ *    導致方向相反的成分被誤顯示成同方向相加，明細加總對不上主要金額。
+ * 2. 現在改為依數值排序（正數在前、負數在後），並依實際正負號
+ *    選用 '+' 或 '-' 連接，確保第一筆一律不帶負號，且明細加總後
+ *    能正確還原出主要金額。
  */
 function formatWithBreakdown(baseAmount, baseCurrency, breakdownEntries) {
-  const main = `${round2(baseAmount)} ${baseCurrency}`;
-  const parts = (breakdownEntries || [])
-    .filter(b => Math.abs(b.amount) >= 0.01)
-    .map(b => `${round2(Math.abs(b.amount))} ${b.currency}`);
-  if (!parts.length) return main;
-  return `${main} (${parts.join(' + ')})`;
+  const main = `${round2(Math.abs(baseAmount))} ${baseCurrency}`;
+
+  const entries = (breakdownEntries || []).filter(b => Math.abs(b.amount) >= 0.01);
+  if (!entries.length) return main;
+
+  // 正數排前面、負數排後面，確保第一筆一定不會是負數（除非全部都是負數）
+  const sorted = [...entries].sort((a, b) => b.amount - a.amount);
+
+  let parts = '';
+  sorted.forEach((b, idx) => {
+    const amt = round2(Math.abs(b.amount));
+    if (idx === 0) {
+      // 第一筆一律不加正負號前綴
+      parts += `${amt} ${b.currency}`;
+    } else {
+      // 後續依正負號決定用 '+' 或 '-' 連接
+      parts += b.amount < 0 ? ` - ${amt} ${b.currency}` : ` + ${amt} ${b.currency}`;
+    }
+  });
+
+  return `${main} (${parts})`;
 }
 
 module.exports = {
@@ -51,7 +73,7 @@ module.exports = {
       const lines = trip.members.map(m => {
         const val = round2(net[m.id] || 0);
         const breakdown = Object.entries(netByCurrency[m.id] || {}).map(([currency, amount]) => ({ currency, amount }));
-        const text = formatWithBreakdown(Math.abs(val), trip.baseCurrency, breakdown);
+        const text = formatWithBreakdown(val, trip.baseCurrency, breakdown);
 
         if (val > 0.01) return `🟢 <@${m.id}>：應**收回** \`${text}\` (多墊)`;
         if (val < -0.01) return `🔴 <@${m.id}>：應**付出** \`${text}\` (透支)`;
