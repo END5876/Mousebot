@@ -6,7 +6,7 @@ const {
 } = require('discord.js');
 const storage = require('../utils/storage');
 const { resolveTrip, memberDisplay } = require('../utils/tripHelper');
-const { equalSplit, fetchRealTimeRate, round2 } = require('../utils/calculator');
+const { equalSplit, validateCustomSplit, fetchRealTimeRate, round2 } = require('../utils/calculator');
 const { addDeposit } = require('../utils/deposit');
 const { showMainMenu } = require('../commands/splitbill');
 
@@ -169,6 +169,35 @@ module.exports = {
 
       return interaction.update({ embeds: [embed], components: [selectRow] });
     }
+
+    // ✏️ 新增：非平分（自訂金額）分攤 —— 每人金額可各自指定，例如免費、部分負擔
+    if (customId === 'exp_btn_split_custom_amount') {
+      const state = cache.get(guildId, interaction.user.id);
+      if (!state) return interaction.reply({ content: '⚠️ 狀態過期，請重新操作。', flags: MessageFlags.Ephemeral });
+
+      const maxSelect = Math.min(trip.members.length, 5);
+      const embed = new EmbedBuilder()
+        .setColor(0xe74c3c)
+        .setTitle('✏️ 自訂金額分攤')
+        .setDescription(
+          `總花費：**${state.amount} ${state.currency}**\n\n` +
+          `請選擇需要「指定各自應付金額」的成員。\n` +
+          `*(⚠️ Discord 表單限制，最多可選 ${maxSelect} 人；未被選到的人視為不參與此筆分攤)*\n` +
+          `*(💡 若某人不需付錢，填入 0 即可)*`
+        );
+
+      const memberOptions = trip.members.slice(0, 25).map(m => ({ label: m.name, value: m.id }));
+      const selectRow = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId('exp_select_custom_participants')
+          .setPlaceholder(`選擇成員 (最多 ${maxSelect} 人)...`)
+          .setMinValues(1)
+          .setMaxValues(maxSelect)
+          .addOptions(memberOptions)
+      );
+
+      return interaction.update({ embeds: [embed], components: [selectRow] });
+    }
   },
 
   async handleModal(interaction, cache) {
@@ -324,6 +353,37 @@ module.exports = {
 
       return renderSplitMethodUI(interaction, state);
     }
+
+    // ✏️ 新增：處理「自訂金額分攤」流程 —— 接收各成員應付金額，驗證加總後直接記帳
+    if (interaction.customId === 'exp_modal_custom_split') {
+      const { guildId, user } = interaction;
+      const { trip } = resolveTrip(guildId);
+      const state = cache.get(guildId, user.id);
+
+      if (!state || !state.tempCustomParticipantIds) {
+        return interaction.reply({ content: '⚠️ 快取過期，請重新開啟。', flags: MessageFlags.Ephemeral });
+      }
+
+      const shares = [];
+      for (let i = 0; i < state.tempCustomParticipantIds.length; i++) {
+        const valStr = interaction.fields.getTextInputValue(`share_${i}`);
+        const val = parseFloat(valStr);
+        if (isNaN(val) || val < 0) {
+          return interaction.reply({ content: '⚠️ 請輸入正確的數字（不可為負數，免費請填 0）。', flags: MessageFlags.Ephemeral });
+        }
+        shares.push({ userId: state.tempCustomParticipantIds[i], share: round2(val) });
+      }
+
+      try {
+        validateCustomSplit(state.amount, shares);
+      } catch (err) {
+        cache.delete(guildId, user.id);
+        return showMainMenu(interaction, `⚠️ **記帳已取消**：${err.message}`);
+      }
+
+      delete state.tempCustomParticipantIds;
+      return completeExpenseLoggingWithShares(interaction, trip, state, shares, cache);
+    }
   },
 
   async handleSelectMenu(interaction, cache) {
@@ -464,6 +524,36 @@ module.exports = {
       return completeExpenseLogging(interaction, trip, state, participantIds, cache);
     }
 
+    // ✏️ 新增：處理「自訂金額分攤」流程 —— 選完成員後彈出動態 Modal 輸入各自金額
+    if (customId === 'exp_select_custom_participants') {
+      const state = cache.get(guildId, user.id);
+      if (!state) return interaction.reply({ content: '⚠️ 快取過期，請重新開啟。', flags: MessageFlags.Ephemeral });
+
+      const invalid = values.filter(id => !trip.members.some(m => m.id === id));
+      if (invalid.length) {
+        return interaction.reply({ content: '⚠️ 選擇的使用者不在此行程的成員名單內！', flags: MessageFlags.Ephemeral });
+      }
+
+      state.tempCustomParticipantIds = values;
+
+      const modal = new ModalBuilder()
+        .setCustomId('exp_modal_custom_split')
+        .setTitle(`✏️ 輸入各自應付金額 (總計: ${state.amount})`);
+
+      values.forEach((id, idx) => {
+        const memberName = trip.members.find(m => m.id === id).name;
+        const input = new TextInputBuilder()
+          .setCustomId(`share_${idx}`)
+          .setLabel(`${memberName} 應付多少 (免費請填 0)？`)
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('例如：0、1000、2000')
+          .setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+      });
+
+      return interaction.showModal(modal);
+    }
+
     if (customId === 'exp_select_delete') {
       const [type, id] = values[0].split('_', 2);
       const realId = values[0].substring(type.length + 1);
@@ -576,7 +666,8 @@ function renderSplitMethodUI(interaction, state) {
 
   const btnRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('exp_btn_split_all').setLabel('👥 全體平分').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId('exp_btn_split_custom').setLabel('🎯 部分成員平分').setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId('exp_btn_split_custom').setLabel('🎯 部分成員平分').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('exp_btn_split_custom_amount').setLabel('✏️ 自訂金額分攤').setStyle(ButtonStyle.Danger)
   );
 
   return interaction.update({ embeds: [embed], components: [btnRow] });
@@ -616,6 +707,49 @@ async function completeExpenseLogging(interaction, trip, state, participantIds, 
 
     const payerText = newExpense.payers.map(p => `<@${p.userId}>`).join(', ');
     const msg = `✅ **記帳成功！** 項目：${newExpense.description} | 金額：${newExpense.amount} ${newExpense.currency} ➔ ${amountInBase} ${trip.baseCurrency} | 代墊：${payerText}`;
+    
+    return showMainMenu(interaction, msg);
+
+  } catch (err) {
+    const errMsg = `❌ 核心記帳計算失敗：${err.message}`;
+    if (interaction.deferred || interaction.replied) {
+      return interaction.editReply({ content: errMsg });
+    }
+    return interaction.reply({ content: errMsg, flags: MessageFlags.Ephemeral });
+  }
+}
+
+/**
+ * ✏️ 新增：以「自訂金額」完成記帳 —— 與 completeExpenseLogging 的差異在於
+ * participants 的份額不是用 equalSplit 平均算出，而是直接採用使用者手動輸入、
+ * 且已通過 validateCustomSplit 驗證加總無誤的 shares 陣列。
+ * 例：ABC 共 3000，A 免費(0) / B 付 1000 / C 付 2000。
+ */
+async function completeExpenseLoggingWithShares(interaction, trip, state, shares, cache) {
+  try {
+    const amountInBase = Math.round((state.amount * state.exchangeRate + Number.EPSILON) * 100) / 100;
+
+    const newExpense = {
+      id: state.id,
+      description: state.description,
+      amount: state.amount,
+      currency: state.currency,
+      exchangeRate: state.exchangeRate,
+      rateSource: state.rateSource,
+      amountInBase,
+      payers: state.payers,
+      participants: shares.map(s => ({ userId: s.userId, amount: s.share })),
+      createdAt: Date.now(),
+      createdBy: interaction.user.id
+    };
+
+    trip.expenses.push(newExpense);
+    storage.persist();
+    cache.delete(interaction.guildId, interaction.user.id);
+
+    const payerText = newExpense.payers.map(p => `<@${p.userId}>`).join(', ');
+    const shareText = shares.map(s => `<@${s.userId}>(${s.share})`).join('、');
+    const msg = `✅ **記帳成功（自訂分攤）！** 項目：${newExpense.description} | 金額：${newExpense.amount} ${newExpense.currency} ➔ ${amountInBase} ${trip.baseCurrency}\n代墊：${payerText}\n各自應付：${shareText}`;
     
     return showMainMenu(interaction, msg);
 

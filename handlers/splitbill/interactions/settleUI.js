@@ -7,28 +7,38 @@ const { simplifyDebts } = require('../utils/settlement');
 const { showMainMenu } = require('../commands/splitbill');
 
 /**
- * 格式化成："200 TWD (500 TWD - 15000 JPY)"
- * 用於「每人淨額」畫面，正確呈現各幣別成分的真實正負號。
+ * 新版「每人淨額」區塊格式：
+ * 淨額：20689.12 TWD
+ * ┣ 總花費：76344 JPY、6604.66 TWD   ← 正貢獻幣別
+ * ┗ 付出：34 USD                     ← 負貢獻幣別
+ *
+ * 正、負貢獻分開列出，取代舊版塞在括號裡用 +/- 混合呈現的寫法。
  */
-function formatWithBreakdown(baseAmount, baseCurrency, breakdownEntries) {
-  const main = `${round2(Math.abs(baseAmount))} ${baseCurrency}`;
+function formatBreakdownBlock(baseAmount, baseCurrency, breakdownEntries) {
+  const mainLine = `${round2(Math.abs(baseAmount))} ${baseCurrency}`;
 
   const entries = (breakdownEntries || []).filter(b => Math.abs(b.amount) >= 0.01);
-  if (!entries.length) return main;
+  if (!entries.length) return `　┗ 淨額：**${mainLine}**`;
 
-  const sorted = [...entries].sort((a, b) => b.amount - a.amount);
+  const positives = entries.filter(b => b.amount > 0).sort((a, b) => b.amount - a.amount);
+  const negatives = entries.filter(b => b.amount < 0).sort((a, b) => a.amount - b.amount);
 
-  let parts = '';
-  sorted.forEach((b, idx) => {
-    const amt = round2(Math.abs(b.amount));
-    if (idx === 0) {
-      parts += `${amt} ${b.currency}`;
-    } else {
-      parts += b.amount < 0 ? ` - ${amt} ${b.currency}` : ` + ${amt} ${b.currency}`;
-    }
-  });
+  const lines = [`　┣ 淨額：**${mainLine}**`];
 
-  return `${main} (${parts})`;
+  if (positives.length) {
+    const spendText = positives.map(b => `${round2(b.amount)} ${b.currency}`).join('、');
+    lines.push(`　┣ 總花費：${spendText}`);
+  }
+
+  if (negatives.length) {
+    const payText = negatives.map(b => `${round2(Math.abs(b.amount))} ${b.currency}`).join('、');
+    lines.push(`　┗ 付出：${payText}`);
+  } else {
+    // 把上一行的 ┣ 改成 ┗，讓樹狀結構收尾正確
+    lines[lines.length - 1] = lines[lines.length - 1].replace('┣', '┗');
+  }
+
+  return lines.join('\n');
 }
 
 module.exports = {
@@ -55,7 +65,7 @@ module.exports = {
       return interaction.update({ embeds: [embed], components: [row] });
     }
 
-    // 1. 每人收支淨額分佈（事實層，維持不變）
+    // 1. 每人收支淨額分佈（新版：分類分行呈現總花費 / 付出）
     if (customId === 'set_btn_balance') {
       const net = calcNetBalances(trip);
       const netByCurrency = calcNetBalancesByCurrency(trip);
@@ -63,12 +73,15 @@ module.exports = {
       const lines = trip.members.map(m => {
         const val = round2(net[m.id] || 0);
         const breakdown = Object.entries(netByCurrency[m.id] || {}).map(([currency, amount]) => ({ currency, amount }));
-        const text = formatWithBreakdown(val, trip.baseCurrency, breakdown);
 
-        if (val > 0.01) return `🟢 <@${m.id}>：應**收回** \`${text}\` (多墊)`;
-        if (val < -0.01) return `🔴 <@${m.id}>：應**付出** \`${text}\` (透支)`;
-        return `⚪ <@${m.id}>：已完全平穩 (淨額為 0)`;
-      }).join('\n');
+        let statusLabel;
+        if (val > 0.01) statusLabel = `🟢 <@${m.id}>：應**收回** (多墊)`;
+        else if (val < -0.01) statusLabel = `🔴 <@${m.id}>：應**付出** (透支)`;
+        else return `⚪ <@${m.id}>：已完全平穩 (淨額為 0)`;
+
+        const block = formatBreakdownBlock(val, trip.baseCurrency, breakdown);
+        return `${statusLabel}\n${block}`;
+      }).join('\n\n');
 
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
