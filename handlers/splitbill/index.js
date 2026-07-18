@@ -7,9 +7,11 @@ const expenseUI = require('./interactions/expenseUI');
 const memberUI = require('./interactions/memberUI');
 const settleUI = require('./interactions/settleUI');
 const tripUI = require('./interactions/tripUI');
+const { StateCache } = require('./utils/stateCache');
 
 // 全域輕量化快取，用於暫存使用者的跨面板操作狀態（例如記帳到一半時的數據）
-const stateCache = new Map();
+// 以 guildId + userId 為 key，並帶有 TTL 自動過期清除，避免跨伺服器狀態污染與記憶體洩漏
+const stateCache = new StateCache();
 
 /**
  * 初始化分帳模組面板版

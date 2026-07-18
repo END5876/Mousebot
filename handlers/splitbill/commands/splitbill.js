@@ -57,10 +57,11 @@ module.exports = {
     }
 
     // 建立人性化主要導覽按鈕
+    const hasAnyRecords = !!trip && (trip.expenses.length > 0 || (trip.deposits || []).length > 0);
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('exp_nav').setLabel('💸 記帳管理').setStyle(ButtonStyle.Primary).setDisabled(!trip),
       new ButtonBuilder().setCustomId('mem_nav').setLabel('👥 成員管理').setStyle(ButtonStyle.Secondary).setDisabled(!trip),
-      new ButtonBuilder().setCustomId('set_nav').setLabel('📊 結算與淨額').setStyle(ButtonStyle.Success).setDisabled(!trip || !trip.expenses.length),
+      new ButtonBuilder().setCustomId('set_nav').setLabel('📊 結算與淨額').setStyle(ButtonStyle.Success).setDisabled(!hasAnyRecords),
       new ButtonBuilder().setCustomId('trip_nav').setLabel('🧳 行程設定').setStyle(ButtonStyle.Secondary)
     );
 
