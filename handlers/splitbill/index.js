@@ -77,6 +77,7 @@ async function handleSelectInteraction(interaction) {
 
   if (customId.startsWith('exp_')) return expenseUI.handleSelectMenu(interaction, stateCache);
   if (customId.startsWith('mem_')) return memberUI.handleSelectMenu(interaction, stateCache);
+  if (customId.startsWith('set_')) return settleUI.handleSelectMenu(interaction, stateCache);
   if (customId.startsWith('trip_')) return tripUI.handleSelectMenu(interaction, stateCache);
 }
 

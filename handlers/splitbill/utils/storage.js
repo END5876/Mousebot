@@ -16,7 +16,7 @@ const DEFAULT_TRIP = () => ({
   rates: { TWD: 1 }, // rates[currency] = 該幣別兌基準幣的匯率 (1 該幣別 = rate 基準幣)
   members: [],        // [{ id, name }]
   expenses: [],  
-  deposits: [],      // [{ id, description, amount, currency, amountInBase, payers, participants, createdAt, createdBy }]
+  deposits: [],      // [{ id, collectorId, payerId, amount, currency, amountInBase, note, createdAt }]
   archived: false,
   createdAt: Date.now(),
 });
