@@ -26,11 +26,23 @@ function equalSplit(amount, participantIds) {
   if (!participantIds.length) throw new Error('參與分攤的成員不可為空');
   const n = participantIds.length;
 
-  // 無條件進位到整數
-  const share = Math.ceil(amount / n);
+  // 平均值先四捨五入到小數第2位，保留合理精度
+  const baseShare = round2(amount / n);
 
-  return participantIds.map(userId => ({ userId, share }));
+  let accumulated = 0;
+  return participantIds.map((userId, i) => {
+    let share;
+    if (i === n - 1) {
+      // 最後一人吸收前面四捨五入產生的誤差，確保總和 = amount
+      share = round2(amount - accumulated);
+    } else {
+      share = baseShare;
+      accumulated = round2(accumulated + share);
+    }
+    return { userId, share };
+  });
 }
+
 
 function validateCustomSplit(amount, shares) {
   const sum = round2(shares.reduce((s, x) => s + x.share, 0));
