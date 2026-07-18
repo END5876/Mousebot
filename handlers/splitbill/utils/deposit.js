@@ -6,6 +6,9 @@
  * 適用情境：多人出國由一人（收款人）先代收訂金，等機票/住宿等
  * 實際花費金額確定後，系統自動把「已收訂金」與「應分攤的實際花費」
  * 互相抵銷，算出每個人最終「多退」或「少補」的金額。
+ *
+ * 訂金可以用任何行程內設定過匯率的幣別記錄；記錄當下就會依行程匯率
+ * 換算並存成 amountInBase，供「每人淨額 / 最佳化轉帳」直接使用。
  */
 
 const crypto = require('crypto');
@@ -22,7 +25,7 @@ function addDeposit(trip, { collectorId, payerId, amount, currency, note }) {
   if (collectorId === payerId) throw new Error('收款人與付款人不能是同一人');
   if (!(amount > 0)) throw new Error('金額必須大於 0');
 
-  const cur = currency || trip.baseCurrency;
+  const cur = (currency || trip.baseCurrency).toUpperCase();
   const amountInBase = round2(toBase(amount, cur, trip.rates));
 
   const deposit = {
@@ -50,7 +53,7 @@ function removeDeposit(trip, depositId) {
   return true;
 }
 
-/** 查看某位收款人目前手上「尚未被實際花費消耗」的預收款總額（供 UI 顯示） */
+/** 查看某位收款人目前手上「尚未被實際花費消耗」的預收款總額（依基準幣別加總，供 UI 顯示） */
 function summarizeDeposits(trip, collectorId) {
   const list = (trip.deposits || []).filter((d) => d.collectorId === collectorId);
   const total = round2(list.reduce((s, d) => s + d.amountInBase, 0));

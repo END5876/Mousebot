@@ -29,12 +29,25 @@ module.exports = {
 
     if (trip) {
       const totalInBase = trip.expenses.reduce((sum, e) => sum + (e.amountInBase || 0), 0);
+
+      // 依原始幣別分開加總，附加顯示在括號內，例如 "390065 TWD (7024 TWD + 1919811 JPY)"
+      const totalsByCurrency = {};
+      for (const e of trip.expenses) {
+        totalsByCurrency[e.currency] = (totalsByCurrency[e.currency] || 0) + e.amount;
+      }
+      const breakdownText = Object.entries(totalsByCurrency)
+        .map(([currency, amount]) => `${Math.round((amount + Number.EPSILON) * 100) / 100} ${currency}`)
+        .join(' + ');
+      const totalText = breakdownText
+        ? `${Math.round((totalInBase + Number.EPSILON) * 100) / 100} ${trip.baseCurrency} (${breakdownText})`
+        : `0 ${trip.baseCurrency}`;
+
       embed.addFields(
         { name: '🧳 當前作用行程', value: `**${trip.name}**`, inline: true },
         { name: '🪙 基準幣別', value: `\`${trip.baseCurrency}\``, inline: true },
         { name: '👥 行程人數', value: `\`${trip.members.length} 人\``, inline: true },
         { name: '🧾 累計帳目', value: `\`${trip.expenses.length} 筆\``, inline: true },
-        { name: '💰 總花費金額', value: `**${totalInBase.toFixed(2)} ${trip.baseCurrency}**`, inline: false }
+        { name: '💰 總花費金額', value: `**${totalText}**`, inline: false }
       );
     } else {
       embed.addFields({
