@@ -57,6 +57,9 @@ function repairTrip(rawTrip) {
   trip.expenses = Array.isArray(trip.expenses) ? trip.expenses : [];
   trip.expenses = trip.expenses.map((e) => repairExpense(e));
 
+  trip.deposits = Array.isArray(trip.deposits) ? trip.deposits : [];
+  trip.deposits = trip.deposits.map((d) => repairDeposit(d));
+
   if (typeof trip.archived !== 'boolean') trip.archived = false;
   if (typeof trip.createdAt !== 'number') trip.createdAt = Date.now();
   if (!trip.id) trip.id = genId('trip');
@@ -77,6 +80,24 @@ function repairExpense(rawExp) {
     participants: Array.isArray(e.participants) ? e.participants : [],
     createdAt: typeof e.createdAt === 'number' ? e.createdAt : Date.now(),
     createdBy: e.createdBy || 'unknown',
+  };
+}
+
+/**
+ * 資料防呆：修復預收款/訂金紀錄，補齊缺漏欄位，避免壞掉的資料
+ * 在結算計算（calcNetBalances 等）中悄悄產生 NaN 或算錯淨額。
+ */
+function repairDeposit(rawDep) {
+  const d = rawDep || {};
+  return {
+    id: d.id || genId('dep'),
+    collectorId: d.collectorId || null,
+    payerId: d.payerId || null,
+    amount: typeof d.amount === 'number' ? d.amount : 0,
+    currency: d.currency || 'TWD',
+    amountInBase: typeof d.amountInBase === 'number' ? d.amountInBase : (typeof d.amount === 'number' ? d.amount : 0),
+    note: d.note || '',
+    createdAt: typeof d.createdAt === 'number' ? d.createdAt : Date.now(),
   };
 }
 
@@ -148,4 +169,5 @@ module.exports = {
   DEFAULT_TRIP,
   repairTrip,
   repairExpense,
+  repairDeposit,
 };

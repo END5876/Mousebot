@@ -6,7 +6,7 @@ const {
 } = require('discord.js');
 const storage = require('../utils/storage');
 const { resolveTrip, memberDisplay } = require('../utils/tripHelper');
-const { equalSplit, fetchRealTimeRate } = require('../utils/calculator');
+const { equalSplit, fetchRealTimeRate, round2 } = require('../utils/calculator');
 const { addDeposit } = require('../utils/deposit');
 const { showMainMenu } = require('../commands/splitbill');
 
@@ -27,6 +27,7 @@ module.exports = {
         new ButtonBuilder().setCustomId('exp_btn_add_start').setLabel('➕ 新增花費').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('exp_btn_deposit_start').setLabel('💰 收取金額').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId('exp_btn_list').setLabel('🧾 歷史與刪除').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('exp_btn_ledger_0').setLabel('📒 總帳目清單').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主控台').setStyle(ButtonStyle.Secondary)
       );
 
@@ -137,8 +138,14 @@ module.exports = {
       return interaction.update({ embeds: [embed], components: [selectRow, navRow] });
     }
 
+    // 📒 總帳目清單：完整列出行程所有花費 + 訂金紀錄（可翻頁瀏覽，唯讀不含刪除）
+    if (customId.startsWith('exp_btn_ledger_')) {
+      const page = parseInt(customId.substring('exp_btn_ledger_'.length), 10) || 0;
+      return renderLedgerPage(interaction, trip, page);
+    }
+
     if (customId === 'exp_btn_split_all') {
-      const state = cache.get(interaction.user.id);
+      const state = cache.get(guildId, interaction.user.id);
       if (!state) return interaction.reply({ content: '⚠️ 狀態過期，請重新操作。', flags: MessageFlags.Ephemeral });
       const allMemberIds = trip.members.map(m => m.id);
       return completeExpenseLogging(interaction, trip, state, allMemberIds, cache);
@@ -169,7 +176,7 @@ module.exports = {
     if (interaction.customId === 'exp_modal_multi_deposit') {
       const { guildId, user } = interaction;
       const { trip } = resolveTrip(guildId);
-      const state = cache.get(user.id);
+      const state = cache.get(guildId, user.id);
 
       if (!state || !state.depositCurrency || !state.depositCollectorId || !state.depositPayerIds) {
         return interaction.reply({ content: '⚠️ 快取失效，請重新操作。', flags: MessageFlags.Ephemeral });
@@ -209,7 +216,7 @@ module.exports = {
         }
         
         storage.persist();
-        cache.delete(user.id);
+        cache.delete(guildId, user.id);
 
         const payerMentions = depositsAdded.map(d => `<@${d.payerId}>(${d.amount})`).join('、');
         const msg = `✅ **預收款紀錄成功！** <@${state.depositCollectorId}> 共收了 ${totalAmount} ${state.depositCurrency}。\n付款人：${payerMentions}\n備註：${note}`;
@@ -255,7 +262,7 @@ module.exports = {
         }
       }
 
-      cache.set(user.id, {
+      cache.set(guildId, user.id, {
         id: `id_${Date.now().toString(36)}`,
         description: desc,
         amount,
@@ -290,7 +297,7 @@ module.exports = {
     if (interaction.customId === 'exp_modal_multi_payer') {
       const { guildId, user } = interaction;
       const { trip } = resolveTrip(guildId);
-      const state = cache.get(user.id);
+      const state = cache.get(guildId, user.id);
       
       if (!state || !state.tempPayerIds) return interaction.reply({ content: '⚠️ 快取過期，請重新開啟。', flags: MessageFlags.Ephemeral });
 
@@ -308,7 +315,7 @@ module.exports = {
       }
 
       if (Math.abs(sum - state.amount) > 0.01) {
-        cache.delete(user.id);
+        cache.delete(guildId, user.id);
         return showMainMenu(interaction, `⚠️ **記帳已取消**：多人代墊金額加總 (**${sum}**) 不等於總花費 (**${state.amount}**)！請重新操作。`);
       }
 
@@ -326,7 +333,7 @@ module.exports = {
     // 🟢 處理「收取訂金」流程 2/4：選擇幣別後，選擇收款人
     if (customId === 'exp_select_deposit_currency') {
       const selectedCurrency = values[0];
-      cache.set(user.id, { depositCurrency: selectedCurrency });
+      cache.set(guildId, user.id, { depositCurrency: selectedCurrency });
 
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
@@ -345,7 +352,7 @@ module.exports = {
 
     // 🟢 處理「收取訂金」流程 3/4：選擇付款人 (支援多選)
     if (customId === 'exp_select_deposit_collector') {
-      const state = cache.get(user.id);
+      const state = cache.get(guildId, user.id);
       if (!state || !state.depositCurrency) return interaction.reply({ content: '⚠️ 快取失效，請重新操作。', flags: MessageFlags.Ephemeral });
       state.depositCollectorId = values[0];
       
@@ -371,7 +378,7 @@ module.exports = {
 
     // 🟢 處理「收取訂金」流程：動態彈出多人金額輸入 Modal
     if (customId === 'exp_select_deposit_payer') {
-      const state = cache.get(user.id);
+      const state = cache.get(guildId, user.id);
       if (!state || !state.depositCurrency || !state.depositCollectorId) {
         return interaction.reply({ content: '⚠️ 快取失效，請重新操作。', flags: MessageFlags.Ephemeral });
       }
@@ -421,7 +428,7 @@ module.exports = {
     }
 
     if (customId === 'exp_select_payer') {
-      const state = cache.get(user.id);
+      const state = cache.get(guildId, user.id);
       if (!state) return interaction.reply({ content: '⚠️ 快取過期，請重新開啟。', flags: MessageFlags.Ephemeral });
 
       const payerIds = values;
@@ -448,7 +455,7 @@ module.exports = {
     }
 
     if (customId === 'exp_select_participants') {
-      const state = cache.get(user.id);
+      const state = cache.get(guildId, user.id);
       if (!state) return interaction.reply({ content: '⚠️ 快取已失效。', flags: MessageFlags.Ephemeral });
 
       const participantIds = values.filter(id => trip.members.some(m => m.id === id));
@@ -477,6 +484,88 @@ module.exports = {
     }
   }
 };
+
+const LEDGER_PAGE_SIZE = 8;
+
+/**
+ * 📒 總帳目清單：依時間先後（由舊到新）完整列出行程內所有花費 + 訂金紀錄，
+ * 並附上依幣別 / 依類型的總計摘要，方便一次掌握全部帳目，支援翻頁瀏覽。
+ * 純唯讀畫面（不提供刪除，刪除請至「🧾 歷史與刪除」)。
+ */
+function renderLedgerPage(interaction, trip, page) {
+  const allRecords = [
+    ...trip.expenses.map(e => ({ ...e, type: 'expense' })),
+    ...(trip.deposits || []).map(d => ({ ...d, type: 'deposit' }))
+  ].sort((a, b) => a.createdAt - b.createdAt);
+
+  if (!allRecords.length) {
+    const embed = new EmbedBuilder()
+      .setColor(0x95a5a6)
+      .setTitle(`📒 「${trip.name}」總帳目清單`)
+      .setDescription('📭 目前尚無任何花費或訂金紀錄。');
+
+    const navRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('exp_nav').setLabel('⬅️ 返回記帳管理').setStyle(ButtonStyle.Secondary)
+    );
+    return interaction.update({ embeds: [embed], components: [navRow] });
+  }
+
+  const totalPages = Math.max(1, Math.ceil(allRecords.length / LEDGER_PAGE_SIZE));
+  const safePage = Math.min(Math.max(page, 0), totalPages - 1);
+  const start = safePage * LEDGER_PAGE_SIZE;
+  const pageRecords = allRecords.slice(start, start + LEDGER_PAGE_SIZE);
+
+  const lines = pageRecords.map((r, idx) => {
+    const globalIdx = start + idx + 1;
+    const dateStr = new Date(r.createdAt).toLocaleString('zh-TW', {
+      timeZone: 'Asia/Taipei', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+    });
+
+    if (r.type === 'expense') {
+      const payers = r.payers.map(p => memberDisplay(trip, p.userId)).join('、');
+      return `**#${globalIdx}** \`${dateStr}\` \`[花費]\` **${r.description}** — ${r.amount} ${r.currency} ➔ ${round2(r.amountInBase)} ${trip.baseCurrency}\n　　由 ${payers} 代墊，${r.participants.length} 人分攤`;
+    } else {
+      const payer = memberDisplay(trip, r.payerId);
+      const collector = memberDisplay(trip, r.collectorId);
+      return `**#${globalIdx}** \`${dateStr}\` \`[訂金]\` **${payer} → ${collector}** — ${r.amount} ${r.currency} ➔ ${round2(r.amountInBase)} ${trip.baseCurrency}${r.note ? `\n　　備註：${r.note}` : ''}`;
+    }
+  }).join('\n\n');
+
+  // 依幣別統計花費小計（僅計 expenses，訂金不列入花費總額）
+  const totalsByCurrency = {};
+  let totalExpenseBase = 0;
+  for (const e of trip.expenses) {
+    totalsByCurrency[e.currency] = (totalsByCurrency[e.currency] || 0) + e.amount;
+    totalExpenseBase += e.amountInBase || 0;
+  }
+  const breakdownText = Object.entries(totalsByCurrency)
+    .map(([currency, amount]) => `${round2(amount)} ${currency}`)
+    .join(' + ');
+  const totalDepositBase = (trip.deposits || []).reduce((sum, d) => sum + (d.amountInBase || 0), 0);
+
+  const embed = new EmbedBuilder()
+    .setColor(0x1abc9c)
+    .setTitle(`📒 「${trip.name}」總帳目清單`)
+    .setDescription(lines)
+    .addFields(
+      {
+        name: '📊 總覽',
+        value:
+          `🧾 花費筆數：\`${trip.expenses.length} 筆\`　💰 訂金筆數：\`${(trip.deposits || []).length} 筆\`\n` +
+          `💵 花費總額：**${round2(totalExpenseBase)} ${trip.baseCurrency}**${breakdownText ? `（${breakdownText}）` : ''}\n` +
+          `🏦 訂金總額：**${round2(totalDepositBase)} ${trip.baseCurrency}**`
+      }
+    )
+    .setFooter({ text: `第 ${safePage + 1} / ${totalPages} 頁　共 ${allRecords.length} 筆紀錄` });
+
+  const navRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`exp_btn_ledger_${safePage - 1}`).setLabel('⬅️ 上一頁').setStyle(ButtonStyle.Primary).setDisabled(safePage <= 0),
+    new ButtonBuilder().setCustomId(`exp_btn_ledger_${safePage + 1}`).setLabel('➡️ 下一頁').setStyle(ButtonStyle.Primary).setDisabled(safePage >= totalPages - 1),
+    new ButtonBuilder().setCustomId('exp_nav').setLabel('🔙 返回記帳管理').setStyle(ButtonStyle.Secondary)
+  );
+
+  return interaction.update({ embeds: [embed], components: [navRow] });
+}
 
 function renderSplitMethodUI(interaction, state) {
   const payerMentions = state.payers.map(p => `<@${p.userId}>(${p.amount})`).join(', ');
@@ -523,7 +612,7 @@ async function completeExpenseLogging(interaction, trip, state, participantIds, 
 
     trip.expenses.push(newExpense);
     storage.persist();
-    cache.delete(interaction.user.id);
+    cache.delete(interaction.guildId, interaction.user.id);
 
     const payerText = newExpense.payers.map(p => `<@${p.userId}>`).join(', ');
     const msg = `✅ **記帳成功！** 項目：${newExpense.description} | 金額：${newExpense.amount} ${newExpense.currency} ➔ ${amountInBase} ${trip.baseCurrency} | 代墊：${payerText}`;
