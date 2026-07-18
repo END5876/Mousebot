@@ -25,7 +25,7 @@ module.exports = {
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('exp_btn_add_start').setLabel('➕ 新增花費').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('exp_btn_deposit_start').setLabel('💰 收取訂金').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('exp_btn_deposit_start').setLabel('💰 收取金額').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId('exp_btn_list').setLabel('🧾 歷史與刪除').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主控台').setStyle(ButtonStyle.Secondary)
       );
@@ -38,16 +38,22 @@ module.exports = {
         return interaction.reply({ content: '⚠️ 此行程成員不足兩人，無法使用訂金功能！', flags: MessageFlags.Ephemeral });
       }
 
+      const currencies = Object.keys(trip.rates);
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
-        .setTitle('💰 步驟 1/3：選擇收款人')
-        .setDescription('誰負責「代收」這筆訂金？\n*(例如：負責統一訂機票/住宿的人)*');
+        .setTitle('💰 步驟 1/4：選擇幣別')
+        .setDescription('這筆訂金是用哪種幣別收的？\n*(訂金會保留原始幣別，不會預先換算成本位幣)*');
 
       const selectRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
-          .setCustomId('exp_select_deposit_collector')
-          .setPlaceholder('選擇收款人...')
-          .addOptions(trip.members.slice(0, 25).map(m => ({ label: m.name, value: m.id })))
+          .setCustomId('exp_select_deposit_currency')
+          .setPlaceholder('選擇訂金幣別...')
+          .addOptions(
+            currencies.map(c => ({
+              label: `${c}${c === trip.baseCurrency ? ' (基準本位幣)' : ''}`,
+              value: c
+            })).slice(0, 25)
+          )
       );
 
       const navRow = new ActionRowBuilder().addComponents(
@@ -165,7 +171,7 @@ module.exports = {
       const { trip } = resolveTrip(guildId);
       const state = cache.get(user.id);
 
-      if (!state || !state.depositCollectorId || !state.depositPayerIds) {
+      if (!state || !state.depositCurrency || !state.depositCollectorId || !state.depositPayerIds) {
         return interaction.reply({ content: '⚠️ 快取失效，請重新操作。', flags: MessageFlags.Ephemeral });
       }
 
@@ -194,7 +200,7 @@ module.exports = {
             collectorId: state.depositCollectorId,
             payerId: state.depositPayerIds[i],
             amount,
-            currency: trip.baseCurrency,
+            currency: state.depositCurrency,
             note
           });
           
@@ -206,7 +212,7 @@ module.exports = {
         cache.delete(user.id);
 
         const payerMentions = depositsAdded.map(d => `<@${d.payerId}>(${d.amount})`).join('、');
-        const msg = `✅ **預收款紀錄成功！** <@${state.depositCollectorId}> 共收了 ${totalAmount} ${trip.baseCurrency}。\n付款人：${payerMentions}\n備註：${note}`;
+        const msg = `✅ **預收款紀錄成功！** <@${state.depositCollectorId}> 共收了 ${totalAmount} ${state.depositCurrency}。\n付款人：${payerMentions}\n備註：${note}`;
         
         return showMainMenu(interaction, msg);
       } catch (err) {
@@ -317,17 +323,39 @@ module.exports = {
     const { customId, guildId, values, user } = interaction;
     const { trip } = resolveTrip(guildId);
 
-    // 🟢 處理「收取訂金」流程 2/3：選擇付款人 (支援多選)
+    // 🟢 處理「收取訂金」流程 2/4：選擇幣別後，選擇收款人
+    if (customId === 'exp_select_deposit_currency') {
+      const selectedCurrency = values[0];
+      cache.set(user.id, { depositCurrency: selectedCurrency });
+
+      const embed = new EmbedBuilder()
+        .setColor(0x2ecc71)
+        .setTitle('💰 步驟 2/4：選擇收款人')
+        .setDescription(`幣別：**${selectedCurrency}**\n\n誰負責「代收」這筆訂金？\n*(例如：負責統一訂機票/住宿的人)*`);
+
+      const selectRow = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId('exp_select_deposit_collector')
+          .setPlaceholder('選擇收款人...')
+          .addOptions(trip.members.slice(0, 25).map(m => ({ label: m.name, value: m.id })))
+      );
+
+      return interaction.update({ embeds: [embed], components: [selectRow] });
+    }
+
+    // 🟢 處理「收取訂金」流程 3/4：選擇付款人 (支援多選)
     if (customId === 'exp_select_deposit_collector') {
-      cache.set(user.id, { depositCollectorId: values[0] });
+      const state = cache.get(user.id);
+      if (!state || !state.depositCurrency) return interaction.reply({ content: '⚠️ 快取失效，請重新操作。', flags: MessageFlags.Ephemeral });
+      state.depositCollectorId = values[0];
       
       const availableMembers = trip.members.filter(m => m.id !== values[0]);
       const maxSelect = Math.min(availableMembers.length, 5); // Discord Modal 最多 5 個輸入框
 
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
-        .setTitle('💰 步驟 2/3：選擇付款人')
-        .setDescription(`誰「付錢」給了收款人？\n*(💡 可多選，最多 ${maxSelect} 人)*`);
+        .setTitle('💰 步驟 3/4：選擇付款人')
+        .setDescription(`幣別：**${state.depositCurrency}**\n\n誰「付錢」給了收款人？\n*(💡 可多選，最多 ${maxSelect} 人)*`);
 
       const selectRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
@@ -344,20 +372,22 @@ module.exports = {
     // 🟢 處理「收取訂金」流程：動態彈出多人金額輸入 Modal
     if (customId === 'exp_select_deposit_payer') {
       const state = cache.get(user.id);
-      if (!state) return interaction.reply({ content: '⚠️ 快取失效。', flags: MessageFlags.Ephemeral });
+      if (!state || !state.depositCurrency || !state.depositCollectorId) {
+        return interaction.reply({ content: '⚠️ 快取失效，請重新操作。', flags: MessageFlags.Ephemeral });
+      }
       
       state.depositPayerIds = values; // 儲存多個付款人 ID
 
       const modal = new ModalBuilder()
         .setCustomId('exp_modal_multi_deposit')
-        .setTitle('💰 步驟 3/3：輸入訂金金額');
+        .setTitle(`💰 步驟 4/4：輸入訂金金額 (${state.depositCurrency})`);
 
       // 根據選擇的人數，動態產生輸入框
       values.forEach((id, idx) => {
         const memberName = trip.members.find(m => m.id === id).name;
         const amountInput = new TextInputBuilder()
           .setCustomId(`dep_amount_${idx}`)
-          .setLabel(`${memberName} 付了多少 (${trip.baseCurrency})？`)
+          .setLabel(`${memberName} 付了多少 (${state.depositCurrency})？`)
           .setStyle(TextInputStyle.Short)
           .setRequired(true);
         modal.addComponents(new ActionRowBuilder().addComponents(amountInput));
