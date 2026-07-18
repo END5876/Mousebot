@@ -11,12 +11,14 @@ const {
 
 const voiceMonitor = require('../voiceActivityMonitor');
 
-const { queues, nowPlaying, loopSettings, connections, activeSearchMessages } = require('./state');
+const { queues, nowPlaying, loopSettings, connections, activeSearchMessages, randomPlaySettings } = require('./state');
 const {
   _buildEmbed,
   updateControlPanel,
   stopAll,
   _createIdleStopHandler,
+  ensureConnection,
+  playRandomLocal,
 } = require('./playback');
 const { handlePlay, handleAutocomplete } = require('./search');
 const bootSummary = require('../../../utils/bootSummary');
@@ -72,6 +74,15 @@ function setupUnifiedCommands(client) {
         case 'uq_skip': {
           const queue = queues.get(guildId) || [];
           const loopMode = loopSettings.get(guildId) || 'off';
+          const isRandomPlay = randomPlaySettings.get(guildId) || false;
+
+          // 隨機連播模式下，skip 直接觸發 player.stop()，
+          // Idle 事件會自動隨機挑下一首
+          if (isRandomPlay) {
+            np.player.stop();
+            await interaction.reply({ content: '⏭️ 跳過，隨機連播下一首', flags: MessageFlags.Ephemeral });
+            break;
+          }
 
           // 只有「佇列真的空了」且「循環模式關閉」時才整組停止；
           // 否則交給 player.stop() 觸發 Idle 事件，讓 playback.js 的
@@ -92,6 +103,8 @@ function setupUnifiedCommands(client) {
           break;
 
         case 'uq_loop_one': {
+          // 開啟單曲循環時，關閉隨機連播（互斥）
+          randomPlaySettings.set(guildId, false);
           const cur = loopSettings.get(guildId);
           const next = cur === 'one' ? 'off' : 'one';
           loopSettings.set(guildId, next);
@@ -104,6 +117,8 @@ function setupUnifiedCommands(client) {
         }
 
         case 'uq_loop_all': {
+          // 開啟列表循環時，關閉隨機連播（互斥）
+          randomPlaySettings.set(guildId, false);
           const cur = loopSettings.get(guildId);
           const next = cur === 'all' ? 'off' : 'all';
           loopSettings.set(guildId, next);
@@ -115,15 +130,39 @@ function setupUnifiedCommands(client) {
           break;
         }
 
+        case 'uq_random_play': {
+          const cur = randomPlaySettings.get(guildId) || false;
+          const next = !cur;
+          randomPlaySettings.set(guildId, next);
+
+          if (next) {
+            // 開啟隨機連播時，關閉其他循環模式（互斥）
+            loopSettings.set(guildId, 'off');
+            await interaction.reply({
+              content: '🎲 隨機連播已開啟，播完當前歌曲後將自動隨機挑選下一首本地音樂',
+              flags: MessageFlags.Ephemeral,
+            });
+          } else {
+            await interaction.reply({
+              content: '❌ 隨機連播已關閉',
+              flags: MessageFlags.Ephemeral,
+            });
+          }
+          await updateControlPanel(guildId, interaction.channel);
+          break;
+        }
+
         case 'uq_queue': {
           const queueList = queues.get(guildId) || [];
           const loopMode = loopSettings.get(guildId) || 'off';
+          const isRandomPlay = randomPlaySettings.get(guildId) || false;
           let loopText = '❌ 關閉';
           if (loopMode === 'one') loopText = '🔂 單曲循環';
           if (loopMode === 'all') loopText = '🔁 列表循環';
+          if (isRandomPlay) loopText = '🎲 隨機連播';
 
           const embed = new EmbedBuilder()
-            .setColor(0x1DB954)
+            .setColor(isRandomPlay ? 0xFF8C00 : 0x1DB954)
             .setTitle('🎵 播放佇列')
             .addFields(
               {
@@ -196,7 +235,8 @@ const playCommand = {
 
 // ════════════════════════════════════════════════════════
 //  /music 單一指令，底下掛 stop / skip / loop / queue /
-//  clear / nowplaying / local(group: list) / idle(group: enable/disable/status)
+//  clear / nowplaying / randomplay /
+//  local(group: list) / idle(group: enable/disable/status)
 //  （play 已依需求拆回獨立的 /play 指令）
 // ════════════════════════════════════════════════════════
 const musicCommand = {
@@ -209,6 +249,19 @@ const musicCommand = {
     .addSubcommand(sub => sub.setName('queue').setDescription('查看播放佇列'))
     .addSubcommand(sub => sub.setName('clear').setDescription('清空播放佇列'))
     .addSubcommand(sub => sub.setName('nowplaying').setDescription('查看目前播放的詳細資訊'))
+    .addSubcommand(sub =>
+      sub.setName('randomplay')
+        .setDescription('立即隨機播放一首本地音樂，可選擇開啟隨機連播模式')
+        .addStringOption(opt =>
+          opt.setName('continuous')
+            .setDescription('是否開啟隨機連播（播完後自動隨機下一首，直到手動停止）')
+            .setRequired(false)
+            .addChoices(
+              { name: '🎲 開啟隨機連播', value: 'yes' },
+              { name: '▶️ 只播一首', value: 'no' },
+            )
+        )
+    )
     .addSubcommandGroup(group =>
       group.setName('local')
         .setDescription('本地音樂功能')
@@ -234,10 +287,11 @@ const musicCommand = {
     switch (sub) {
       case 'stop':         return handleMusicStop(interaction);
       case 'skip':         return handleMusicSkip(interaction);
-      case 'loop':          return handleMusicLoop(interaction);
-      case 'queue':         return handleMusicQueue(interaction);
-      case 'clear':         return handleMusicClear(interaction);
-      case 'nowplaying':    return handleMusicNowPlaying(interaction);
+      case 'loop':         return handleMusicLoop(interaction);
+      case 'queue':        return handleMusicQueue(interaction);
+      case 'clear':        return handleMusicClear(interaction);
+      case 'nowplaying':   return handleMusicNowPlaying(interaction);
+      case 'randomplay':   return handleMusicRandomPlay(interaction);
     }
   }
 };
@@ -266,6 +320,13 @@ async function handleMusicSkip(interaction) {
 
   const queue = queues.get(interaction.guildId) || [];
   const loopMode = loopSettings.get(interaction.guildId) || 'off';
+  const isRandomPlay = randomPlaySettings.get(interaction.guildId) || false;
+
+  // 隨機連播模式下，skip 直接觸發 player.stop()，Idle 事件自動隨機下一首
+  if (isRandomPlay) {
+    np.player.stop();
+    return interaction.reply({ content: '⏭️ 跳過，隨機連播下一首' });
+  }
 
   // 邏輯與 uq_skip 按鈕保持一致：尊重循環模式，不再無條件停止
   if (queue.length === 0 && loopMode === 'off') {
@@ -280,6 +341,9 @@ async function handleMusicSkip(interaction) {
 async function handleMusicLoop(interaction) {
   const np = nowPlaying.get(interaction.guildId);
   if (!np) return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
+
+  // 切換循環模式時，關閉隨機連播（互斥）
+  randomPlaySettings.set(interaction.guildId, false);
 
   const cur = loopSettings.get(interaction.guildId) || 'off';
   const next = cur === 'off' ? 'one' : cur === 'one' ? 'all' : 'off';
@@ -312,6 +376,7 @@ async function handleMusicQueue(interaction) {
   const np = nowPlaying.get(interaction.guildId);
   const queueList = queues.get(interaction.guildId) || [];
   const loopMode = loopSettings.get(interaction.guildId) || 'off';
+  const isRandomPlay = randomPlaySettings.get(interaction.guildId) || false;
 
   if (!np && queueList.length === 0) {
     return interaction.reply({ content: '❌ 目前沒有播放音樂且佇列為空', flags: MessageFlags.Ephemeral });
@@ -320,9 +385,10 @@ async function handleMusicQueue(interaction) {
   let loopText = '❌ 關閉';
   if (loopMode === 'one') loopText = '🔂 單曲循環';
   if (loopMode === 'all') loopText = '🔁 列表循環';
+  if (isRandomPlay) loopText = '🎲 隨機連播';
 
   const embed = new EmbedBuilder()
-    .setColor(0x1DB954)
+    .setColor(isRandomPlay ? 0xFF8C00 : 0x1DB954)
     .setTitle('🎵 播放佇列')
     .setTimestamp();
 
@@ -370,6 +436,54 @@ async function handleMusicNowPlaying(interaction) {
   if (!np) return interaction.reply({ content: '❌ 目前沒有播放音樂', flags: MessageFlags.Ephemeral });
   const embed = _buildEmbed(interaction.guildId);
   await interaction.reply({ embeds: [embed] });
+}
+
+// ── /music randomplay ─────────────────────────────────────
+async function handleMusicRandomPlay(interaction) {
+  await interaction.deferReply();
+
+  const guildId = interaction.guildId;
+  const continuousOpt = interaction.options.getString('continuous') ?? 'no';
+  const enableContinuous = continuousOpt === 'yes';
+
+  // 確保語音連線
+  let connection;
+  try {
+    connection = await ensureConnection(interaction);
+  } catch {
+    return interaction.editReply('❌ 加入語音頻道時發生錯誤');
+  }
+  if (!connection) return interaction.editReply('❌ 你必須先加入語音頻道！');
+
+  // 若目前正在播放，先停止（隨機播放視為全新開始）
+  if (nowPlaying.has(guildId)) {
+    stopAll(guildId);
+  }
+
+  const track = await playRandomLocal(guildId, interaction.channel, { enableContinuous });
+
+  if (!track) {
+    return interaction.editReply('❌ data/music 資料夾內沒有可播放的音訊檔案！');
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(enableContinuous ? 0xFF8C00 : 0x1DB954)
+    .setTitle(enableContinuous ? '🎲 隨機連播已開始' : '🎲 隨機播放')
+    .setDescription(`🎧 **${track.title}**`)
+    .addFields(
+      {
+        name: '模式',
+        value: enableContinuous
+          ? '🎲 隨機連播（播完後自動隨機下一首，直到手動停止）'
+          : '▶️ 單首播放',
+        inline: false,
+      },
+    )
+    .setFooter({ text: enableContinuous ? '使用控制面板的「隨機連播」按鈕可隨時關閉' : '使用 /music randomplay continuous:開啟隨機連播 可啟用連播' })
+    .setTimestamp();
+
+  await interaction.editReply({ embeds: [embed] });
+  await updateControlPanel(guildId, interaction.channel);
 }
 
 // ── /music local list ─────────────────────────────────────

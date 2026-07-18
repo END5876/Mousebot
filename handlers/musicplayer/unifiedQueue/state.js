@@ -24,6 +24,11 @@ const loopSettings = new Map();
 const controlMsgs = new Map();
 const connections = new Map();
 
+// ── 隨機連播模式：guildId → boolean
+//    true  = 每首播完後自動隨機挑下一首本地音樂繼續播
+//    false / 不存在 = 關閉
+const randomPlaySettings = new Map();
+
 // ── 搜尋標記：autocomplete 選了「線上搜尋」時，用這個前綴標記 input ──
 const SEARCH_MARKER = '__SEARCH__::';
 
@@ -43,6 +48,7 @@ module.exports = {
   loopSettings,
   controlMsgs,
   connections,
+  randomPlaySettings,
   SEARCH_MARKER,
   activeSearchMessages,
 };

@@ -26,6 +26,7 @@ const {
   loopSettings,
   controlMsgs,
   connections,
+  randomPlaySettings,
 } = require('./state');
 
 // ════════════════════════════════════════════════════════
@@ -35,17 +36,19 @@ function _buildEmbed(guildId) {
   const np = nowPlaying.get(guildId);
   const queue = queues.get(guildId) || [];
   const loopMode = loopSettings.get(guildId) || 'off';
+  const isRandomPlay = randomPlaySettings.get(guildId) || false;
 
   if (!np) return null;
 
   let loopText = '❌ 關閉';
   if (loopMode === 'one') loopText = '🔂 單曲循環';
   if (loopMode === 'all') loopText = '🔁 列表循環';
+  if (isRandomPlay) loopText = '🎲 隨機連播';
 
   const { item } = np;
 
   const embed = new EmbedBuilder()
-    .setColor(0x1DB954)
+    .setColor(isRandomPlay ? 0xFF8C00 : 0x1DB954)
     .setTitle('🎵 正在播放')
     .setTimestamp()
     .setFooter({ text: '📋 使用下方按鈕控制播放' });
@@ -75,6 +78,7 @@ function _buildEmbed(guildId) {
 
 function _buildButtons(guildId) {
   const loopMode = loopSettings.get(guildId) || 'off';
+  const isRandomPlay = randomPlaySettings.get(guildId) || false;
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('uq_skip')
@@ -97,10 +101,10 @@ function _buildButtons(guildId) {
       .setEmoji('🔁')
       .setStyle(loopMode === 'all' ? ButtonStyle.Success : ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId('uq_queue')
-      .setLabel('佇列')
-      .setEmoji('📋')
-      .setStyle(ButtonStyle.Secondary),
+      .setCustomId('uq_random_play')
+      .setLabel('隨機連播')
+      .setEmoji('🎲')
+      .setStyle(isRandomPlay ? ButtonStyle.Success : ButtonStyle.Secondary),
   );
 }
 
@@ -138,6 +142,7 @@ function stopAll(guildId) {
   queues.delete(guildId);
   loopSettings.delete(guildId);
   controlMsgs.delete(guildId);
+  randomPlaySettings.delete(guildId);
   stopMusicLayer(guildId);
 
   if (_engines.bilibili && typeof _engines.bilibili.clearErrorCount === 'function') {
@@ -169,6 +174,33 @@ function _createIdleStopHandler(guildId, connection, channel) {
 }
 
 // ════════════════════════════════════════════════════════
+//  隨機挑一首本地音樂（排除當前正在播放的那首）
+// ════════════════════════════════════════════════════════
+function _pickRandomLocalTrack(guildId) {
+  const engine = _engines.local;
+  if (!engine) return null;
+
+  const files = engine.getMusicFiles();
+  if (files.length === 0) return null;
+
+  // 若有多首，嘗試排除當前曲目，避免連續重複
+  const np = nowPlaying.get(guildId);
+  const currentFilename = np?.item?.filename;
+
+  let candidates = files;
+  if (currentFilename && files.length > 1) {
+    candidates = files.filter(f => f.filename !== currentFilename);
+  }
+
+  const picked = candidates[Math.floor(Math.random() * candidates.length)];
+  return {
+    ...picked,
+    title: picked.name,
+    type: 'local',
+  };
+}
+
+// ════════════════════════════════════════════════════════
 //  核心播放
 // ════════════════════════════════════════════════════════
 async function _playItem(guildId, item, channel, { silent = false } = {}) {
@@ -186,9 +218,33 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
     if (!current || current.player !== player) return;
 
     const loopMode = loopSettings.get(guildId) || 'off';
+    const isRandomPlay = randomPlaySettings.get(guildId) || false;
 
+    // 單曲循環
     if (loopMode === 'one') {
       await _playItem(guildId, item, channel, { silent: true });
+      return;
+    }
+
+    // 隨機連播模式：忽略佇列，直接隨機挑下一首
+    if (isRandomPlay) {
+      const next = _pickRandomLocalTrack(guildId);
+      if (!next) {
+        console.log('✅ [UnifiedQueue] 隨機連播：找不到本地音樂，停止');
+        stopAll(guildId);
+        channel.send('✅ 找不到本地音樂，隨機連播已停止').catch(() => {});
+        return;
+      }
+
+      const nextEmbed = new EmbedBuilder()
+        .setColor(0xFF8C00)
+        .setTitle('🎲 隨機連播 — 下一首')
+        .setDescription(`🎧 **${next.title}**`)
+        .setTimestamp();
+      channel.send({ embeds: [nextEmbed] }).catch(() => {});
+
+      await _playItem(guildId, next, channel, { silent: false });
+      await updateControlPanel(guildId, channel);
       return;
     }
 
@@ -233,6 +289,17 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
     if (err.message?.includes('aborted') || err.message?.includes('premature close')) return;
     console.error(`❌ [UnifiedQueue] 播放器錯誤 (${guildId}):`, err.message);
     channel.send(`❌ 播放 **${item.title}** 時發生錯誤，嘗試跳過...`).catch(() => {});
+
+    const isRandomPlay = randomPlaySettings.get(guildId) || false;
+    if (isRandomPlay) {
+      const next = _pickRandomLocalTrack(guildId);
+      if (next) {
+        setTimeout(() => _playItem(guildId, next, channel), 1000);
+      } else {
+        stopAll(guildId);
+      }
+      return;
+    }
 
     const queue = queues.get(guildId) || [];
     if (queue.length > 0) {
@@ -286,6 +353,26 @@ async function enqueue(guildId, item, channel) {
     await _playItem(guildId, item, channel);
     return { queued: false };
   }
+}
+
+// ════════════════════════════════════════════════════════
+//  公開：立即隨機播放一首本地音樂（/music randomplay 用）
+// ════════════════════════════════════════════════════════
+async function playRandomLocal(guildId, channel, { enableContinuous = false } = {}) {
+  const track = _pickRandomLocalTrack(guildId);
+  if (!track) return null;
+
+  // 清空佇列，確保隨機連播模式下不受舊佇列影響
+  queues.set(guildId, []);
+
+  if (enableContinuous) {
+    randomPlaySettings.set(guildId, true);
+    // 關閉其他循環模式，避免衝突
+    loopSettings.set(guildId, 'off');
+  }
+
+  await _playItem(guildId, track, channel);
+  return track;
 }
 
 // ════════════════════════════════════════════════════════
@@ -359,4 +446,5 @@ module.exports = {
   ensureConnection,
   isPlaying,
   getNowPlaying,
+  playRandomLocal,
 };

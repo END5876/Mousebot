@@ -18,6 +18,7 @@ const {
   ensureConnection,
   isPlaying,
   getNowPlaying,
+  playRandomLocal,
 } = require('./playback');
 const { handleAutocomplete } = require('./search');
 const { setupUnifiedCommands } = require('./commands');
@@ -32,4 +33,5 @@ module.exports = {
   getNowPlaying,
   updateControlPanel,
   ensureConnection,
+  playRandomLocal,
 };
