@@ -9,7 +9,7 @@ const { resolveTrip } = require('../utils/tripHelper');
 const { showMainMenu } = require('../commands/splitbill');
 
 const BASELINE_RATES = {
-  TWD: 1, JPY: 0.21, USD: 32.5, KRW: 0.024, EUR: 34.8, THB: 0.89, HKD: 4.1, GBP: 40.5
+  TWD: 1, JPY: 0.2, USD: 32, KRW: 0.024, EUR: 34.8, THB: 0.89, HKD: 4.1, GBP: 40.5
 };
 
 module.exports = {
