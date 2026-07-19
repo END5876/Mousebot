@@ -39,6 +39,20 @@ function getBackNavConfig(source) {
   return { customId: 'exp_nav', label: '🔙 返回記帳管理' };
 }
 
+/**
+ * 🆕 組出「金額 幣別」文字，只有在「該筆紀錄幣別 ≠ 行程基準幣」時，
+ * 才附加「➔ 換算後金額 基準幣」——因為幣別本身就是基準幣的話，
+ * 換算前後數字完全一樣，顯示出來只是廢話，徒增畫面長度。
+ * 例：
+ *   currency === baseCurrency → "2000 TWD"
+ *   currency !== baseCurrency → "38172 JPY ➔ 7592.41 TWD"
+ */
+function formatAmountConversion(amount, currency, amountInBase, baseCurrency) {
+  const amountText = `${round2(amount)} ${currency}`;
+  if (currency === baseCurrency) return amountText;
+  return `${amountText} ➔ ${round2(amountInBase)} ${baseCurrency}`;
+}
+
 module.exports = {
   async handleButton(interaction, cache) {
     const { customId, guildId } = interaction;
@@ -578,6 +592,10 @@ const LEDGER_PAGE_SIZE = 8;
  *   - 'set'：結算與淨額中心
  * 翻頁按鈕、刪除選單、返回按鈕都會依此參數帶上相同的來源標記，
  * 確保整趟瀏覽過程中「返回」永遠導向正確的原始分頁。
+ *
+ * 🆕 每筆紀錄的金額顯示改用 formatAmountConversion：
+ *   若該筆幣別本身就等於行程基準幣，就不再顯示「➔ 換算後金額」，
+ *   因為換算前後數字完全相同，顯示等於重複資訊。
  */
 function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'exp') {
   const allRecords = [
@@ -610,14 +628,15 @@ function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'ex
     const dateStr = new Date(r.createdAt).toLocaleString('zh-TW', {
       timeZone: 'Asia/Taipei', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
     });
+    const amountText = formatAmountConversion(r.amount, r.currency, r.amountInBase, trip.baseCurrency);
 
     if (r.type === 'expense') {
       const payers = r.payers.map(p => memberDisplay(trip, p.userId)).join('、');
-      return `**#${globalIdx}** \`${dateStr}\` \`[花費]\` **${r.description}** — ${r.amount} ${r.currency} ➔ ${round2(r.amountInBase)} ${trip.baseCurrency}\n　　由 ${payers} 代墊，${r.participants.length} 人分攤`;
+      return `**#${globalIdx}** \`${dateStr}\` \`[花費]\` **${r.description}** — ${amountText}\n　　由 ${payers} 代墊，${r.participants.length} 人分攤`;
     } else {
       const payer = memberDisplay(trip, r.payerId);
       const collector = memberDisplay(trip, r.collectorId);
-      return `**#${globalIdx}** \`${dateStr}\` \`[訂金]\` **${payer} → ${collector}** — ${r.amount} ${r.currency} ➔ ${round2(r.amountInBase)} ${trip.baseCurrency}${r.note ? `\n　　備註：${r.note}` : ''}`;
+      return `**#${globalIdx}** \`${dateStr}\` \`[訂金]\` **${payer} → ${collector}** — ${amountText}${r.note ? `\n　　備註：${r.note}` : ''}`;
     }
   }).join('\n\n');
 
@@ -641,7 +660,7 @@ function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'ex
       {
         name: '📊 總覽',
         value:
-          `🧾 花費筆數：\`${trip.expenses.length} 筆\`　💰 訂金筆數：\`${(trip.deposits || []).length} 筆\`\n` +
+          `🧾 花費筆數：\`${trip.expenses.length} 筆\`　💰 轉帳筆數：\`${(trip.deposits || []).length} 筆\`\n` +
           `💵 花費總額：**${round2(totalExpenseBase)} ${trip.baseCurrency}**${breakdownText ? `（${breakdownText}）` : ''}\n` +
           `🏦 訂金總額：**${round2(totalDepositBase)} ${trip.baseCurrency}**`
       }
@@ -719,7 +738,8 @@ async function completeExpenseLogging(interaction, trip, state, participantIds, 
     cache.delete(interaction.guildId, interaction.user.id);
 
     const payerText = newExpense.payers.map(p => `<@${p.userId}>`).join(', ');
-    const msg = `✅ **記帳成功！** 項目：${newExpense.description} | 金額：${newExpense.amount} ${newExpense.currency} ➔ ${amountInBase} ${trip.baseCurrency} | 代墊：${payerText}`;
+    const amountText = formatAmountConversion(newExpense.amount, newExpense.currency, amountInBase, trip.baseCurrency);
+    const msg = `✅ **記帳成功！** 項目：${newExpense.description} | 金額：${amountText} | 代墊：${payerText}`;
     
     return showMainMenu(interaction, msg);
 
@@ -762,7 +782,8 @@ async function completeExpenseLoggingWithShares(interaction, trip, state, shares
 
     const payerText = newExpense.payers.map(p => `<@${p.userId}>`).join(', ');
     const shareText = shares.map(s => `<@${s.userId}>(${s.share})`).join('、');
-    const msg = `✅ **記帳成功（自訂分攤）！** 項目：${newExpense.description} | 金額：${newExpense.amount} ${newExpense.currency} ➔ ${amountInBase} ${trip.baseCurrency}\n代墊：${payerText}\n各自應付：${shareText}`;
+    const amountText = formatAmountConversion(newExpense.amount, newExpense.currency, amountInBase, trip.baseCurrency);
+    const msg = `✅ **記帳成功（自訂分攤）！** 項目：${newExpense.description} | 金額：${amountText}\n代墊：${payerText}\n各自應付：${shareText}`;
     
     return showMainMenu(interaction, msg);
 
