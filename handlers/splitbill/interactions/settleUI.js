@@ -7,38 +7,45 @@ const { simplifyDebts } = require('../utils/settlement');
 const { showMainMenu } = require('../commands/splitbill');
 
 /**
- * 每人淨額明細（區分「花費代墊」與「直接轉帳」兩種來源）
+ * 🆕【收支帳模式】每人淨額明細呈現
  *
- * 用詞修正：
- * 原本用「訂金」來標記 trip.deposits 的正負值，但 deposits 這個機制
- * 本質上只是「兩人之間的直接轉帳」，用途可能是團費預收、還款、代收代付等，
- * 系統無法（也不該）替使用者預設具體用途。改用中性詞彙「已直接付款 / 已收到付款」，
- * 只客觀描述金流方向，不假設背後原因。
+ * 設計原則：
+ * 每一行都用 ➕/➖ 明確標示「這筆讓淨額增加還是減少」，使用者可以
+ * 自行驗算：淨額 = 所有➕ − 所有➖（換算成基準幣後）。
+ * 徹底解決舊版「標題說應收回、明細卻說還少給」的語意矛盾問題。
  *
- *   - 花費 + 正值 → 幫大家代墊
- *   - 花費 + 負值 → 自己還少給
- *   - 轉帳 + 正值 → 已直接付款給他人
- *   - 轉帳 + 負值 → 已收到他人付款
+ * 分類（固定順序顯示）：
+ *   ➕ 代墊花費      (paid)
+ *   ➕ 轉帳給他人    (transferOut)
+ *   ➖ 應分攤花費    (share)
+ *   ➖ 收到他人轉帳  (transferIn)
+ *
+ * bucketsByCurrency 格式：{ [currency]: { paid, share, transferOut, transferIn } }
  */
-function formatBreakdownBlock(breakdownEntries) {
-  const entries = (breakdownEntries || []).filter(b => Math.abs(b.amount) >= 0.01);
-
-  if (entries.length <= 1) return null;
-
-  const fmt = (list) => list.map(b => `${round2(Math.abs(b.amount))} ${b.currency}`).join('、');
-
-  const expensePositive = entries.filter(b => b.source === 'expense' && b.amount > 0).sort((a, b) => b.amount - a.amount);
-  const expenseNegative = entries.filter(b => b.source === 'expense' && b.amount < 0).sort((a, b) => a.amount - b.amount);
-  const transferPositive = entries.filter(b => b.source === 'deposit' && b.amount > 0).sort((a, b) => b.amount - a.amount);
-  const transferNegative = entries.filter(b => b.source === 'deposit' && b.amount < 0).sort((a, b) => a.amount - b.amount);
+function formatBreakdownBlock(bucketsByCurrency) {
+  const categories = [
+    { field: 'paid',        prefix: '➕', label: '代墊花費' },
+    { field: 'transferOut', prefix: '➕', label: '轉帳給他人' },
+    { field: 'share',       prefix: '➖', label: '應分攤花費' },
+    { field: 'transferIn',  prefix: '➖', label: '收到他人轉帳' },
+  ];
 
   const lines = [];
-  if (expensePositive.length) lines.push(`幫大家代墊：${fmt(expensePositive)}`);
-  if (expenseNegative.length) lines.push(`自己還少給：${fmt(expenseNegative)}`);
-  if (transferPositive.length) lines.push(`已直接付款給他人：${fmt(transferPositive)}`);
-  if (transferNegative.length) lines.push(`已收到他人付款：${fmt(transferNegative)}`);
+  for (const { field, prefix, label } of categories) {
+    const parts = Object.entries(bucketsByCurrency || {})
+      .filter(([, b]) => Math.abs(b[field] || 0) >= 0.01)
+      .sort(([, a], [, b]) => (b[field] || 0) - (a[field] || 0))
+      .map(([currency, b]) => `${round2(b[field])} ${currency}`);
+    if (parts.length) lines.push(`${prefix} ${label}：${parts.join('、')}`);
+  }
 
-  return lines.map((line, idx) => `　${idx === lines.length - 1 ? '└ ' : '└ '} ${line}`).join('\n');
+  // 明細只有 0～1 行時，資訊量等同標題本身，省略以保持畫面乾淨
+  if (lines.length <= 1) return null;
+
+  // 樹狀符號：非最後一行用 ├，最後一行用 └（雙空格縮排）
+  return lines
+    .map((line, idx) => `　${idx === lines.length - 1 ? '└' : '├'} ${line}`)
+    .join('\n');
 }
 
 module.exports = {
@@ -65,7 +72,7 @@ module.exports = {
       return interaction.update({ embeds: [embed], components: [row] });
     }
 
-    // 1. 每人收支淨額分佈
+    // 1. 每人收支淨額分佈（收支帳模式）
     if (customId === 'set_btn_balance') {
       const net = calcNetBalances(trip);
       const netByCurrency = calcNetBalancesByCurrency(trip);
@@ -73,27 +80,15 @@ module.exports = {
       const lines = trip.members.map(m => {
         const val = round2(net[m.id] || 0);
 
-        // 把 { expense, deposit } 拆成兩筆獨立 entry，交給 formatBreakdownBlock 分類
-        const breakdown = Object.entries(netByCurrency[m.id] || {}).flatMap(([currency, sources]) => {
-          const items = [];
-          if (Math.abs(sources.expense || 0) >= 0.01) {
-            items.push({ currency, amount: sources.expense, source: 'expense' });
-          }
-          if (Math.abs(sources.deposit || 0) >= 0.01) {
-            items.push({ currency, amount: sources.deposit, source: 'deposit' });
-          }
-          return items;
-        });
-
         if (Math.abs(val) < 0.01) {
           return `⚪ <@${m.id}> 帳目兩清（無需收付）`;
         }
 
         const statusIcon = val > 0 ? '🟢' : '🔴';
-        const actionText = val > 0 ? '應收回' : '要補交';
+        const actionText = val > 0 ? '應收回' : '要付出';
         const titleLine = `${statusIcon} <@${m.id}> ${actionText} ${round2(Math.abs(val))} ${trip.baseCurrency}`;
 
-        const block = formatBreakdownBlock(breakdown);
+        const block = formatBreakdownBlock(netByCurrency[m.id]);
         return block ? `${titleLine}\n${block}` : titleLine;
       }).join('\n\n');
 

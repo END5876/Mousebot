@@ -62,9 +62,9 @@ function convertPayerOrShareToBase(amount, exp) {
 }
 
 /**
- * 計算行程內所有成員的「基準幣別」淨額 (包含一般花費與預收款抵銷)。
+ * 計算行程內所有成員的「基準幣別」淨額 (包含一般花費與轉帳抵銷)。
  * ⚠️ 此函式未修改，維持原邏輯，因為它是主要結算依據的權威數字，
- *    跟「代墊 vs 訂金」的標籤語意問題無關。
+ *    跟明細顯示方式無關。
  */
 function calcNetBalances(trip) {
   const net = {};
@@ -118,13 +118,20 @@ function calcNetBalances(trip) {
 }
 
 /**
- * 🆕 計算行程內所有成員「依原始幣別 + 來源」分開的淨額，不做任何換算。
- * 回傳結構：{ [userId]: { [currency]: { expense: number, deposit: number } } }
+ * 🆕【收支帳模式】計算行程內所有成員「依原始幣別 + 收支類別」分開的明細，不做任何換算。
+ * 回傳結構：
+ *   { [userId]: { [currency]: { paid, share, transferOut, transferIn } } }
  *
- * 修改重點：
- * 原本 expense 和 deposit 會被丟進同一個數字累加，導致「訂金」被誤貼上
- * 「幫大家代墊」的標籤。現在改成分開記錄兩個來源，交給顯示層自行決定
- * 怎麼組合文字說明。
+ *   paid        ➕ 代墊花費（實際付出的花費金額）
+ *   share       ➖ 應分攤花費（自己該負擔的份額）
+ *   transferOut ➕ 直接轉帳給他人（不預設用途，可能是還款、預收團費等）
+ *   transferIn  ➖ 收到他人直接轉帳
+ *
+ * 修改重點（相較舊版）：
+ * 舊版把「付的 − 該分攤的」直接混算成一個淨值（expense），導致明細只能
+ * 顯示殘值，且正負號會跟標題（應收回/要補交）互相矛盾，使用者無法驗算。
+ * 現在拆成四個獨立累加的欄位，顯示層可以完整重建「淨額 = ΣΣ ➕ − ΣΣ ➖」
+ * 的收支帳，每一行都對應真實發生過的金流，方便對帳。
  */
 function calcNetBalancesByCurrency(trip) {
   const net = {};
@@ -132,41 +139,40 @@ function calcNetBalancesByCurrency(trip) {
     if (!net[userId]) net[userId] = {};
     return net[userId];
   };
-  const add = (userId, currency, source, delta) => {
+  const add = (userId, currency, field, delta) => {
     if (!currency) return;
     const bucket = ensure(userId);
-    if (!bucket[currency]) bucket[currency] = { expense: 0, deposit: 0 };
-    bucket[currency][source] = round2((bucket[currency][source] || 0) + delta);
+    if (!bucket[currency]) bucket[currency] = { paid: 0, share: 0, transferOut: 0, transferIn: 0 };
+    bucket[currency][field] = round2(bucket[currency][field] + delta);
   };
 
   for (const m of (trip.members || [])) ensure(m.id);
 
-  // 一般花費 → 標記為 'expense'
+  // 一般花費 → 拆成 paid（代墊）與 share（應分攤）
   for (const exp of (trip.expenses || [])) {
     const currency = exp.currency;
-    for (const p of (exp.payers || [])) add(p.userId, currency, 'expense', p.amount);
+    for (const p of (exp.payers || [])) add(p.userId, currency, 'paid', p.amount);
     for (const s of (exp.participants || [])) {
       const shareAmount = s.amount ?? s.share ?? 0;
-      add(s.userId, currency, 'expense', -shareAmount);
+      add(s.userId, currency, 'share', shareAmount);
     }
   }
 
-  // 訂金 → 標記為 'deposit'
+  // 直接轉帳（deposits）→ 拆成 transferOut（轉出）與 transferIn（收到）
   if (Array.isArray(trip.deposits)) {
     for (const d of trip.deposits) {
       const currency = d.currency || trip.baseCurrency;
-      add(d.payerId, currency, 'deposit', d.amount);
-      add(d.collectorId, currency, 'deposit', -d.amount);
+      add(d.payerId, currency, 'transferOut', d.amount);
+      add(d.collectorId, currency, 'transferIn', d.amount);
     }
   }
 
-  // 清除 expense 和 deposit 都幾乎為 0 的幣別紀錄
+  // 清除四個欄位都幾乎為 0 的幣別紀錄
   for (const userId of Object.keys(net)) {
     for (const currency of Object.keys(net[userId])) {
-      const { expense = 0, deposit = 0 } = net[userId][currency];
-      if (Math.abs(expense) < 0.01 && Math.abs(deposit) < 0.01) {
-        delete net[userId][currency];
-      }
+      const b = net[userId][currency];
+      const allZero = ['paid', 'share', 'transferOut', 'transferIn'].every(k => Math.abs(b[k]) < 0.01);
+      if (allZero) delete net[userId][currency];
     }
   }
 
@@ -185,9 +191,10 @@ function getUsedCurrencies(trip) {
 }
 
 /**
- * 🆕 適配新的 netByCurrency 結構：{ currency: { expense, deposit } }
- * 換算時把 expense + deposit 加總後再乘匯率即可，因為換算成單一幣別
- * 結算時，來源已經不重要（只是為了明細顯示才拆開）。
+ * 🆕 適配「收支帳」結構：{ currency: { paid, share, transferOut, transferIn } }
+ * 換算時先算出該幣別的淨額（paid − share + transferOut − transferIn），
+ * 再乘上匯率加總，因為換算成單一幣別結算時，來源類別已經不重要
+ * （只是為了明細顯示才拆開）。
  */
 async function convertNetToSingleCurrency(netByCurrency, targetCurrency, trip) {
   const currencies = new Set();
@@ -225,11 +232,11 @@ async function convertNetToSingleCurrency(netByCurrency, targetCurrency, trip) {
   const converted = {};
   for (const userId of Object.keys(netByCurrency)) {
     let sum = 0;
-    for (const [currency, sources] of Object.entries(netByCurrency[userId])) {
+    for (const [currency, b] of Object.entries(netByCurrency[userId])) {
       const rate = rates[currency];
       if (typeof rate === 'number') {
-        const total = (sources.expense || 0) + (sources.deposit || 0);
-        sum += total * rate;
+        const netAmount = (b.paid || 0) - (b.share || 0) + (b.transferOut || 0) - (b.transferIn || 0);
+        sum += netAmount * rate;
       }
     }
     converted[userId] = round2(sum);
