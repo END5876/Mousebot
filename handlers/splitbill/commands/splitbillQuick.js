@@ -17,7 +17,7 @@ const { parsePayerField, parseSplitField } = require('../utils/parse');
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('splitbill-quick')
-    .setDescription('⚡ 快速新增一筆花費（免開面板，適合單一代墊人的簡單情境）')
+    .setDescription('快速新增一筆花費（免開面板，適合單一代墊人的簡單情境）')
     .addStringOption(opt =>
       opt.setName('item').setDescription('項目名稱（例如：計程車、晚餐）').setRequired(true))
     .addNumberOption(opt =>

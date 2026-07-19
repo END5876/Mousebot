@@ -12,6 +12,7 @@ const { setupAICommands }        = require('./handlers/ai/aiHandler');
 const { setupAutoJoinCommands }  = require('./handlers/autoJoinHandler');
 const { setupTTSCommands }       = require('./handlers/voice/ttsHandler');
 const { setupNoticeCommands }    = require('./handlers/notice/noticeHandler');
+const { setupTimeAnnouncer }     = require('./handlers/notice/timeAnnouncer');
 
 // ── 導入分帳系統 ────────────────────────
 const { setupSplitbillCommands } = require('./handlers/splitbill/index');
@@ -43,6 +44,7 @@ setupAICommands(client);
 setupAutoJoinCommands(client);
 setupTTSCommands(client);
 setupNoticeCommands(client);
+setupTimeAnnouncer(client);
 
 // ── 🆕 注入分帳介面與唯一的 /splitbill 指令 ───────────────
 setupSplitbillCommands(client);
