@@ -120,18 +120,21 @@ function calcNetBalances(trip) {
 /**
  * 🆕【收支帳模式】計算行程內所有成員「依原始幣別 + 收支類別」分開的明細，不做任何換算。
  * 回傳結構：
- *   { [userId]: { [currency]: { paid, share, transferOut, transferIn } } }
+ *   { [userId]: { [currency]: { paid, paidBase, share, shareBase, transferOut, transferOutBase, transferIn, transferInBase } } }
  *
  *   paid        ➕ 代墊花費（實際付出的花費金額）
  *   share       ➖ 應分攤花費（自己該負擔的份額）
  *   transferOut ➕ 直接轉帳給他人（不預設用途，可能是還款、預收團費等）
  *   transferIn  ➖ 收到他人直接轉帳
+ *   *Base       對應欄位換算成行程基準幣別後的金額（供明細顯示，讓使用者不用自己查匯率就能驗算標題淨額）
  *
  * 修改重點（相較舊版）：
  * 舊版把「付的 − 該分攤的」直接混算成一個淨值（expense），導致明細只能
  * 顯示殘值，且正負號會跟標題（應收回/要補交）互相矛盾，使用者無法驗算。
  * 現在拆成四個獨立累加的欄位，顯示層可以完整重建「淨額 = ΣΣ ➕ − ΣΣ ➖」
  * 的收支帳，每一行都對應真實發生過的金流，方便對帳。
+ * 🆕 這次再補上每個欄位的基準幣別等值（*Base），因為原始幣別金額（例如 JPY）
+ * 使用者無法自行心算換成 TWD，導致明細看起來跟標題兜不起來、無法驗算。
  */
 function calcNetBalancesByCurrency(trip) {
   const net = {};
@@ -139,31 +142,42 @@ function calcNetBalancesByCurrency(trip) {
     if (!net[userId]) net[userId] = {};
     return net[userId];
   };
-  const add = (userId, currency, field, delta) => {
+  const add = (userId, currency, field, delta, baseDelta) => {
     if (!currency) return;
     const bucket = ensure(userId);
-    if (!bucket[currency]) bucket[currency] = { paid: 0, share: 0, transferOut: 0, transferIn: 0 };
+    if (!bucket[currency]) {
+      bucket[currency] = {
+        paid: 0, paidBase: 0,
+        share: 0, shareBase: 0,
+        transferOut: 0, transferOutBase: 0,
+        transferIn: 0, transferInBase: 0,
+      };
+    }
     bucket[currency][field] = round2(bucket[currency][field] + delta);
+    bucket[currency][`${field}Base`] = round2(bucket[currency][`${field}Base`] + baseDelta);
   };
 
   for (const m of (trip.members || [])) ensure(m.id);
 
-  // 一般花費 → 拆成 paid（代墊）與 share（應分攤）
+  // 一般花費 → 拆成 paid（代墊）與 share（應分攤），並同步累加基準幣別等值
   for (const exp of (trip.expenses || [])) {
     const currency = exp.currency;
-    for (const p of (exp.payers || [])) add(p.userId, currency, 'paid', p.amount);
+    for (const p of (exp.payers || [])) {
+      add(p.userId, currency, 'paid', p.amount, convertPayerOrShareToBase(p.amount, exp));
+    }
     for (const s of (exp.participants || [])) {
       const shareAmount = s.amount ?? s.share ?? 0;
-      add(s.userId, currency, 'share', shareAmount);
+      add(s.userId, currency, 'share', shareAmount, convertPayerOrShareToBase(shareAmount, exp));
     }
   }
 
   // 直接轉帳（deposits）→ 拆成 transferOut（轉出）與 transferIn（收到）
+  // deposit 本身已存有精確的 amountInBase，直接沿用即可（不必再用比例換算）
   if (Array.isArray(trip.deposits)) {
     for (const d of trip.deposits) {
       const currency = d.currency || trip.baseCurrency;
-      add(d.payerId, currency, 'transferOut', d.amount);
-      add(d.collectorId, currency, 'transferIn', d.amount);
+      add(d.payerId, currency, 'transferOut', d.amount, d.amountInBase);
+      add(d.collectorId, currency, 'transferIn', d.amount, d.amountInBase);
     }
   }
 
@@ -177,6 +191,46 @@ function calcNetBalancesByCurrency(trip) {
   }
 
   return net;
+}
+
+/**
+ * 🆕 逐筆列出每位成員的「直接轉帳」紀錄，保留轉帳對象，不做加總彙整。
+ * 用途：calcNetBalancesByCurrency 為了計算淨額，會把同一人所有轉帳依幣別加總成
+ * 一個數字，一旦出現交叉轉帳（A轉給B、C又轉給A…）就會失去「轉給了誰」這個
+ * 對使用者來說最關鍵的資訊，甚至可能讓一來一回的兩筆互相抵銷、被誤讀成沒事發生。
+ * 這裡改成保留每一筆的對象，交給顯示層逐行列出。
+ *
+ * 回傳結構：
+ *   { [userId]: [{ direction: 'out'|'in', counterpartId, amount, currency, amountInBase, note }] }
+ */
+function listTransfersByMember(trip) {
+  const result = {};
+  const push = (userId, entry) => {
+    if (!result[userId]) result[userId] = [];
+    result[userId].push(entry);
+  };
+
+  for (const d of (trip.deposits || [])) {
+    const currency = d.currency || trip.baseCurrency;
+    push(d.payerId, {
+      direction: 'out',
+      counterpartId: d.collectorId,
+      amount: d.amount,
+      currency,
+      amountInBase: d.amountInBase,
+      note: d.note || '',
+    });
+    push(d.collectorId, {
+      direction: 'in',
+      counterpartId: d.payerId,
+      amount: d.amount,
+      currency,
+      amountInBase: d.amountInBase,
+      note: d.note || '',
+    });
+  }
+
+  return result;
 }
 
 function getUsedCurrencies(trip) {
@@ -269,5 +323,6 @@ async function fetchRealTimeRate(fromCurrency, toCurrency) {
 module.exports = {
   round2, toBase, equalSplit, validateCustomSplit, validatePayers,
   calcNetBalances, calcNetBalancesByCurrency, convertPayerOrShareToBase,
-  getUsedCurrencies, convertNetToSingleCurrency, fetchRealTimeRate
+  getUsedCurrencies, convertNetToSingleCurrency, fetchRealTimeRate,
+  listTransfersByMember,
 };
