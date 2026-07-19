@@ -7,38 +7,51 @@ const { simplifyDebts } = require('../utils/settlement');
 const { showMainMenu } = require('../commands/splitbill');
 
 /**
- * 新版「每人淨額」區塊格式：
- * 淨額：20689.12 TWD
- * ┣ 總花費：76344 JPY、6604.66 TWD   ← 正貢獻幣別
- * ┗ 付出：34 USD                     ← 負貢獻幣別
+ * 🆕 新版「每人淨額」文字設計（動作語氣版）
  *
- * 正、負貢獻分開列出，取代舊版塞在括號裡用 +/- 混合呈現的寫法。
+ * 設計原則：
+ * 1. 標題行不再用「淨額 +20689.12 TWD（應收回）」這種先報數字再解釋的寫法，
+ *    改成「應收回 20689.12 TWD」/「要補交 15230 TWD」，直接用動作語氣告訴使用者該做什麼。
+ * 2. 明細標籤沿用「幫大家代墊 / 自己還少給」，用更直白的生活化語感描述這個人在該幣別下的角色：
+ *    - 幫大家代墊：在該幣別下，這個人付出的錢比自己該負擔的多 → 該幣別對他是「正貢獻」，別人該還他
+ *    - 自己還少給：在該幣別下，這個人付出的錢比自己該負擔的少 → 該幣別對他是「負貢獻」，他該補給別人
+ * 3. 只有當一個人「同時牽涉兩種以上幣別」時才顯示明細；
+ *    若只用單一幣別，明細＝淨額本身，顯示等於廢話，直接省略，讓畫面更乾淨。
+ * 4. 淨額為 0 時，用「帳目兩清（無需收付）」明確告訴使用者「不用做什麼」。
+ * 5. 樹狀符號改用 ├ / └（雙空格縮排），視覺上更貼近常見的檔案樹結構。
+ *
+ * 呈現效果範例：
+ *   🟢 <@userA> 應收回 20689.12 TWD
+ *   　├  幫大家代墊：76344 JPY、6604.66 TWD
+ *   　└  自己還少給：34 USD
+ *
+ *   🔴 <@userB> 要補交 15230 TWD
+ *
+ *   ⚪ <@userC> 帳目兩清（無需收付）
  */
-function formatBreakdownBlock(baseAmount, baseCurrency, breakdownEntries) {
-  const mainLine = `${round2(Math.abs(baseAmount))} ${baseCurrency}`;
-
+function formatBreakdownBlock(breakdownEntries) {
   const entries = (breakdownEntries || []).filter(b => Math.abs(b.amount) >= 0.01);
-  if (!entries.length) return `　┗ 淨額：**${mainLine}**`;
+
+  // 只有單一幣別時，明細等同於淨額本身，不需要重複顯示
+  if (entries.length <= 1) return null;
 
   const positives = entries.filter(b => b.amount > 0).sort((a, b) => b.amount - a.amount);
   const negatives = entries.filter(b => b.amount < 0).sort((a, b) => a.amount - b.amount);
 
-  const lines = [`　┣ 淨額：**${mainLine}**`];
+  const lines = [];
 
   if (positives.length) {
-    const spendText = positives.map(b => `${round2(b.amount)} ${b.currency}`).join('、');
-    lines.push(`　┣ 總花費：${spendText}`);
+    const text = positives.map(b => `${round2(b.amount)} ${b.currency}`).join('、');
+    lines.push(`幫大家代墊：${text}`);
   }
 
   if (negatives.length) {
-    const payText = negatives.map(b => `${round2(Math.abs(b.amount))} ${b.currency}`).join('、');
-    lines.push(`　┗ 付出：${payText}`);
-  } else {
-    // 把上一行的 ┣ 改成 ┗，讓樹狀結構收尾正確
-    lines[lines.length - 1] = lines[lines.length - 1].replace('┣', '┗');
+    const text = negatives.map(b => `${round2(Math.abs(b.amount))} ${b.currency}`).join('、');
+    lines.push(`自己還少給：${text}`);
   }
 
-  return lines.join('\n');
+  // 用 ├ / └ 畫出樹狀結構（雙空格縮排），最後一行收尾用 └
+  return lines.map((line, idx) => `　${idx === lines.length - 1 ? '└ ' : '├ '} ${line}`).join('\n');
 }
 
 module.exports = {
@@ -49,7 +62,9 @@ module.exports = {
       return showMainMenu(interaction);
     }
 
-    // 主選單：事實層（淨額）與行動層（轉帳建議）
+    // 主選單：事實層（淨額）、清單層（帳目）與行動層（轉帳建議）
+    // 🆕 新增「查看帳目清單」按鈕，沿用 expenseUI.js 已有的 exp_btn_ledger_last 邏輯，
+    //    讓使用者不需要切回「記帳管理分頁」也能直接看到完整帳目清單。
     if (customId === 'set_nav') {
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
@@ -59,13 +74,14 @@ module.exports = {
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('set_btn_balance').setLabel('🟢 查看每人淨額').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('set_btn_transfer').setLabel('🚀 建議轉帳清單').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('exp_btn_ledger_last__set').setLabel('📒 查看帳目清單').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('nav_main').setLabel('⬅️ 返回主選單').setStyle(ButtonStyle.Secondary)
       );
 
       return interaction.update({ embeds: [embed], components: [row] });
     }
 
-    // 1. 每人收支淨額分佈（新版：分類分行呈現總花費 / 付出）
+    // 1. 每人收支淨額分佈（動作語氣版：標題直接說「該做什麼」，明細只在需要時補充）
     if (customId === 'set_btn_balance') {
       const net = calcNetBalances(trip);
       const netByCurrency = calcNetBalancesByCurrency(trip);
@@ -74,13 +90,17 @@ module.exports = {
         const val = round2(net[m.id] || 0);
         const breakdown = Object.entries(netByCurrency[m.id] || {}).map(([currency, amount]) => ({ currency, amount }));
 
-        let statusLabel;
-        if (val > 0.01) statusLabel = `🟢 <@${m.id}>：應**收回** (多墊)`;
-        else if (val < -0.01) statusLabel = `🔴 <@${m.id}>：應**付出** (透支)`;
-        else return `⚪ <@${m.id}>：已完全平穩 (淨額為 0)`;
+        // 淨額為 0：直接說明「不用做什麼」，不留模糊空間
+        if (Math.abs(val) < 0.01) {
+          return `⚪ <@${m.id}> 帳目兩清（無需收付）`;
+        }
 
-        const block = formatBreakdownBlock(val, trip.baseCurrency, breakdown);
-        return `${statusLabel}\n${block}`;
+        const statusIcon = val > 0 ? '🟢' : '🔴';
+        const actionText = val > 0 ? '應收回' : '要補交';
+        const titleLine = `${statusIcon} <@${m.id}> ${actionText} ${round2(Math.abs(val))} ${trip.baseCurrency}`;
+
+        const block = formatBreakdownBlock(breakdown);
+        return block ? `${titleLine}\n${block}` : titleLine;
       }).join('\n\n');
 
       const embed = new EmbedBuilder()
@@ -121,7 +141,7 @@ module.exports = {
       return interaction.update({ embeds: [embed], components: [row] });
     }
 
-    // 2a. 選擇目標幣別，用「當下即時匯率」統一換算（原「換算成單一幣別結算」邏輯）
+    // 2a. 選擇目標幣別，用「當下即時匯率」統一換算
     if (customId === 'set_btn_transfer_live') {
       const currencies = getUsedCurrencies(trip);
 

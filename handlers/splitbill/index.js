@@ -3,6 +3,7 @@
 const { MessageFlags } = require('discord.js');
 const bootSummary = require('../../utils/bootSummary');
 const splitbillCmd = require('./commands/splitbill');
+const splitbillQuickCmd = require('./commands/splitbillQuick');
 const expenseUI = require('./interactions/expenseUI');
 const memberUI = require('./interactions/memberUI');
 const settleUI = require('./interactions/settleUI');
@@ -17,8 +18,9 @@ const stateCache = new StateCache();
  * 初始化分帳模組面板版
  */
 function setupSplitbillCommands(client) {
-  // 僅註冊唯一的面板進入點指令
+  // 註冊面板進入點指令，以及給熟手用的免面板快速記帳指令
   client.commands.set(splitbillCmd.data.name, splitbillCmd);
+  client.commands.set(splitbillQuickCmd.data.name, splitbillQuickCmd);
 
   // 攔截所有元件互動事件
   client.on('interactionCreate', async (interaction) => {
@@ -42,7 +44,7 @@ function setupSplitbillCommands(client) {
     }
   });
 
-  bootSummary.report('分帳系統 (/splitbill)', 'ok', '多行程/多幣別記帳與結算');
+  bootSummary.report('分帳系統 (/splitbill, /splitbill-quick)', 'ok', '多行程/多幣別記帳與結算，支援面板與快速指令兩種操作方式');
 }
 
 /**
