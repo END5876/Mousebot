@@ -10,6 +10,35 @@ const { equalSplit, validateCustomSplit, fetchRealTimeRate, round2 } = require('
 const { addDeposit } = require('../utils/deposit');
 const { showMainMenu } = require('../commands/splitbill');
 
+/**
+ * 🆕 解析「總帳目清單」按鈕/選單 customId 尾端的「頁碼__來源」格式。
+ * 例如：
+ *   'last__set'  → { page: Infinity, source: 'set' }（從結算與淨額中心進入，跳到最後一頁）
+ *   '3__exp'     → { page: 3, source: 'exp' }（從記帳管理分頁進入，第 3 頁）
+ *   'last'（舊格式，沒有來源標記）→ 自動視為 source: 'exp'，維持向下相容
+ *
+ * 有了這個來源標記，翻頁、刪除、返回按鈕才能一路記住「使用者原本是從哪裡進來的」，
+ * 讓「返回」永遠回到正確的分頁，而不是固定寫死回記帳管理分頁。
+ */
+function parseLedgerSuffix(suffix) {
+  const [pagePart, sourcePart] = suffix.split('__');
+  const source = sourcePart === 'set' ? 'set' : 'exp';
+  const page = pagePart === 'last' ? Infinity : (parseInt(pagePart, 10) || 0);
+  return { page, source };
+}
+
+/**
+ * 依來源標記，決定「返回」按鈕要導向哪個分頁的主畫面。
+ *   exp → 記帳管理分頁 (exp_nav)
+ *   set → 結算與淨額中心 (set_nav)
+ */
+function getBackNavConfig(source) {
+  if (source === 'set') {
+    return { customId: 'set_nav', label: '⬅️ 返回結算與淨額中心' };
+  }
+  return { customId: 'exp_nav', label: '🔙 返回記帳管理' };
+}
+
 module.exports = {
   async handleButton(interaction, cache) {
     const { customId, guildId } = interaction;
@@ -26,8 +55,7 @@ module.exports = {
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('exp_btn_add_start').setLabel('➕ 新增花費').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('exp_btn_deposit_start').setLabel('💰 收取金額').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('exp_btn_list').setLabel('🧾 歷史與刪除').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('exp_btn_ledger_0').setLabel('📒 總帳目清單').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('exp_btn_ledger_last__exp').setLabel('📒 總帳目清單／刪除').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主控台').setStyle(ButtonStyle.Secondary)
       );
 
@@ -95,53 +123,13 @@ module.exports = {
       return interaction.update({ embeds: [embed], components: [selectRow, navRow] });
     }
 
-    if (customId === 'exp_btn_list') {
-      if (!trip.expenses.length && (!trip.deposits || !trip.deposits.length)) {
-        return interaction.reply({ content: '📭 目前尚無任何記帳或訂金紀錄。', flags: MessageFlags.Ephemeral });
-      }
-
-      const allRecords = [
-        ...trip.expenses.map(e => ({ ...e, type: 'expense' })),
-        ...(trip.deposits || []).map(d => ({ ...d, type: 'deposit' }))
-      ].sort((a, b) => b.createdAt - a.createdAt).slice(0, 10);
-
-      const embed = new EmbedBuilder()
-        .setColor(0x3498db)
-        .setTitle(`🧾 「${trip.name}」最近 10 筆帳目紀錄`)
-        .setDescription(
-          allRecords.map(r => {
-            if (r.type === 'expense') {
-              const payers = r.payers.map(p => memberDisplay(trip, p.userId)).join('、');
-              return `\`[花費]\` **${r.description}** — ${r.amount} ${r.currency} (${payers} 代墊)`;
-            } else {
-              const payer = memberDisplay(trip, r.payerId);
-              const collector = memberDisplay(trip, r.collectorId);
-              return `\`[訂金]\` **${payer} 預付給 ${collector}** — ${r.amount} ${r.currency} ${r.note ? `(${r.note})` : ''}`;
-            }
-          }).join('\n')
-        );
-
-      const selectRow = new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId('exp_select_delete')
-          .setPlaceholder('選擇一筆帳目將其刪除...')
-          .addOptions(allRecords.map(r => ({
-            label: r.type === 'expense' ? `[花費] ${r.description} (${r.amount} ${r.currency})` : `[訂金] ${memberDisplay(trip, r.payerId, true)} 給 ${memberDisplay(trip, r.collectorId, true)} (${r.amount})`,
-            value: `${r.type}_${r.id}`
-          })))
-      );
-
-      const navRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('exp_nav').setLabel('⬅️ 返回記帳管理').setStyle(ButtonStyle.Secondary)
-      );
-
-      return interaction.update({ embeds: [embed], components: [selectRow, navRow] });
-    }
-
-    // 📒 總帳目清單：完整列出行程所有花費 + 訂金紀錄（可翻頁瀏覽，唯讀不含刪除）
+    // 📒 總帳目清單／刪除：完整列出行程所有花費 + 訂金紀錄，可翻頁瀏覽，並可直接刪除任一筆
+    // 🆕 customId 格式改為「頁碼__來源」，例如 exp_btn_ledger_last__set，
+    //    這樣不論從記帳管理分頁或結算與淨額中心進入，都能記住來源，返回時導向正確分頁。
     if (customId.startsWith('exp_btn_ledger_')) {
-      const page = parseInt(customId.substring('exp_btn_ledger_'.length), 10) || 0;
-      return renderLedgerPage(interaction, trip, page);
+      const suffix = customId.substring('exp_btn_ledger_'.length);
+      const { page, source } = parseLedgerSuffix(suffix);
+      return renderLedgerPage(interaction, trip, page, null, source);
     }
 
     if (customId === 'exp_btn_split_all') {
@@ -554,22 +542,25 @@ module.exports = {
       return interaction.showModal(modal);
     }
 
-    if (customId === 'exp_select_delete') {
-      const [type, id] = values[0].split('_', 2);
-      const realId = values[0].substring(type.length + 1);
+    // 📒 在總帳目清單分頁中選擇刪除一筆紀錄；customId 帶有「目前頁碼__來源」，刪除後回到同一頁、同一來源
+    if (customId.startsWith('exp_select_delete_')) {
+      const suffix = customId.substring('exp_select_delete_'.length);
+      const { page, source } = parseLedgerSuffix(suffix);
+      const [type, ...rest] = values[0].split('_');
+      const realId = rest.join('_');
 
       if (type === 'expense') {
         const idx = trip.expenses.findIndex(e => e.id === realId);
-        if (idx === -1) return interaction.reply({ content: '⚠️ 找不到此花費帳目。', flags: MessageFlags.Ephemeral });
+        if (idx === -1) return interaction.reply({ content: '⚠️ 找不到此花費帳目，可能已被其他人刪除。', flags: MessageFlags.Ephemeral });
         const deleted = trip.expenses.splice(idx, 1)[0];
         storage.persist();
-        return showMainMenu(interaction, `🗑️ 已成功刪除花費：**${deleted.description}** (${deleted.amount} ${deleted.currency})`);
+        return renderLedgerPage(interaction, trip, page, `🗑️ 已成功刪除花費：**${deleted.description}** (${deleted.amount} ${deleted.currency})`, source);
       } else if (type === 'deposit') {
         const idx = trip.deposits.findIndex(d => d.id === realId);
-        if (idx === -1) return interaction.reply({ content: '⚠️ 找不到此訂金紀錄。', flags: MessageFlags.Ephemeral });
+        if (idx === -1) return interaction.reply({ content: '⚠️ 找不到此訂金紀錄，可能已被其他人刪除。', flags: MessageFlags.Ephemeral });
         const deleted = trip.deposits.splice(idx, 1)[0];
         storage.persist();
-        return showMainMenu(interaction, `🗑️ 已成功刪除訂金紀錄：**${memberDisplay(trip, deleted.payerId, true)} 預付給 ${memberDisplay(trip, deleted.collectorId, true)}** (${deleted.amount} ${deleted.currency})`);
+        return renderLedgerPage(interaction, trip, page, `🗑️ 已成功刪除訂金紀錄：**${memberDisplay(trip, deleted.payerId)} 預付給 ${memberDisplay(trip, deleted.collectorId)}** (${deleted.amount} ${deleted.currency})`, source);
       }
     }
   }
@@ -579,14 +570,23 @@ const LEDGER_PAGE_SIZE = 8;
 
 /**
  * 📒 總帳目清單：依時間先後（由舊到新）完整列出行程內所有花費 + 訂金紀錄，
- * 並附上依幣別 / 依類型的總計摘要，方便一次掌握全部帳目，支援翻頁瀏覽。
- * 純唯讀畫面（不提供刪除，刪除請至「🧾 歷史與刪除」)。
+ * 並附上依幣別 / 依類型的總計摘要，方便一次掌握全部帳目，支援翻頁瀏覽，
+ * 也可直接用選單刪除本頁任一筆紀錄。
+ *
+ * 🆕 新增 source 參數（'exp' | 'set'），代表使用者是從哪個分頁點進來的：
+ *   - 'exp'：記帳管理分頁
+ *   - 'set'：結算與淨額中心
+ * 翻頁按鈕、刪除選單、返回按鈕都會依此參數帶上相同的來源標記，
+ * 確保整趟瀏覽過程中「返回」永遠導向正確的原始分頁。
  */
-function renderLedgerPage(interaction, trip, page) {
+function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'exp') {
   const allRecords = [
     ...trip.expenses.map(e => ({ ...e, type: 'expense' })),
     ...(trip.deposits || []).map(d => ({ ...d, type: 'deposit' }))
   ].sort((a, b) => a.createdAt - b.createdAt);
+
+  const content = typeof alertMsg === 'string' ? alertMsg : '';
+  const backNav = getBackNavConfig(source);
 
   if (!allRecords.length) {
     const embed = new EmbedBuilder()
@@ -595,9 +595,9 @@ function renderLedgerPage(interaction, trip, page) {
       .setDescription('📭 目前尚無任何花費或訂金紀錄。');
 
     const navRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('exp_nav').setLabel('⬅️ 返回記帳管理').setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId(backNav.customId).setLabel(backNav.label).setStyle(ButtonStyle.Secondary)
     );
-    return interaction.update({ embeds: [embed], components: [navRow] });
+    return interaction.update({ content, embeds: [embed], components: [navRow] });
   }
 
   const totalPages = Math.max(1, Math.ceil(allRecords.length / LEDGER_PAGE_SIZE));
@@ -646,15 +646,28 @@ function renderLedgerPage(interaction, trip, page) {
           `🏦 訂金總額：**${round2(totalDepositBase)} ${trip.baseCurrency}**`
       }
     )
-    .setFooter({ text: `第 ${safePage + 1} / ${totalPages} 頁　共 ${allRecords.length} 筆紀錄` });
+    .setFooter({ text: `第 ${safePage + 1} / ${totalPages} 頁　共 ${allRecords.length} 筆紀錄　💡 可用下方選單直接刪除本頁任一筆` });
 
-  const navRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`exp_btn_ledger_${safePage - 1}`).setLabel('⬅️ 上一頁').setStyle(ButtonStyle.Primary).setDisabled(safePage <= 0),
-    new ButtonBuilder().setCustomId(`exp_btn_ledger_${safePage + 1}`).setLabel('➡️ 下一頁').setStyle(ButtonStyle.Primary).setDisabled(safePage >= totalPages - 1),
-    new ButtonBuilder().setCustomId('exp_nav').setLabel('🔙 返回記帳管理').setStyle(ButtonStyle.Secondary)
+  // 🆕 翻頁按鈕與刪除選單的 customId 都帶上 __${source}，維持來源一致
+  const deleteRow = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`exp_select_delete_${safePage}__${source}`)
+      .setPlaceholder('🗑️ 選擇本頁一筆帳目將其刪除...')
+      .addOptions(pageRecords.map(r => ({
+        label: r.type === 'expense'
+          ? `[花費] ${r.description} (${r.amount} ${r.currency})`.slice(0, 100)
+          : `[訂金] ${memberDisplay(trip, r.payerId)} 給 ${memberDisplay(trip, r.collectorId)} (${r.amount} ${r.currency})`.slice(0, 100),
+        value: `${r.type}_${r.id}`
+      })))
   );
 
-  return interaction.update({ embeds: [embed], components: [navRow] });
+  const navRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`exp_btn_ledger_${safePage - 1}__${source}`).setLabel('⬅️ 上一頁').setStyle(ButtonStyle.Primary).setDisabled(safePage <= 0),
+    new ButtonBuilder().setCustomId(`exp_btn_ledger_${safePage + 1}__${source}`).setLabel('➡️ 下一頁').setStyle(ButtonStyle.Primary).setDisabled(safePage >= totalPages - 1),
+    new ButtonBuilder().setCustomId(backNav.customId).setLabel(backNav.label).setStyle(ButtonStyle.Secondary)
+  );
+
+  return interaction.update({ content, embeds: [embed], components: [deleteRow, navRow] });
 }
 
 function renderSplitMethodUI(interaction, state) {
