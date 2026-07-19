@@ -20,20 +20,16 @@ function toBase(amount, currency, rates) {
 
 /**
  * 平均分攤計算（無條件進位到整數）
- * 例：100 元由 3 人平分 -> 每人 34 元
  */
 function equalSplit(amount, participantIds) {
   if (!participantIds.length) throw new Error('參與分攤的成員不可為空');
   const n = participantIds.length;
-
-  // 平均值先四捨五入到小數第2位，保留合理精度
   const baseShare = round2(amount / n);
 
   let accumulated = 0;
   return participantIds.map((userId, i) => {
     let share;
     if (i === n - 1) {
-      // 最後一人吸收前面四捨五入產生的誤差，確保總和 = amount
       share = round2(amount - accumulated);
     } else {
       share = baseShare;
@@ -42,7 +38,6 @@ function equalSplit(amount, participantIds) {
     return { userId, share };
   });
 }
-
 
 function validateCustomSplit(amount, shares) {
   const sum = round2(shares.reduce((s, x) => s + x.share, 0));
@@ -68,14 +63,13 @@ function convertPayerOrShareToBase(amount, exp) {
 
 /**
  * 計算行程內所有成員的「基準幣別」淨額 (包含一般花費與預收款抵銷)。
- * 每筆花費 / 訂金在記錄當下就已經換算並存好 amountInBase，這裡直接加總即可，
- * 是主要結算畫面（每人淨額、最佳化轉帳）使用的權威數字。
+ * ⚠️ 此函式未修改，維持原邏輯，因為它是主要結算依據的權威數字，
+ *    跟「代墊 vs 訂金」的標籤語意問題無關。
  */
 function calcNetBalances(trip) {
   const net = {};
   for (const m of (trip.members || [])) net[m.id] = 0;
 
-  // 1. 計算一般花費 (expenses)
   for (const exp of (trip.expenses || [])) {
     let payerBaseSum = 0;
     for (let i = 0; i < exp.payers.length; i++) {
@@ -109,7 +103,6 @@ function calcNetBalances(trip) {
     }
   }
 
-  // 2. 計算預收款/訂金 (deposits) 抵銷
   if (Array.isArray(trip.deposits)) {
     for (const d of trip.deposits) {
       if (net[d.payerId] !== undefined) {
@@ -125,12 +118,13 @@ function calcNetBalances(trip) {
 }
 
 /**
- * 計算行程內所有成員「依原始幣別分開」的淨額，不做任何換算。
- * 回傳結構：{ [userId]: { [currency]: rawAmount } }
- * 用途：
- *  1. 在「每人淨額 / 最佳化轉帳」畫面中，附加顯示這筆基準幣金額
- *     實際是由哪些原始幣別構成（例如 "1236 TWD + 639937 JPY"）。
- *  2. 提供「換算成單一幣別結算」功能，用當下即時匯率重新統一換算。
+ * 🆕 計算行程內所有成員「依原始幣別 + 來源」分開的淨額，不做任何換算。
+ * 回傳結構：{ [userId]: { [currency]: { expense: number, deposit: number } } }
+ *
+ * 修改重點：
+ * 原本 expense 和 deposit 會被丟進同一個數字累加，導致「訂金」被誤貼上
+ * 「幫大家代墊」的標籤。現在改成分開記錄兩個來源，交給顯示層自行決定
+ * 怎麼組合文字說明。
  */
 function calcNetBalancesByCurrency(trip) {
   const net = {};
@@ -138,45 +132,47 @@ function calcNetBalancesByCurrency(trip) {
     if (!net[userId]) net[userId] = {};
     return net[userId];
   };
-  const add = (userId, currency, delta) => {
+  const add = (userId, currency, source, delta) => {
     if (!currency) return;
     const bucket = ensure(userId);
-    bucket[currency] = round2((bucket[currency] || 0) + delta);
+    if (!bucket[currency]) bucket[currency] = { expense: 0, deposit: 0 };
+    bucket[currency][source] = round2((bucket[currency][source] || 0) + delta);
   };
 
   for (const m of (trip.members || [])) ensure(m.id);
 
+  // 一般花費 → 標記為 'expense'
   for (const exp of (trip.expenses || [])) {
     const currency = exp.currency;
-    for (const p of (exp.payers || [])) add(p.userId, currency, p.amount);
+    for (const p of (exp.payers || [])) add(p.userId, currency, 'expense', p.amount);
     for (const s of (exp.participants || [])) {
       const shareAmount = s.amount ?? s.share ?? 0;
-      add(s.userId, currency, -shareAmount);
+      add(s.userId, currency, 'expense', -shareAmount);
     }
   }
 
+  // 訂金 → 標記為 'deposit'
   if (Array.isArray(trip.deposits)) {
     for (const d of trip.deposits) {
       const currency = d.currency || trip.baseCurrency;
-      add(d.payerId, currency, d.amount);
-      add(d.collectorId, currency, -d.amount);
+      add(d.payerId, currency, 'deposit', d.amount);
+      add(d.collectorId, currency, 'deposit', -d.amount);
     }
   }
 
+  // 清除 expense 和 deposit 都幾乎為 0 的幣別紀錄
   for (const userId of Object.keys(net)) {
     for (const currency of Object.keys(net[userId])) {
-      if (Math.abs(net[userId][currency]) < 0.01) delete net[userId][currency];
+      const { expense = 0, deposit = 0 } = net[userId][currency];
+      if (Math.abs(expense) < 0.01 && Math.abs(deposit) < 0.01) {
+        delete net[userId][currency];
+      }
     }
   }
 
   return net;
 }
 
-/**
- * 取得此行程「實際出現過」的幣別清單（依花費 + 訂金紀錄），
- * 用於「換算成單一幣別結算」時的目標幣別選項 —
- * 例如行程內只用過 TWD、JPY，結算時就只能選這兩種幣別。
- */
 function getUsedCurrencies(trip) {
   const set = new Set();
   for (const exp of (trip.expenses || [])) {
@@ -189,9 +185,9 @@ function getUsedCurrencies(trip) {
 }
 
 /**
- * 將依幣別分開的原始淨額 (calcNetBalancesByCurrency 的回傳值)，
- * 用「當下即時匯率」統一換算成單一目標幣別。
- * 只有在使用者按下「換算成單一幣別結算」按鈕時才會呼叫。
+ * 🆕 適配新的 netByCurrency 結構：{ currency: { expense, deposit } }
+ * 換算時把 expense + deposit 加總後再乘匯率即可，因為換算成單一幣別
+ * 結算時，來源已經不重要（只是為了明細顯示才拆開）。
  */
 async function convertNetToSingleCurrency(netByCurrency, targetCurrency, trip) {
   const currencies = new Set();
@@ -229,9 +225,12 @@ async function convertNetToSingleCurrency(netByCurrency, targetCurrency, trip) {
   const converted = {};
   for (const userId of Object.keys(netByCurrency)) {
     let sum = 0;
-    for (const [currency, amount] of Object.entries(netByCurrency[userId])) {
+    for (const [currency, sources] of Object.entries(netByCurrency[userId])) {
       const rate = rates[currency];
-      if (typeof rate === 'number') sum += amount * rate;
+      if (typeof rate === 'number') {
+        const total = (sources.expense || 0) + (sources.deposit || 0);
+        sum += total * rate;
+      }
     }
     converted[userId] = round2(sum);
   }
@@ -243,7 +242,7 @@ async function fetchRealTimeRate(fromCurrency, toCurrency) {
   const from = fromCurrency.toUpperCase();
   const to = toCurrency.toUpperCase();
   if (from === to) return 1;
-  
+
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
