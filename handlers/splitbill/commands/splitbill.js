@@ -42,12 +42,19 @@ module.exports = {
         ? `${Math.round((totalInBase + Number.EPSILON) * 100) / 100} ${trip.baseCurrency} (${breakdownText})`
         : `0 ${trip.baseCurrency}`;
 
+      // 🆕 排版調整：inline 欄位固定湊成一整排 3 個（Discord 桌機／手機都會完整顯示成一列，
+      // 不會像原本 4 個 inline 欄位那樣被擠成「3+1」的不對稱畸零列，在手機窄螢幕上更明顯）。
+      // 剩下的「累計帳目」與「總花費」合併成一個滿版（非 inline）欄位，改用換行分開兩項資訊，
+      // 避免手機寬度不夠時，長金額文字把整列擠爆或截斷。
       embed.addFields(
         { name: '🧳 當前作用行程', value: `**${trip.name}**`, inline: true },
         { name: '🪙 基準幣別', value: `\`${trip.baseCurrency}\``, inline: true },
         { name: '👥 行程人數', value: `\`${trip.members.length} 人\``, inline: true },
-        { name: '🧾 累計帳目', value: `\`${trip.expenses.length} 筆\``, inline: true },
-        { name: '💰 總花費金額', value: `**${totalText}**`, inline: false }
+        {
+          name: '📒 帳目統計',
+          value: `🧾 累計帳目：\`${trip.expenses.length} 筆\`\n💰 總花費：**${totalText}**`,
+          inline: false
+        }
       );
     } else {
       embed.addFields({

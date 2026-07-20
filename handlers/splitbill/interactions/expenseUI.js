@@ -630,13 +630,20 @@ function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'ex
     });
     const amountText = formatAmountConversion(r.amount, r.currency, r.amountInBase, trip.baseCurrency);
 
+    // 🆕 排版調整：第一行只放「編號／類型／標題／金額」這些最重要的資訊，維持精簡好掃讀；
+    // 次要的日期、代墊人挪到第二行；「誰分攤多少」則獨立成第三行——原本只顯示
+    // 「N 人分攤」看不出誰要付錢，現在逐一列出「姓名(金額)」，一眼就能對到自己該付多少。
     if (r.type === 'expense') {
       const payers = r.payers.map(p => memberDisplay(trip, p.userId)).join('、');
-      return `**#${globalIdx}** \`${dateStr}\` \`[花費]\` **${r.description}** — ${amountText}\n　　由 ${payers} 代墊，${r.participants.length} 人分攤`;
+      const participantsText = r.participants
+        .map(p => `${memberDisplay(trip, p.userId)}(${round2(p.amount)} ${r.currency})`)
+        .join('、');
+      return `**#${globalIdx}** \`[花費]\` **${r.description}** — ${amountText}\n　　🕒 ${dateStr}・由 ${payers} 代墊\n　　💸 分攤：${participantsText}`;
     } else {
       const payer = memberDisplay(trip, r.payerId);
       const collector = memberDisplay(trip, r.collectorId);
-      return `**#${globalIdx}** \`${dateStr}\` \`[訂金]\` **${payer} → ${collector}** — ${amountText}${r.note ? `\n　　備註：${r.note}` : ''}`;
+      const noteText = r.note ? `\n　　📝 備註：${r.note}` : '';
+      return `**#${globalIdx}** \`[訂金]\` **${payer} → ${collector}** — ${amountText}\n　　🕒 ${dateStr}${noteText}`;
     }
   }).join('\n\n');
 
@@ -660,12 +667,14 @@ function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'ex
       {
         name: '📊 總覽',
         value:
-          `🧾 花費筆數：\`${trip.expenses.length} 筆\`　💰 轉帳筆數：\`${(trip.deposits || []).length} 筆\`\n` +
+          `🧾 花費筆數：\`${trip.expenses.length} 筆\`\n` +
+          `💰 轉帳筆數：\`${(trip.deposits || []).length} 筆\`\n` +
           `💵 花費總額：**${round2(totalExpenseBase)} ${trip.baseCurrency}**${breakdownText ? `（${breakdownText}）` : ''}\n` +
           `🏦 訂金總額：**${round2(totalDepositBase)} ${trip.baseCurrency}**`
       }
     )
-    .setFooter({ text: `第 ${safePage + 1} / ${totalPages} 頁　共 ${allRecords.length} 筆紀錄　💡 可用下方選單直接刪除本頁任一筆` });
+    // 🆕 頁碼資訊與操作提示分成兩行，避免在手機較窄的 footer 區塊被擠成一長串難以閱讀
+    .setFooter({ text: `第 ${safePage + 1} / ${totalPages} 頁・共 ${allRecords.length} 筆紀錄\n💡 可用下方選單直接刪除本頁任一筆` });
 
   // 🆕 翻頁按鈕與刪除選單的 customId 都帶上 __${source}，維持來源一致
   const deleteRow = new ActionRowBuilder().addComponents(
