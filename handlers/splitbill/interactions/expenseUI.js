@@ -54,30 +54,31 @@ function formatAmountConversion(amount, currency, amountInBase, baseCurrency) {
 }
 
 /**
- * 📱 格式化分攤明細，避免手機版因單行過長導致 Discord 自動換行後
- * 縮排跑掉、多人姓名+金額擠成一坨難以閱讀（原本用「、」把所有人
- * 串成一整條長字串，超出畫面寬度時換行位置完全不受控制）。
+ * 📱 格式化分攤明細。
+ * 🆕 改用 Discord 的「引言（>）」語法而非純文字+空格縮排——
+ * 因為純文字縮排只對該行「第一個字」有效，一旦內容太長被 Discord
+ * 自動換行，換行後的內容會直接貼齊最左邊，縮排必然消失（這是純文字
+ * 排版在 Discord 上的物理限制，無法透過調整空格數量解決）。
+ * 引言語法則是套用「整個區塊」的左側色條+縮排，即使自動換行，
+ * 換行後的內容仍會維持在色條右側的縮排位置，徹底解決鋸齒狀排版問題。
  *
- *   - 完全平分（所有人金額相同）→ 濃縮成「N人平分，每人 X」+ 姓名清單，
- *     省去重複的金額文字，同時把姓名清單獨立一行並加縮排，
- *     即使姓名太多自動換行，也不會跟金額數字混在一起。
- *   - 非平分（各自金額不同）→ 每人各自強制換行 + 條列符號 "•"，
- *     確保每個人的姓名跟金額永遠對齊在同一行，不會被自動斷行拆散。
+ *   - 完全平分 → 濃縮成「N人平分，每人 X」+ 姓名清單（同一引言區塊內換行）
+ *   - 非平分   → 每人各自一行條列，同樣包在引言區塊內
  */
 function formatParticipantsList(trip, participants, currency) {
-  if (!participants || !participants.length) return '　　　無';
+  if (!participants || !participants.length) return '無';
 
   const amounts = participants.map(p => round2(p.amount));
   const isEqualSplit = amounts.every(a => Math.abs(a - amounts[0]) < 0.01);
 
   if (isEqualSplit) {
     const names = participants.map(p => memberDisplay(trip, p.userId)).join('、');
-    return `${participants.length}人平分，每人 ${amounts[0]} ${currency}\n　　　${names}`;
+    return `${participants.length}人平分，每人 ${amounts[0]} ${currency}\n> 　${names}`;
   }
 
   return participants
-    .map(p => `　　　• ${memberDisplay(trip, p.userId)}：${round2(p.amount)} ${currency}`)
-    .join('\n');
+    .map(p => `　• ${memberDisplay(trip, p.userId)}：${round2(p.amount)} ${currency}`)
+    .join('\n> ');
 }
 
 module.exports = {
@@ -669,13 +670,18 @@ function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'ex
     if (r.type === 'expense') {
       const payers = r.payers.map(p => memberDisplay(trip, p.userId)).join('、');
       const participantsText = formatParticipantsList(trip, r.participants, r.currency);
-      return `**#${globalIdx}** \`[花費]\` **${r.description}** — ${amountText}\n　　🕒 ${dateStr}・由 ${payers} 代墊\n　　💸 分攤：${participantsText}`;
+      // 🆕 標題與金額分成兩行——項目名稱長、金額又要顯示雙幣別換算時，
+      // 擠在同一行很容易超出手機寬度自動換行，導致「這是標題」的視覺定位被打斷。
+      // 拆開後第一行永遠只放「編號/類型/標題」，第二行專門放金額，各自簡短好辨識。
+      return `**#${globalIdx}** \`[花費]\` **${r.description}**\n${amountText}\n> 🕒 ${dateStr}・由 ${payers} 代墊\n> 💸 分攤：${participantsText}`;
     } else {
       const payer = memberDisplay(trip, r.payerId);
       const collector = memberDisplay(trip, r.collectorId);
-      const noteText = r.note ? `\n　　📝 備註：${r.note}` : '';
-      return `**#${globalIdx}** \`[訂金]\` **${payer} → ${collector}** — ${amountText}\n　　🕒 ${dateStr}${noteText}`;
+      const noteText = r.note ? `\n> 📝 備註：${r.note}` : '';
+      return `**#${globalIdx}** \`[訂金]\` **${payer} → ${collector}**\n${amountText}\n> 🕒 ${dateStr}${noteText}`;
     }
+
+
   }).join('\n\n');
 
   // 依幣別統計花費小計（僅計 expenses，訂金不列入花費總額）
