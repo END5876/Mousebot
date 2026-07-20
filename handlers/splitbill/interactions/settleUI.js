@@ -52,7 +52,9 @@ function formatTransferLines(transfers, trip) {
     const arrow = t.direction === 'out' ? '➕ 轉給' : '➖ 收到';
     const amountText = `${round2(t.amount)} ${t.currency}`;
     const baseText = t.currency === trip.baseCurrency ? '' : `（約 ${round2(t.amountInBase)} ${trip.baseCurrency}）`;
-    const noteText = t.note ? `　（${t.note}）` : '';
+    // 🆕 備註改成獨立一行並縮排，而不是接在同一行尾端——手機寬度不夠時，
+    // 原本接在句尾的備註很容易把整行撐到很晚才換行，閱讀起來斷得很突兀。
+    const noteText = t.note ? `\n　　📝 ${t.note}` : '';
     return `${arrow} <@${t.counterpartId}>：${amountText}${baseText}${noteText}`;
   });
 }
