@@ -53,6 +53,33 @@ function formatAmountConversion(amount, currency, amountInBase, baseCurrency) {
   return `${amountText} ➔ ${round2(amountInBase)} ${baseCurrency}`;
 }
 
+/**
+ * 📱 格式化分攤明細，避免手機版因單行過長導致 Discord 自動換行後
+ * 縮排跑掉、多人姓名+金額擠成一坨難以閱讀（原本用「、」把所有人
+ * 串成一整條長字串，超出畫面寬度時換行位置完全不受控制）。
+ *
+ *   - 完全平分（所有人金額相同）→ 濃縮成「N人平分，每人 X」+ 姓名清單，
+ *     省去重複的金額文字，同時把姓名清單獨立一行並加縮排，
+ *     即使姓名太多自動換行，也不會跟金額數字混在一起。
+ *   - 非平分（各自金額不同）→ 每人各自強制換行 + 條列符號 "•"，
+ *     確保每個人的姓名跟金額永遠對齊在同一行，不會被自動斷行拆散。
+ */
+function formatParticipantsList(trip, participants, currency) {
+  if (!participants || !participants.length) return '　　　無';
+
+  const amounts = participants.map(p => round2(p.amount));
+  const isEqualSplit = amounts.every(a => Math.abs(a - amounts[0]) < 0.01);
+
+  if (isEqualSplit) {
+    const names = participants.map(p => memberDisplay(trip, p.userId)).join('、');
+    return `${participants.length}人平分，每人 ${amounts[0]} ${currency}\n　　　${names}`;
+  }
+
+  return participants
+    .map(p => `　　　• ${memberDisplay(trip, p.userId)}：${round2(p.amount)} ${currency}`)
+    .join('\n');
+}
+
 module.exports = {
   async handleButton(interaction, cache) {
     const { customId, guildId } = interaction;
@@ -596,6 +623,11 @@ const LEDGER_PAGE_SIZE = 8;
  * 🆕 每筆紀錄的金額顯示改用 formatAmountConversion：
  *   若該筆幣別本身就等於行程基準幣，就不再顯示「➔ 換算後金額」，
  *   因為換算前後數字完全相同，顯示等於重複資訊。
+ *
+ * 📱 每筆花費的分攤明細改用 formatParticipantsList：
+ *   避免多人分攤時用「、」串成一整條長字串，在手機版超出畫面寬度後
+ *   自動換行、縮排跑掉、擠成一坨難以閱讀；改為完全平分時濃縮成一行摘要，
+ *   非平分時則逐一換行條列，確保排版在任何裝置寬度下都維持清晰。
  */
 function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'exp') {
   const allRecords = [
@@ -631,13 +663,12 @@ function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'ex
     const amountText = formatAmountConversion(r.amount, r.currency, r.amountInBase, trip.baseCurrency);
 
     // 🆕 排版調整：第一行只放「編號／類型／標題／金額」這些最重要的資訊，維持精簡好掃讀；
-    // 次要的日期、代墊人挪到第二行；「誰分攤多少」則獨立成第三行——原本只顯示
-    // 「N 人分攤」看不出誰要付錢，現在逐一列出「姓名(金額)」，一眼就能對到自己該付多少。
+    // 次要的日期、代墊人挪到第二行；「誰分攤多少」則獨立成第三行，並改用
+    // formatParticipantsList 產生——完全平分時濃縮成一行摘要 + 姓名清單，
+    // 非平分時每人各自換行條列，避免手機版因單行過長自動換行而擠成一坨。
     if (r.type === 'expense') {
       const payers = r.payers.map(p => memberDisplay(trip, p.userId)).join('、');
-      const participantsText = r.participants
-        .map(p => `${memberDisplay(trip, p.userId)}(${round2(p.amount)} ${r.currency})`)
-        .join('、');
+      const participantsText = formatParticipantsList(trip, r.participants, r.currency);
       return `**#${globalIdx}** \`[花費]\` **${r.description}** — ${amountText}\n　　🕒 ${dateStr}・由 ${payers} 代墊\n　　💸 分攤：${participantsText}`;
     } else {
       const payer = memberDisplay(trip, r.payerId);
@@ -765,7 +796,7 @@ async function completeExpenseLogging(interaction, trip, state, participantIds, 
  * ✏️ 新增：以「自訂金額」完成記帳 —— 與 completeExpenseLogging 的差異在於
  * participants 的份額不是用 equalSplit 平均算出，而是直接採用使用者手動輸入、
  * 且已通過 validateCustomSplit 驗證加總無誤的 shares 陣列。
- * 例：ABC 共 3000，A 免費(0) / B 付 1000 / C 付 2000。
+ * 例：ABC 共 3000，A 免費(0) * / B 付 1000 / C 付 2000。
  */
 async function completeExpenseLoggingWithShares(interaction, trip, state, shares, cache) {
   try {
