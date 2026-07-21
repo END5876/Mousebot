@@ -1,6 +1,11 @@
 const path = require('path');
 const fs = require('fs');
 const {
+  SlashCommandBuilder,
+  PermissionFlagsBits,
+  MessageFlags,
+} = require('discord.js');
+const {
   getVoiceConnections,
   createAudioPlayer,
   createAudioResource,
@@ -11,6 +16,63 @@ const logger = require('../../utils/logger');
 const { nowPlaying } = require('../musicplayer/unifiedQueue/state');
 
 const SOUND_DIR = path.join(__dirname, '../../data/timeAnnouncer');
+
+// ── 每伺服器開關設定的 JSON 永久化 ──────────────────────────
+// 預設為「關閉」，只記錄被明確開啟過的伺服器 ID，
+// 這樣新加入的伺服器不會自動開始整點報時，需手動 /timeannounce 開啟。
+const DATA_DIR = path.join(__dirname, '../../data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+const SETTINGS_FILE = path.join(DATA_DIR, 'timeAnnouncerSettings.json');
+
+let enabledGuildIds = new Set();
+
+// ── 讀取設定檔 ────────────────────────────────────────────
+function loadSettings() {
+  if (!fs.existsSync(SETTINGS_FILE)) return;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+    if (Array.isArray(parsed.enabledGuilds)) {
+      enabledGuildIds = new Set(parsed.enabledGuilds);
+    }
+    logger.debug('HourlyReport', `已載入報時開關設定，${enabledGuildIds.size} 個伺服器已開啟`);
+  } catch (e) {
+    logger.warn('HourlyReport', `讀取報時開關設定失敗: ${e.message}`);
+  }
+}
+loadSettings();
+
+// ── 儲存設定檔（非同步寫入，避免阻塞） ────────────────────
+function saveSettings() {
+  fs.writeFile(
+    SETTINGS_FILE,
+    JSON.stringify({ enabledGuilds: [...enabledGuildIds] }, null, 2),
+    (e) => {
+      if (e) console.error('⚠️ [HourlyReport] 儲存報時開關設定失敗:', e.message);
+    }
+  );
+}
+
+/**
+ * 查詢指定伺服器目前是否開啟報時
+ * 預設為 false（關閉），只有在集合中出現的伺服器才視為開啟
+ */
+function isAnnouncerEnabled(guildId) {
+  return enabledGuildIds.has(guildId);
+}
+
+/**
+ * 設定指定伺服器的報時開關
+ * @param {string} guildId
+ * @param {boolean} enabled
+ */
+function setAnnouncerEnabled(guildId, enabled) {
+  if (enabled) {
+    enabledGuildIds.add(guildId);
+  } else {
+    enabledGuildIds.delete(guildId);
+  }
+  saveSettings();
+}
 
 // 24 小時 → 對應音檔檔名（依你提供的檔案清單完整對應 0~23 點）
 const HOUR_SOUND_MAP = {
@@ -41,9 +103,9 @@ const HOUR_SOUND_MAP = {
 };
 
 const TIMEZONE = 'Asia/Taipei'; // 依實際部署地點調整
-const POLL_INTERVAL_MS = 5000;  // ★ 優化：從 1 秒拉長為 5 秒，觸發窗口有 60 秒寬，不會漏報
+const POLL_INTERVAL_MS = 5000;  // 從 1 秒拉長為 5 秒，觸發窗口有 60 秒寬，不會漏報
 
-// ★ 優化：Formatter 只在模組載入時建立一次，重複使用，避免每次呼叫都重新建立
+// Formatter 只在模組載入時建立一次，重複使用，避免每次呼叫都重新建立
 const _formatter = new Intl.DateTimeFormat('en-US', {
   timeZone: TIMEZONE,
   year: 'numeric',
@@ -59,7 +121,7 @@ let lastTriggeredKey = null;
 
 /**
  * 取得指定時區目前的日期/時間各欄位（年、月、日、時、分）
- * ★ 優化：直接使用模組層級快取的 _formatter，只呼叫 formatToParts()
+ * 直接使用模組層級快取的 _formatter，只呼叫 formatToParts()
  */
 function getNowParts() {
   const parts = _formatter.formatToParts(new Date());
@@ -98,6 +160,12 @@ function playHourlySound(hour) {
   }
 
   connections.forEach((connection, guildId) => {
+    // 若該伺服器尚未開啟報時系統，直接略過（預設關閉）
+    if (!isAnnouncerEnabled(guildId)) {
+      logger.debug('HourlyReport', `伺服器 ${guildId} 尚未開啟報時系統，略過`);
+      return;
+    }
+
     try {
       // 1. 取得當前頻道正在播放的音樂，若正在播放則先暫停
       const currentNp = nowPlaying.get(guildId);
@@ -160,17 +228,86 @@ function checkAndTrigger() {
   }
 }
 
+// ════════════════════════════════════════════════════════
+//  /timeannounce 指令：管理本伺服器的整點報時開關（單一指令版）
+//  不帶參數 → 查看狀態；帶 action 參數 → 開啟/關閉（僅管理員）
+// ════════════════════════════════════════════════════════
+const timeAnnounceCommand = {
+  data: new SlashCommandBuilder()
+    .setName('timeannounce')
+    .setDescription('管理本伺服器的整點報時系統')
+    .addStringOption(option =>
+      option
+        .setName('action')
+        .setDescription('選擇操作，留空則查看目前狀態')
+        .addChoices(
+          { name: '開啟', value: 'on' },
+          { name: '關閉', value: 'off' },
+          { name: '查看狀態', value: 'status' },
+        )
+    ),
+
+  async execute(interaction) {
+    if (!interaction.guildId) {
+      return interaction.reply({
+        content: '❌ 此指令僅能在伺服器中使用',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    // 未帶參數時，預設為查看狀態
+    const action = interaction.options.getString('action') ?? 'status';
+
+    // status 開放所有人查看，on / off 僅限管理員
+    if (action !== 'status' && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+      return interaction.reply({
+        content: '❌ 只有具備「管理伺服器」權限的成員可以使用此指令',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    const guildId = interaction.guildId;
+
+    if (action === 'on') {
+      setAnnouncerEnabled(guildId, true);
+      return interaction.reply({
+        content: '✅ 本伺服器的整點報時系統已 **開啟**',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    if (action === 'off') {
+      setAnnouncerEnabled(guildId, false);
+      return interaction.reply({
+        content: '🛑 本伺服器的整點報時系統已 **關閉**',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    // action === 'status'
+    const statusText = isAnnouncerEnabled(guildId) ? '✅ 開啟中' : '🛑 已關閉（預設狀態）';
+    return interaction.reply({
+      content: `📊 本伺服器目前的整點報時狀態：${statusText}`,
+      flags: MessageFlags.Ephemeral,
+    });
+  },
+};
+
 /**
  * 對外初始化函式，於 index.js 中呼叫
  * @param {import('discord.js').Client} client
  */
 function setupTimeAnnouncer(client) {
+  client.commands.set(timeAnnounceCommand.data.name, timeAnnounceCommand);
+
   setInterval(checkAndTrigger, POLL_INTERVAL_MS);
-  logger.success('HourlyReport', '整點報時排程已啟動（5 秒輪詢真實時間模式）');
+  logger.success('HourlyReport', '整點報時排程已啟動（5 秒輪詢真實時間模式，預設關閉）');
 }
 
 module.exports = {
   setupTimeAnnouncer,
   playHourlySound,  // 匯出方便測試 / 手動觸發
   getNowParts,
+  isAnnouncerEnabled,
+  setAnnouncerEnabled,
 };
