@@ -14,6 +14,11 @@ const {
 } = require('discord.js');
 const logger = require('../utils/logger');
 const bootSummary = require('../utils/bootSummary');
+const voiceMonitor = require('./musicplayer/voiceActivityMonitor');
+// 延後在函式內 require playback.js，避免在模組載入順序上造成不必要的耦合
+function _getPlaybackModule() {
+  return require('./musicplayer/unifiedQueue/playback');
+}
 
 // ─── 狀態管理 ───────────────────────────────────────────
 let autoJoinEnabled = true;
@@ -37,6 +42,9 @@ function destroyExistingConnection(guildId) {
   } catch (err) {
     console.warn('⚠️ 銷毀舊連線時發生錯誤（可忽略）:', err.message);
   }
+  // 舊連線被銷毀後，掛在它身上的 speaking 監聽器已經失效，
+  // 一併停止監控，稍後在新連線建立完成後會重新啟動。
+  voiceMonitor.stopMonitoring(guildId);
 }
 
 // ─── 加入目標語音頻道 ────────────────────────────────────
@@ -65,6 +73,19 @@ async function joinTargetChannel(client) {
     if (botMember?.voice?.channelId === channelId) {
       const existing = getVoiceConnection(guildId);
       if (existing && existing.state.status === VoiceConnectionStatus.Ready) {
+        // 已經在目標頻道且連線正常，但仍要確保常駐監控有在跑
+        // （例如監控先前被 destroyExistingConnection 清掉、或從未啟動過）。
+        if (!voiceMonitor.isMonitoring(guildId)) {
+          const { _createPersistentIdleHandler } = _getPlaybackModule();
+          voiceMonitor.startMonitoring({
+            guildId,
+            connection: existing,
+            channel,
+            client,
+            persistent: true,
+            onStop: _createPersistentIdleHandler(guildId, channel),
+          });
+        }
         isJoining = false;
         return;
       }
@@ -91,6 +112,20 @@ async function joinTargetChannel(client) {
       isJoining = false;
       return;
     }
+
+    // ── 常駐閒置監控 ─────────────────────────────────────
+    // Bot 永遠待在 TARGET_VOICE_CHANNEL_ID，所以用 persistent 模式：
+    // 觸發時只停止播放（stopAll），絕不 destroy 連線 / 離開頻道，
+    // 監控本身會持續巡檢，供下一輪閒置狀態使用。
+    const { _createPersistentIdleHandler } = _getPlaybackModule();
+    voiceMonitor.startMonitoring({
+      guildId,
+      connection,
+      channel,
+      client,
+      persistent: true,
+      onStop: _createPersistentIdleHandler(guildId, channel),
+    });
 
     connection.on(VoiceConnectionStatus.Disconnected, async () => {
       if (!autoJoinEnabled) return;

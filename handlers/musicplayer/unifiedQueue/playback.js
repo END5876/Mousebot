@@ -157,19 +157,42 @@ function stopAll(guildId) {
 }
 
 // ════════════════════════════════════════════════════════
-//  閒置自動離開的共用 onStop callback 產生器
-//  （被 ensureConnection() 與 /idlemonitor enable 共用，
-//    避免兩處各自維護一份邏輯而日後修改不同步）
+//  閒置自動離開的共用 onStop callback 產生器（已停用，僅保留註解）
+//  ※ 本專案目前只使用常駐模式（見下方 _createPersistentIdleHandler），
+//    Bot 永遠待在 TARGET_VOICE_CHANNEL_ID，不會因閒置而離開頻道。
+//    若之後需要恢復「閒置自動離開頻道」的行為，可以取消下面的註解。
 // ════════════════════════════════════════════════════════
-function _createIdleStopHandler(guildId, connection, channel) {
+// function _createIdleStopHandler(guildId, connection, channel) {
+//   return (gId, reason) => {
+//     console.log(`🔌 [UnifiedQueue] 閒置自動斷線 (${gId}): ${reason}`);
+//     stopAll(gId);
+//     try { connection.destroy(); } catch {}
+//     connections.delete(gId);
+//     channel.send(
+//       `⏹️ 已因閒置自動停止播放並離開語音頻道\n📌 原因：${reason}`
+//     ).catch(() => {});
+//   };
+// }
+
+// ════════════════════════════════════════════════════════
+//  閒置自動「停止播放但不離開頻道」的共用 onStop callback 產生器
+//  （給常駐頻道場景使用，例如 autoJoinHandler 設定了
+//    TARGET_VOICE_CHANNEL_ID、Bot 永遠待在頻道內的情況；
+//    搭配 voiceMonitor.startMonitoring 的 persistent: true 使用）
+// ════════════════════════════════════════════════════════
+function _createPersistentIdleHandler(guildId, channel) {
   return (gId, reason) => {
-    console.log(`🔌 [UnifiedQueue] 閒置自動斷線 (${gId}): ${reason}`);
+    const wasPlaying = isPlaying(gId);
     stopAll(gId);
-    try { connection.destroy(); } catch {}
-    connections.delete(gId);
-    channel.send(
-      `⏹️ 已因閒置自動停止播放並離開語音頻道\n📌 原因：${reason}`
-    ).catch(() => {});
+    console.log(
+      `⏹️ [UnifiedQueue] 常駐模式閒置觸發 (${gId})：${reason}` +
+      (wasPlaying ? '，已停止播放（Bot 繼續留在頻道）' : '（原本未在播放，略過通知）')
+    );
+    if (wasPlaying) {
+      channel.send(
+        `⏹️ 已因閒置自動停止播放\n📌 原因：${reason}\nBot 會繼續留在頻道，等待下次使用 /play。`
+      ).catch(() => {});
+    }
   };
 }
 
@@ -384,6 +407,24 @@ async function ensureConnection(interaction) {
 
   if (connection) {
     connections.set(guildId, connection);
+
+    // ★ 修正：先前這裡直接 return，若這條連線是由別的模組（例如
+    //   autoJoinHandler 的常駐加入）建立的，voiceMonitor.startMonitoring()
+    //   永遠不會被呼叫，導致閒置偵測完全沒有在運作。
+    //   現在補上：只有在「目前完全沒有監控在跑」時才補開監控，
+    //   避免覆蓋掉 autoJoinHandler 已經在跑的常駐監控。
+    //   ※ 本專案目前只使用常駐模式（只停播放、不離開頻道）。
+    const voiceChannelForMonitor = interaction.member?.voice?.channel;
+    if (!voiceMonitor.isMonitoring(guildId) && voiceChannelForMonitor) {
+      voiceMonitor.startMonitoring({
+        guildId,
+        connection,
+        channel: voiceChannelForMonitor,
+        client: interaction.client,
+        onStop: _createPersistentIdleHandler(guildId, interaction.channel),
+      });
+    }
+
     return connection;
   }
 
@@ -402,13 +443,13 @@ async function ensureConnection(interaction) {
 
   startSilenceLayer(guildId);
 
-  // ── 啟動閒置自動停止監控 ─────────────────────────────
+  // ── 啟動閒置自動停止監控（常駐模式：只停播放，不離開頻道）───
   voiceMonitor.startMonitoring({
     guildId,
     connection,
     channel: voiceChannel,
     client: interaction.client,
-    onStop: _createIdleStopHandler(guildId, connection, interaction.channel),
+    onStop: _createPersistentIdleHandler(guildId, interaction.channel),
   });
 
   connection.on(VoiceConnectionStatus.Disconnected, async () => {
@@ -441,7 +482,8 @@ module.exports = {
   _buildEmbed,
   updateControlPanel,
   stopAll,
-  _createIdleStopHandler,
+  // _createIdleStopHandler, // 已停用（一般模式），保留註解供之後參考
+  _createPersistentIdleHandler,
   enqueue,
   ensureConnection,
   isPlaying,
