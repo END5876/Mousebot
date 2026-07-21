@@ -16,7 +16,8 @@ const {
   _buildEmbed,
   updateControlPanel,
   stopAll,
-  _createIdleStopHandler,
+  // _createIdleStopHandler, // 已停用（一般模式），保留註解供之後參考
+  _createPersistentIdleHandler,
   ensureConnection,
   playRandomLocal,
 } = require('./playback');
@@ -528,12 +529,21 @@ async function handleMusicIdle(interaction, sub) {
       const voiceChannel = channelId ? interaction.guild.channels.cache.get(channelId) : null;
 
       if (voiceChannel) {
+        // ★ 本專案目前只使用常駐模式（閒置只停止播放、不離開頻道）。
+        //   一般模式（依頻道是否為 TARGET_VOICE_CHANNEL_ID 決定要不要離開頻道）
+        //   已停用，保留註解供之後參考：
+        //
+        // const isTargetChannel = voiceChannel.id === process.env.TARGET_VOICE_CHANNEL_ID;
+        // onStop: isTargetChannel
+        //   ? _createPersistentIdleHandler(guildId, voiceChannel)
+        //   : _createIdleStopHandler(guildId, connection, interaction.channel),
+
         voiceMonitor.startMonitoring({
           guildId,
           connection,
           channel: voiceChannel,
           client: interaction.client,
-          onStop: _createIdleStopHandler(guildId, connection, interaction.channel),
+          onStop: _createPersistentIdleHandler(guildId, voiceChannel),
         });
         monitorStarted = true;
       }
@@ -545,7 +555,7 @@ async function handleMusicIdle(interaction, sub) {
       : '（目前機器人不在語音頻道內，將於下次 /play 時套用）';
 
     await interaction.reply({
-      content: `✅ 閒置自動離開功能已開啟\n${statusNote}\n頻道空 30 分鐘 / 靜音 60 分鐘將自動停止播放並離開`,
+      content: `✅ 閒置自動偵測功能已開啟\n${statusNote}\n頻道空 30 分鐘 / 靜音 60 分鐘將自動停止播放（Bot 仍會留在頻道）`,
       flags: MessageFlags.Ephemeral,
     });
   } else {
