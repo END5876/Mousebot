@@ -10,16 +10,6 @@ const { equalSplit, validateCustomSplit, fetchRealTimeRate, round2 } = require('
 const { addDeposit } = require('../utils/deposit');
 const { showMainMenu } = require('../commands/splitbill');
 
-/**
- * 🆕 解析「總帳目清單」按鈕/選單 customId 尾端的「頁碼__來源」格式。
- * 例如：
- *   'last__set'  → { page: Infinity, source: 'set' }（從結算與淨額中心進入，跳到最後一頁）
- *   '3__exp'     → { page: 3, source: 'exp' }（從記帳管理分頁進入，第 3 頁）
- *   'last'（舊格式，沒有來源標記）→ 自動視為 source: 'exp'，維持向下相容
- *
- * 有了這個來源標記，翻頁、刪除、返回按鈕才能一路記住「使用者原本是從哪裡進來的」，
- * 讓「返回」永遠回到正確的分頁，而不是固定寫死回記帳管理分頁。
- */
 function parseLedgerSuffix(suffix) {
   const [pagePart, sourcePart] = suffix.split('__');
   const source = sourcePart === 'set' ? 'set' : 'exp';
@@ -27,11 +17,6 @@ function parseLedgerSuffix(suffix) {
   return { page, source };
 }
 
-/**
- * 依來源標記，決定「返回」按鈕要導向哪個分頁的主畫面。
- *   exp → 記帳管理分頁 (exp_nav)
- *   set → 結算與淨額中心 (set_nav)
- */
 function getBackNavConfig(source) {
   if (source === 'set') {
     return { customId: 'set_nav', label: '⬅️ 返回結算與淨額中心' };
@@ -39,32 +24,12 @@ function getBackNavConfig(source) {
   return { customId: 'exp_nav', label: '🔙 返回記帳管理' };
 }
 
-/**
- * 🆕 組出「金額 幣別」文字，只有在「該筆紀錄幣別 ≠ 行程基準幣」時，
- * 才附加「➔ 換算後金額 基準幣」——因為幣別本身就是基準幣的話，
- * 換算前後數字完全一樣，顯示出來只是廢話，徒增畫面長度。
- * 例：
- *   currency === baseCurrency → "2000 TWD"
- *   currency !== baseCurrency → "38172 JPY ➔ 7592.41 TWD"
- */
 function formatAmountConversion(amount, currency, amountInBase, baseCurrency) {
   const amountText = `${round2(amount)} ${currency}`;
   if (currency === baseCurrency) return amountText;
   return `${amountText} ➔ ${round2(amountInBase)} ${baseCurrency}`;
 }
 
-/**
- * 📱 格式化分攤明細。
- * 🆕 改用 Discord 的「引言（>）」語法而非純文字+空格縮排——
- * 因為純文字縮排只對該行「第一個字」有效，一旦內容太長被 Discord
- * 自動換行，換行後的內容會直接貼齊最左邊，縮排必然消失（這是純文字
- * 排版在 Discord 上的物理限制，無法透過調整空格數量解決）。
- * 引言語法則是套用「整個區塊」的左側色條+縮排，即使自動換行，
- * 換行後的內容仍會維持在色條右側的縮排位置，徹底解決鋸齒狀排版問題。
- *
- *   - 完全平分 → 濃縮成「N人平分，每人 X」+ 姓名清單（同一引言區塊內換行）
- *   - 非平分   → 每人各自一行條列，同樣包在引言區塊內
- */
 function formatParticipantsList(trip, participants, currency) {
   if (!participants || !participants.length) return '無';
 
@@ -165,13 +130,50 @@ module.exports = {
       return interaction.update({ embeds: [embed], components: [selectRow, navRow] });
     }
 
-    // 📒 總帳目清單／刪除：完整列出行程所有花費 + 訂金紀錄，可翻頁瀏覽，並可直接刪除任一筆
-    // 🆕 customId 格式改為「頁碼__來源」，例如 exp_btn_ledger_last__set，
-    //    這樣不論從記帳管理分頁或結算與淨額中心進入，都能記住來源，返回時導向正確分頁。
     if (customId.startsWith('exp_btn_ledger_')) {
       const suffix = customId.substring('exp_btn_ledger_'.length);
       const { page, source } = parseLedgerSuffix(suffix);
       return renderLedgerPage(interaction, trip, page, null, source);
+    }
+
+    // ✅ 新增：使用者在確認畫面點擊「確認刪除」，這時才真正執行刪除動作
+    if (customId === 'exp_btn_confirm_delete') {
+      const state = cache.get(guildId, interaction.user.id);
+      if (!state || !state.pendingDelete) {
+        return interaction.reply({ content: '⚠️ 確認逾時或快取失效，請重新操作一次刪除流程。', flags: MessageFlags.Ephemeral });
+      }
+
+      const { type, id: realId, page, source } = state.pendingDelete;
+      cache.delete(guildId, interaction.user.id);
+
+      if (type === 'expense') {
+        const idx = trip.expenses.findIndex(e => e.id === realId);
+        if (idx === -1) {
+          return renderLedgerPage(interaction, trip, page, '⚠️ 找不到此花費帳目，可能已被其他人刪除。', source);
+        }
+        const deleted = trip.expenses.splice(idx, 1)[0];
+        storage.persist();
+        return renderLedgerPage(interaction, trip, page, `🗑️ 已成功刪除花費：**${deleted.description}** (${deleted.amount} ${deleted.currency})`, source);
+      } else if (type === 'deposit') {
+        const idx = trip.deposits.findIndex(d => d.id === realId);
+        if (idx === -1) {
+          return renderLedgerPage(interaction, trip, page, '⚠️ 找不到此訂金紀錄，可能已被其他人刪除。', source);
+        }
+        const deleted = trip.deposits.splice(idx, 1)[0];
+        storage.persist();
+        return renderLedgerPage(interaction, trip, page, `🗑️ 已成功刪除訂金紀錄：**${memberDisplay(trip, deleted.payerId)} 預付給 ${memberDisplay(trip, deleted.collectorId)}** (${deleted.amount} ${deleted.currency})`, source);
+      }
+    }
+
+    // ✅ 新增：使用者在確認畫面點擊「取消」，放棄本次刪除，直接回到原頁面（資料不變）
+    if (customId === 'exp_btn_cancel_delete') {
+      const state = cache.get(guildId, interaction.user.id);
+      const pending = state && state.pendingDelete;
+      cache.delete(guildId, interaction.user.id);
+
+      const page = pending ? pending.page : 0;
+      const source = pending ? pending.source : 'exp';
+      return renderLedgerPage(interaction, trip, page, '↩️ 已取消刪除操作，帳目未變動。', source);
     }
 
     if (customId === 'exp_btn_split_all') {
@@ -200,7 +202,6 @@ module.exports = {
       return interaction.update({ embeds: [embed], components: [selectRow] });
     }
 
-    // ✏️ 新增：非平分（自訂金額）分攤 —— 每人金額可各自指定，例如免費、部分負擔
     if (customId === 'exp_btn_split_custom_amount') {
       const state = cache.get(guildId, interaction.user.id);
       if (!state) return interaction.reply({ content: '⚠️ 狀態過期，請重新操作。', flags: MessageFlags.Ephemeral });
@@ -231,7 +232,6 @@ module.exports = {
   },
 
   async handleModal(interaction, cache) {
-    // 🟢 處理「收取訂金」流程 3/3：接收多人金額與備註並儲存
     if (interaction.customId === 'exp_modal_multi_deposit') {
       const { guildId, user } = interaction;
       const { trip } = resolveTrip(guildId);
@@ -242,12 +242,11 @@ module.exports = {
       }
 
       let note = '預收款/訂金';
-      // 如果選擇人數小於 5，代表有備註欄位可以讀取
       if (state.depositPayerIds.length < 5) {
         try {
           const inputNote = interaction.fields.getTextInputValue('dep_note');
           if (inputNote) note = inputNote;
-        } catch (e) {} // 忽略錯誤
+        } catch (e) {}
       }
 
       const depositsAdded = [];
@@ -384,7 +383,6 @@ module.exports = {
       return renderSplitMethodUI(interaction, state);
     }
 
-    // ✏️ 新增：處理「自訂金額分攤」流程 —— 接收各成員應付金額，驗證加總後直接記帳
     if (interaction.customId === 'exp_modal_custom_split') {
       const { guildId, user } = interaction;
       const { trip } = resolveTrip(guildId);
@@ -420,7 +418,6 @@ module.exports = {
     const { customId, guildId, values, user } = interaction;
     const { trip } = resolveTrip(guildId);
 
-    // 🟢 處理「收取訂金」流程 2/4：選擇幣別後，選擇收款人
     if (customId === 'exp_select_deposit_currency') {
       const selectedCurrency = values[0];
       cache.set(guildId, user.id, { depositCurrency: selectedCurrency });
@@ -440,14 +437,13 @@ module.exports = {
       return interaction.update({ embeds: [embed], components: [selectRow] });
     }
 
-    // 🟢 處理「收取訂金」流程 3/4：選擇付款人 (支援多選)
     if (customId === 'exp_select_deposit_collector') {
       const state = cache.get(guildId, user.id);
       if (!state || !state.depositCurrency) return interaction.reply({ content: '⚠️ 快取失效，請重新操作。', flags: MessageFlags.Ephemeral });
       state.depositCollectorId = values[0];
       
       const availableMembers = trip.members.filter(m => m.id !== values[0]);
-      const maxSelect = Math.min(availableMembers.length, 5); // Discord Modal 最多 5 個輸入框
+      const maxSelect = Math.min(availableMembers.length, 5);
 
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
@@ -466,20 +462,18 @@ module.exports = {
       return interaction.update({ embeds: [embed], components: [selectRow] });
     }
 
-    // 🟢 處理「收取訂金」流程：動態彈出多人金額輸入 Modal
     if (customId === 'exp_select_deposit_payer') {
       const state = cache.get(guildId, user.id);
       if (!state || !state.depositCurrency || !state.depositCollectorId) {
         return interaction.reply({ content: '⚠️ 快取失效，請重新操作。', flags: MessageFlags.Ephemeral });
       }
       
-      state.depositPayerIds = values; // 儲存多個付款人 ID
+      state.depositPayerIds = values;
 
       const modal = new ModalBuilder()
         .setCustomId('exp_modal_multi_deposit')
         .setTitle(`💰 步驟 4/4：輸入訂金金額 (${state.depositCurrency})`);
 
-      // 根據選擇的人數，動態產生輸入框
       values.forEach((id, idx) => {
         const memberName = trip.members.find(m => m.id === id).name;
         const amountInput = new TextInputBuilder()
@@ -490,7 +484,6 @@ module.exports = {
         modal.addComponents(new ActionRowBuilder().addComponents(amountInput));
       });
 
-      // 如果選擇人數小於 5，代表還有空間放備註欄位
       if (values.length < 5) {
         const noteInput = new TextInputBuilder()
           .setCustomId('dep_note')
@@ -554,7 +547,6 @@ module.exports = {
       return completeExpenseLogging(interaction, trip, state, participantIds, cache);
     }
 
-    // ✏️ 新增：處理「自訂金額分攤」流程 —— 選完成員後彈出動態 Modal 輸入各自金額
     if (customId === 'exp_select_custom_participants') {
       const state = cache.get(guildId, user.id);
       if (!state) return interaction.reply({ content: '⚠️ 快取過期，請重新開啟。', flags: MessageFlags.Ephemeral });
@@ -584,52 +576,69 @@ module.exports = {
       return interaction.showModal(modal);
     }
 
-    // 📒 在總帳目清單分頁中選擇刪除一筆紀錄；customId 帶有「目前頁碼__來源」，刪除後回到同一頁、同一來源
+    // ✅ 修改：不再直接刪除，改為先暫存待刪除紀錄，顯示確認畫面
+    // customId 仍帶有「目前頁碼__來源」，讓確認/取消按鈕都能記得回到哪一頁、哪個來源分頁
     if (customId.startsWith('exp_select_delete_')) {
       const suffix = customId.substring('exp_select_delete_'.length);
       const { page, source } = parseLedgerSuffix(suffix);
       const [type, ...rest] = values[0].split('_');
       const realId = rest.join('_');
 
+      let record, titleText, detailText, color;
+
       if (type === 'expense') {
-        const idx = trip.expenses.findIndex(e => e.id === realId);
-        if (idx === -1) return interaction.reply({ content: '⚠️ 找不到此花費帳目，可能已被其他人刪除。', flags: MessageFlags.Ephemeral });
-        const deleted = trip.expenses.splice(idx, 1)[0];
-        storage.persist();
-        return renderLedgerPage(interaction, trip, page, `🗑️ 已成功刪除花費：**${deleted.description}** (${deleted.amount} ${deleted.currency})`, source);
+        record = trip.expenses.find(e => e.id === realId);
+        if (!record) return interaction.reply({ content: '⚠️ 找不到此花費帳目，可能已被其他人刪除。', flags: MessageFlags.Ephemeral });
+
+        const amountText = formatAmountConversion(record.amount, record.currency, record.amountInBase, trip.baseCurrency);
+        const payers = record.payers.map(p => memberDisplay(trip, p.userId)).join('、');
+        const participantsText = formatParticipantsList(trip, record.participants, record.currency);
+
+        titleText = `[花費] ${record.description}`;
+        color = 0xe74c3c;
+        detailText =
+          `💰 金額：${amountText}\n` +
+          `👤 代墊：${payers}\n` +
+          `📊 分攤：${participantsText}`;
       } else if (type === 'deposit') {
-        const idx = trip.deposits.findIndex(d => d.id === realId);
-        if (idx === -1) return interaction.reply({ content: '⚠️ 找不到此訂金紀錄，可能已被其他人刪除。', flags: MessageFlags.Ephemeral });
-        const deleted = trip.deposits.splice(idx, 1)[0];
-        storage.persist();
-        return renderLedgerPage(interaction, trip, page, `🗑️ 已成功刪除訂金紀錄：**${memberDisplay(trip, deleted.payerId)} 預付給 ${memberDisplay(trip, deleted.collectorId)}** (${deleted.amount} ${deleted.currency})`, source);
+        record = trip.deposits.find(d => d.id === realId);
+        if (!record) return interaction.reply({ content: '⚠️ 找不到此訂金紀錄，可能已被其他人刪除。', flags: MessageFlags.Ephemeral });
+
+        const amountText = formatAmountConversion(record.amount, record.currency, record.amountInBase, trip.baseCurrency);
+        titleText = `[訂金] ${memberDisplay(trip, record.payerId)} → ${memberDisplay(trip, record.collectorId)}`;
+        color = 0xe74c3c;
+        detailText =
+          `💰 金額：${amountText}` +
+          (record.note ? `\n📝 備註：${record.note}` : '');
+      } else {
+        return interaction.reply({ content: '⚠️ 無法識別的紀錄類型。', flags: MessageFlags.Ephemeral });
       }
+
+      // 暫存待刪除資訊，供確認/取消按鈕使用
+      cache.set(guildId, user.id, {
+        pendingDelete: { type, id: realId, page, source }
+      });
+
+      const embed = new EmbedBuilder()
+        .setColor(color)
+        .setTitle('⚠️ 確認刪除此筆紀錄？')
+        .setDescription(
+          `**${titleText}**\n${detailText}\n\n` +
+          `❗ 此操作**無法復原**，請再次確認是否要刪除。`
+        );
+
+      const confirmRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('exp_btn_confirm_delete').setLabel('✅ 確認刪除').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('exp_btn_cancel_delete').setLabel('↩️ 取消').setStyle(ButtonStyle.Secondary)
+      );
+
+      return interaction.update({ content: '', embeds: [embed], components: [confirmRow] });
     }
   }
 };
 
 const LEDGER_PAGE_SIZE = 8;
 
-/**
- * 📒 總帳目清單：依時間先後（由舊到新）完整列出行程內所有花費 + 訂金紀錄，
- * 並附上依幣別 / 依類型的總計摘要，方便一次掌握全部帳目，支援翻頁瀏覽，
- * 也可直接用選單刪除本頁任一筆紀錄。
- *
- * 🆕 新增 source 參數（'exp' | 'set'），代表使用者是從哪個分頁點進來的：
- *   - 'exp'：記帳管理分頁
- *   - 'set'：結算與淨額中心
- * 翻頁按鈕、刪除選單、返回按鈕都會依此參數帶上相同的來源標記，
- * 確保整趟瀏覽過程中「返回」永遠導向正確的原始分頁。
- *
- * 🆕 每筆紀錄的金額顯示改用 formatAmountConversion：
- *   若該筆幣別本身就等於行程基準幣，就不再顯示「➔ 換算後金額」，
- *   因為換算前後數字完全相同，顯示等於重複資訊。
- *
- * 📱 每筆花費的分攤明細改用 formatParticipantsList：
- *   避免多人分攤時用「、」串成一整條長字串，在手機版超出畫面寬度後
- *   自動換行、縮排跑掉、擠成一坨難以閱讀；改為完全平分時濃縮成一行摘要，
- *   非平分時則逐一換行條列，確保排版在任何裝置寬度下都維持清晰。
- */
 function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'exp') {
   const allRecords = [
     ...trip.expenses.map(e => ({ ...e, type: 'expense' })),
@@ -663,16 +672,9 @@ function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'ex
     });
     const amountText = formatAmountConversion(r.amount, r.currency, r.amountInBase, trip.baseCurrency);
 
-    // 🆕 排版調整：第一行只放「編號／類型／標題／金額」這些最重要的資訊，維持精簡好掃讀；
-    // 次要的日期、代墊人挪到第二行；「誰分攤多少」則獨立成第三行，並改用
-    // formatParticipantsList 產生——完全平分時濃縮成一行摘要 + 姓名清單，
-    // 非平分時每人各自換行條列，避免手機版因單行過長自動換行而擠成一坨。
     if (r.type === 'expense') {
       const payers = r.payers.map(p => memberDisplay(trip, p.userId)).join('、');
       const participantsText = formatParticipantsList(trip, r.participants, r.currency);
-      // 🆕 標題與金額分成兩行——項目名稱長、金額又要顯示雙幣別換算時，
-      // 擠在同一行很容易超出手機寬度自動換行，導致「這是標題」的視覺定位被打斷。
-      // 拆開後第一行永遠只放「編號/類型/標題」，第二行專門放金額，各自簡短好辨識。
       return `**#${globalIdx}** \`[花費]\` **${r.description}**\n${amountText}\n> 🕒 ${dateStr}・由 ${payers} 代墊\n> 💸 分攤：${participantsText}`;
     } else {
       const payer = memberDisplay(trip, r.payerId);
@@ -680,11 +682,8 @@ function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'ex
       const noteText = r.note ? `\n> 📝 備註：${r.note}` : '';
       return `**#${globalIdx}** \`[訂金]\` **${payer} → ${collector}**\n${amountText}\n> 🕒 ${dateStr}${noteText}`;
     }
-
-
   }).join('\n\n');
 
-  // 依幣別統計花費小計（僅計 expenses，訂金不列入花費總額）
   const totalsByCurrency = {};
   let totalExpenseBase = 0;
   for (const e of trip.expenses) {
@@ -710,10 +709,8 @@ function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'ex
           `🏦 訂金總額：**${round2(totalDepositBase)} ${trip.baseCurrency}**`
       }
     )
-    // 🆕 頁碼資訊與操作提示分成兩行，避免在手機較窄的 footer 區塊被擠成一長串難以閱讀
-    .setFooter({ text: `第 ${safePage + 1} / ${totalPages} 頁・共 ${allRecords.length} 筆紀錄\n💡 可用下方選單直接刪除本頁任一筆` });
+    .setFooter({ text: `第 ${safePage + 1} / ${totalPages} 頁・共 ${allRecords.length} 筆紀錄\n💡 可用下方選單直接刪除本頁任一筆（刪除前會再次確認）` });
 
-  // 🆕 翻頁按鈕與刪除選單的 customId 都帶上 __${source}，維持來源一致
   const deleteRow = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId(`exp_select_delete_${safePage}__${source}`)
@@ -798,46 +795,40 @@ async function completeExpenseLogging(interaction, trip, state, participantIds, 
   }
 }
 
-/**
- * ✏️ 新增：以「自訂金額」完成記帳 —— 與 completeExpenseLogging 的差異在於
- * participants 的份額不是用 equalSplit 平均算出，而是直接採用使用者手動輸入、
- * 且已通過 validateCustomSplit 驗證加總無誤的 shares 陣列。
- * 例：ABC 共 3000，A 免費(0) * / B 付 1000 / C 付 2000。
- */
-async function completeExpenseLoggingWithShares(interaction, trip, state, shares, cache) {
-  try {
-    const amountInBase = Math.round((state.amount * state.exchangeRate + Number.EPSILON) * 100) / 100;
+  async function completeExpenseLoggingWithShares(interaction, trip, state, shares, cache) {
+    try {
+      const amountInBase = Math.round((state.amount * state.exchangeRate + Number.EPSILON) * 100) / 100;
 
-    const newExpense = {
-      id: state.id,
-      description: state.description,
-      amount: state.amount,
-      currency: state.currency,
-      exchangeRate: state.exchangeRate,
-      rateSource: state.rateSource,
-      amountInBase,
-      payers: state.payers,
-      participants: shares.map(s => ({ userId: s.userId, amount: s.share })),
-      createdAt: Date.now(),
-      createdBy: interaction.user.id
-    };
+      const newExpense = {
+        id: state.id,
+        description: state.description,
+        amount: state.amount,
+        currency: state.currency,
+        exchangeRate: state.exchangeRate,
+        rateSource: state.rateSource,
+        amountInBase,
+        payers: state.payers,
+        participants: shares.map(s => ({ userId: s.userId, amount: s.share })),
+        createdAt: Date.now(),
+        createdBy: interaction.user.id
+      };
 
-    trip.expenses.push(newExpense);
-    storage.persist();
-    cache.delete(interaction.guildId, interaction.user.id);
+      trip.expenses.push(newExpense);
+      storage.persist();
+      cache.delete(interaction.guildId, interaction.user.id);
 
-    const payerText = newExpense.payers.map(p => `<@${p.userId}>`).join(', ');
-    const shareText = shares.map(s => `<@${s.userId}>(${s.share})`).join('、');
-    const amountText = formatAmountConversion(newExpense.amount, newExpense.currency, amountInBase, trip.baseCurrency);
-    const msg = `✅ **記帳成功（自訂分攤）！** 項目：${newExpense.description} | 金額：${amountText}\n代墊：${payerText}\n各自應付：${shareText}`;
-    
-    return showMainMenu(interaction, msg);
+      const payerText = newExpense.payers.map(p => `<@${p.userId}>`).join(', ');
+      const shareText = shares.map(s => `<@${s.userId}>(${s.share})`).join('、');
+      const amountText = formatAmountConversion(newExpense.amount, newExpense.currency, amountInBase, trip.baseCurrency);
+      const msg = `✅ **記帳成功（自訂分攤）！** 項目：${newExpense.description} | 金額：${amountText}\n代墊：${payerText}\n各自應付：${shareText}`;
+      
+      return showMainMenu(interaction, msg);
 
-  } catch (err) {
-    const errMsg = `❌ 核心記帳計算失敗：${err.message}`;
-    if (interaction.deferred || interaction.replied) {
-      return interaction.editReply({ content: errMsg });
+    } catch (err) {
+      const errMsg = `❌ 核心記帳計算失敗：${err.message}`;
+      if (interaction.deferred || interaction.replied) {
+        return interaction.editReply({ content: errMsg });
+      }
+      return interaction.reply({ content: errMsg, flags: MessageFlags.Ephemeral });
     }
-    return interaction.reply({ content: errMsg, flags: MessageFlags.Ephemeral });
   }
-}
