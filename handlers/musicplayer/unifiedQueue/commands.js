@@ -237,7 +237,7 @@ const playCommand = {
 // ════════════════════════════════════════════════════════
 //  /music 單一指令，底下掛 stop / skip / loop / queue /
 //  clear / nowplaying / randomplay /
-//  local(group: list) / idle(group: enable/disable/status)
+//  local(group: list) / idle（★ 已從 group 合併為單一 subcommand）
 //  （play 已依需求拆回獨立的 /play 指令）
 // ════════════════════════════════════════════════════════
 const musicCommand = {
@@ -270,12 +270,22 @@ const musicCommand = {
           sub.setName('list').setDescription('列出 data/music 資料夾內所有可播放的音訊檔案')
         )
     )
-    .addSubcommandGroup(group =>
-      group.setName('idle')
-        .setDescription('閒置自動離開語音頻道功能（僅管理員可用）')
-        .addSubcommand(sub => sub.setName('enable').setDescription('開啟閒置自動離開功能'))
-        .addSubcommand(sub => sub.setName('disable').setDescription('關閉閒置自動離開功能'))
-        .addSubcommand(sub => sub.setName('status').setDescription('查看目前閒置監控狀態'))
+    // ★ 修改：idle 從 addSubcommandGroup（3個獨立子指令）
+    //   合併為單一 addSubcommand + 可選 action 參數，
+    //   邏輯與 /timeannounce 的合併方式一致：
+    //   留空 = 查看狀態，帶 action = 開啟/關閉
+    .addSubcommand(sub =>
+      sub.setName('idle')
+        .setDescription('管理閒置自動離開功能（僅管理員可用，留空則查看目前狀態）')
+        .addStringOption(opt =>
+          opt.setName('action')
+            .setDescription('選擇操作，留空則查看目前狀態')
+            .addChoices(
+              { name: '開啟', value: 'enable' },
+              { name: '關閉', value: 'disable' },
+              { name: '查看狀態', value: 'status' },
+            )
+        )
     ),
 
   async execute(interaction) {
@@ -283,7 +293,6 @@ const musicCommand = {
     const group = interaction.options.getSubcommandGroup(false);
 
     if (group === 'local')  return handleMusicLocal(interaction, sub);
-    if (group === 'idle')   return handleMusicIdle(interaction, sub);
 
     switch (sub) {
       case 'stop':         return handleMusicStop(interaction);
@@ -293,6 +302,12 @@ const musicCommand = {
       case 'clear':        return handleMusicClear(interaction);
       case 'nowplaying':   return handleMusicNowPlaying(interaction);
       case 'randomplay':   return handleMusicRandomPlay(interaction);
+      // ★ 修改：idle 不再依賴 subcommandGroup 判斷，
+      //   直接從 sub === 'idle' 進入，action 未帶時預設為 'status'
+      case 'idle': {
+        const action = interaction.options.getString('action') ?? 'status';
+        return handleMusicIdle(interaction, action);
+      }
     }
   }
 };
@@ -496,8 +511,10 @@ async function handleMusicLocal(interaction, sub) {
   }
 }
 
-// ── /music idle enable / disable / status（管理員專用） ──
-async function handleMusicIdle(interaction, sub) {
+// ── /music idle（單一指令版）：enable / disable / status（管理員專用） ──
+// ★ 修改：改接收 action 字串（'enable' | 'disable' | 'status'），
+//   由外層呼叫時已預設補上 'status'，內部邏輯完全沿用原本判斷方式
+async function handleMusicIdle(interaction, action) {
   // 執行期權限二次檢查（防止管理員在「整合」設定中覆寫了指令權限）
   if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
     return interaction.reply({
@@ -508,7 +525,7 @@ async function handleMusicIdle(interaction, sub) {
 
   const guildId = interaction.guildId;
 
-  if (sub === 'status') {
+  if (action === 'status') {
     const enabled = voiceMonitor.isEnabled(guildId);
     return interaction.reply({
       content: `📊 閒置自動離開功能目前狀態：${enabled ? '✅ 開啟' : '❌ 關閉'}`,
@@ -516,7 +533,7 @@ async function handleMusicIdle(interaction, sub) {
     });
   }
 
-  const enable = sub === 'enable';
+  const enable = action === 'enable';
   voiceMonitor.setEnabled(guildId, enable);
 
   if (enable) {
