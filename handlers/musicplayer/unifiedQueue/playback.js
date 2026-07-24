@@ -183,16 +183,18 @@ function stopAll(guildId) {
 function _createPersistentIdleHandler(guildId, channel) {
   return (gId, reason) => {
     const wasPlaying = isPlaying(gId);
-    stopAll(gId);
-    console.log(
-      `⏹️ [UnifiedQueue] 常駐模式閒置觸發 (${gId})：${reason}` +
-      (wasPlaying ? '，已停止播放（Bot 繼續留在頻道）' : '（原本未在播放，略過通知）')
-    );
-    if (wasPlaying) {
-      channel.send(
-        `⏹️ 已因閒置自動停止播放\n📌 原因：${reason}\nBot 會繼續留在頻道，等待下次使用 /play。`
-      ).catch(() => {});
+
+    // 沒有在播放時，直接跳過，不要執行 stopAll() 造成無意義的清理與洗版 log
+    if (!wasPlaying) {
+      console.log(`⏭️ [UnifiedQueue] 常駐模式閒置觸發 (${gId})：${reason}（原本未在播放，直接略過）`);
+      return;
     }
+
+    stopAll(gId);
+    console.log(`⏹️ [UnifiedQueue] 常駐模式閒置觸發 (${gId})：${reason}，已停止播放（Bot 繼續留在頻道）`);
+    channel.send(
+      `⏹️ 已因閒置自動停止播放\n📌 原因：${reason}\nBot 會繼續留在頻道，等待下次使用 /play。`
+    ).catch(() => {});
   };
 }
 
