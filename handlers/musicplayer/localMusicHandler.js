@@ -204,7 +204,6 @@ function playStream(guildId, item, player, { silent = false, countPlay = true } 
     inputType: StreamType.Arbitrary,
     inlineVolume: true,
   });
-  resource.volume.setVolume(0.5);
   player.play(resource);
 
   // 🆕 只有「真正輪到的新播放」才計入次數；單曲/列表循環的重複播放（由呼叫端
