@@ -27,6 +27,8 @@ const {
   controlMsgs,
   connections,
   randomPlaySettings,
+  resetLoopAllCycle,
+  getLoopAllCycleSeen,
 } = require('./state');
 
 // ════════════════════════════════════════════════════════
@@ -164,6 +166,7 @@ function stopAll(guildId) {
   controlMsgs.delete(guildId);
   randomPlaySettings.delete(guildId);
   stopMusicLayer(guildId);
+  resetLoopAllCycle(guildId);
 
   if (_engines.bilibili && typeof _engines.bilibili.clearErrorCount === 'function') {
     _engines.bilibili.clearErrorCount(guildId);
@@ -252,7 +255,7 @@ function _pickRandomLocalTrack(guildId) {
 // ════════════════════════════════════════════════════════
 //  核心播放
 // ════════════════════════════════════════════════════════
-async function _playItem(guildId, item, channel, { silent = false } = {}) {
+async function _playItem(guildId, item, channel, { silent = false, countPlay = true } = {}) {
   const connection = connections.get(guildId) || getVoiceConnection(guildId);
   if (!connection) {
     console.error('❌ [UnifiedQueue] 無語音連線');
@@ -274,7 +277,7 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
 
     // 單曲循環
     if (loopMode === 'one') {
-      await _playItem(guildId, item, channel, { silent: true });
+      await _playItem(guildId, item, channel, { silent: true, countPlay: false });
       return;
     }
 
@@ -295,7 +298,8 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
         .setTimestamp();
       sendTo.send({ embeds: [nextEmbed] }).catch(() => {});
 
-      await _playItem(guildId, next, channel, { silent: false });
+      // ★ 修改：隨機連播播出的曲目不計入播放次數排序
+      await _playItem(guildId, next, channel, { silent: false, countPlay: false });
       await updateControlPanel(guildId, channel);
       return;
     }
@@ -327,7 +331,18 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
         sendTo.send({ embeds: [nextEmbed] }).catch(() => {});
       }
 
-      await _playItem(guildId, next, channel, { silent: isLoopAll });
+      // 🆕 列表循環時，判斷這首歌本輪是否已經播過（繞圈重播不計入播放次數）
+      let countPlay = true;
+      if (isLoopAll && next.type === 'local' && next.filename) {
+        const seen = getLoopAllCycleSeen(guildId);
+        if (seen.has(next.filename)) {
+          countPlay = false;
+        } else {
+          seen.add(next.filename);
+        }
+      }
+
+      await _playItem(guildId, next, channel, { silent: isLoopAll, countPlay });
       await updateControlPanel(guildId, channel);
     } else {
       console.log('✅ [UnifiedQueue] 播放完畢，佇列為空');
@@ -347,7 +362,8 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
     if (isRandomPlay) {
       const next = _pickRandomLocalTrack(guildId);
       if (next) {
-        setTimeout(() => _playItem(guildId, next, channel), 1000);
+        // ★ 修改：隨機連播重試也不計入播放次數
+        setTimeout(() => _playItem(guildId, next, channel, { countPlay: false }), 1000);
       } else {
         stopAll(guildId);
       }
@@ -374,7 +390,7 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
     } else {
       const engine = _engines.local;
       if (!engine) throw new Error('local engine 未注入');
-      await engine.playStream(guildId, item, player, { silent }); // ★ 補上 await
+      await engine.playStream(guildId, item, player, { silent, countPlay }); // ★ 補上 await
     }
   } catch (err) {
     console.error('❌ [UnifiedQueue] 引擎啟動失敗:', err.message);
@@ -430,7 +446,8 @@ async function playRandomLocal(guildId, channel, { enableContinuous = false } = 
     loopSettings.set(guildId, 'off');
   }
 
-  await _playItem(guildId, track, channel);
+  // ★ 修改：若這是開啟隨機連播模式下播出的起始曲目，同樣不計入播放次數排序
+  await _playItem(guildId, track, channel, { countPlay: !enableContinuous });
   return track;
 }
 
