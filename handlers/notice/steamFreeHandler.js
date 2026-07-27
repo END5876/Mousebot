@@ -128,7 +128,7 @@ function buildMessage(game) {
   const priceText = game.originalPrice !== '未知' ? `~~${game.originalPrice}~~` : '未知';
 
   const embed = new EmbedBuilder()
-    .setAuthor({ name: 'Steam 限時免費', iconURL: 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/83/Steam_icon_logo.svg/512px-Steam_icon_logo.svg.png' })
+    .setAuthor({ name: 'Steam 限時免費', iconURL: 'https://cdn.cloudflare.steamstatic.com/steamcommunity/public/images/steamworks_docs/english/logo_steam.png' })
     .setTitle(game.name)
     .setURL(game.url)
     .setDescription(game.description)

@@ -16,6 +16,7 @@ const cache   = require('./musicCache');
 const antiBot = require('./musicAntiBot');
 const logger  = require('../../utils/logger');
 const bootSummary = require('../../utils/bootSummary');
+const normalizer = require('./musicNormalizer');
 
 const execAsync = promisify(exec);
 const ytdlpPath = 'yt-dlp';
@@ -384,6 +385,15 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
         )
         .then((filePath) => {
           if (!silent) console.log(`✅ [Cache] 背景下載完成，已儲存至: ${path.basename(filePath)}`);
+
+          // 下載完成後，背景自動進行響度正規化（不阻塞任何播放邏輯）
+          normalizer.normalizeAudioFile(filePath)
+            .then(() => {
+              if (!silent) console.log(`🎚️ [Normalizer] 響度正規化完成: ${path.basename(filePath)}`);
+            })
+            .catch((err) => {
+              if (!silent) console.warn(`⚠️ [Normalizer] 正規化失敗（略過，原檔仍可正常播放）: ${err.message}`);
+            });
         })
         .catch((err) => {
           if (!silent) console.error(`⚠️ [Cache] 背景下載失敗: ${err.message}`);
