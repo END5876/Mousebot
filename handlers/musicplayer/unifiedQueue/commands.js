@@ -11,7 +11,7 @@ const {
 
 const voiceMonitor = require('../voiceActivityMonitor');
 
-const { queues, nowPlaying, loopSettings, connections, activeSearchMessages, randomPlaySettings } = require('./state');
+const { queues, nowPlaying, loopSettings, connections, activeSearchMessages, randomPlaySettings, resetLoopAllCycle } = require('./state');
 const {
   _buildEmbed,
   updateControlPanel,
@@ -123,6 +123,7 @@ function setupUnifiedCommands(client) {
           const cur = loopSettings.get(guildId);
           const next = cur === 'all' ? 'off' : 'all';
           loopSettings.set(guildId, next);
+          if (next === 'all') resetLoopAllCycle(guildId);
           await interaction.reply({
             content: next === 'all' ? '🔁 列表循環已開啟' : '❌ 循環已關閉',
             flags: MessageFlags.Ephemeral,
@@ -364,6 +365,7 @@ async function handleMusicLoop(interaction) {
   const cur = loopSettings.get(interaction.guildId) || 'off';
   const next = cur === 'off' ? 'one' : cur === 'one' ? 'all' : 'off';
   loopSettings.set(interaction.guildId, next);
+  if (next === 'all') resetLoopAllCycle(interaction.guildId);
 
   const loopText = next === 'one' ? '🔂 單曲循環已開啟' : next === 'all' ? '🔁 列表循環已開啟' : '❌ 循環已關閉';
   const description = next === 'one' ? '當前歌曲將會不斷重複播放' : next === 'all' ? '播放完所有歌曲後將重新開始' : '播放完當前歌曲後繼續播放佇列';

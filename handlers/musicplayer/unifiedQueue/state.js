@@ -40,6 +40,21 @@ const SEARCH_MARKER = '__SEARCH__::';
 // 導致後者出現 DiscordAPIError[10062] Unknown interaction。
 const activeSearchMessages = new Set();
 
+// ── 列表循環模式下，記錄「本輪循環已經播放過」的本地曲目 filename ──
+// 用途：播放次數統計時，列表循環重複繞圈不該讓次數一直往上洗，
+// 只有這輪循環「第一次播到」才算一次，之後繞回來重播不計入。
+// guildId -> Set<filename>
+const loopAllCycleSeen = new Map();
+
+function resetLoopAllCycle(guildId) {
+  loopAllCycleSeen.set(guildId, new Set());
+}
+
+function getLoopAllCycleSeen(guildId) {
+  if (!loopAllCycleSeen.has(guildId)) loopAllCycleSeen.set(guildId, new Set());
+  return loopAllCycleSeen.get(guildId);
+}
+
 module.exports = {
   _engines,
   registerEngine,
@@ -51,4 +66,6 @@ module.exports = {
   randomPlaySettings,
   SEARCH_MARKER,
   activeSearchMessages,
+  resetLoopAllCycle,
+  getLoopAllCycleSeen,
 };
