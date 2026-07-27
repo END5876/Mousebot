@@ -27,7 +27,27 @@ const {
   controlMsgs,
   connections,
   randomPlaySettings,
+  resetLoopAllCycle,
+  getLoopAllCycleSeen,
 } = require('./state');
+
+// ════════════════════════════════════════════════════════
+//  記錄每個 guild「點歌的頻道」
+//  guildId -> TextChannel
+//  這是所有自動通知（下一首 / 播放完畢 / 錯誤 / 閒置停止）唯一
+//  應該參考的來源，避免因為觸發事件當下所在的頻道不同
+//  （例如語音頻道內建聊天室），導致通知亂跑。
+// ════════════════════════════════════════════════════════
+const requestChannels = new Map();
+
+/**
+ * 取得該 guild 應該發送通知的頻道：
+ * 優先使用「點歌時記錄下來的頻道」，
+ * 若尚未有任何記錄（極端邊界情況），才 fallback 用當下傳入的 channel。
+ */
+function _getNotifyChannel(guildId, fallbackChannel) {
+  return requestChannels.get(guildId) || fallbackChannel;
+}
 
 // ════════════════════════════════════════════════════════
 //  控制面板
@@ -113,6 +133,8 @@ async function updateControlPanel(guildId, channel) {
   if (!embed) return;
   const row = _buildButtons(guildId);
 
+  const targetChannel = _getNotifyChannel(guildId, channel);
+
   try {
     const msg = controlMsgs.get(guildId);
     if (msg) {
@@ -123,7 +145,7 @@ async function updateControlPanel(guildId, channel) {
         // 訊息已被刪除，重新發送
       }
     }
-    const newMsg = await channel.send({ embeds: [embed], components: [row] });
+    const newMsg = await targetChannel.send({ embeds: [embed], components: [row] });
     controlMsgs.set(guildId, newMsg);
   } catch (err) {
     console.error('❌ [UnifiedQueue] 更新控制面板失敗:', err);
@@ -144,6 +166,7 @@ function stopAll(guildId) {
   controlMsgs.delete(guildId);
   randomPlaySettings.delete(guildId);
   stopMusicLayer(guildId);
+  resetLoopAllCycle(guildId);
 
   if (_engines.bilibili && typeof _engines.bilibili.clearErrorCount === 'function') {
     _engines.bilibili.clearErrorCount(guildId);
@@ -179,10 +202,14 @@ function stopAll(guildId) {
 //  （給常駐頻道場景使用，例如 autoJoinHandler 設定了
 //    TARGET_VOICE_CHANNEL_ID、Bot 永遠待在頻道內的情況；
 //    搭配 voiceMonitor.startMonitoring 的 persistent: true 使用）
+//
+//  ★ 通知一律優先查 requestChannels（點歌頻道），
+//    確保通知永遠回到使用者真正下指令的文字頻道。
 // ════════════════════════════════════════════════════════
-function _createPersistentIdleHandler(guildId, channel) {
+function _createPersistentIdleHandler(guildId, fallbackChannel) {
   return (gId, reason) => {
     const wasPlaying = isPlaying(gId);
+    const targetChannel = _getNotifyChannel(gId, fallbackChannel);
 
     // 沒有在播放時，直接跳過，不要執行 stopAll() 造成無意義的清理與洗版 log
     if (!wasPlaying) {
@@ -192,8 +219,8 @@ function _createPersistentIdleHandler(guildId, channel) {
 
     stopAll(gId);
     console.log(`⏹️ [UnifiedQueue] 常駐模式閒置觸發 (${gId})：${reason}，已停止播放（Bot 繼續留在頻道）`);
-    channel.send(
-      `⏹️ 已因閒置自動停止播放\n📌 原因：${reason}\nBot 會繼續留在頻道，等待下次使用 /play。`
+    targetChannel.send(
+      `${reason} ⏹️ 已自動停止播放\n`
     ).catch(() => {});
   };
 }
@@ -228,12 +255,14 @@ function _pickRandomLocalTrack(guildId) {
 // ════════════════════════════════════════════════════════
 //  核心播放
 // ════════════════════════════════════════════════════════
-async function _playItem(guildId, item, channel, { silent = false } = {}) {
+async function _playItem(guildId, item, channel, { silent = false, countPlay = true } = {}) {
   const connection = connections.get(guildId) || getVoiceConnection(guildId);
   if (!connection) {
     console.error('❌ [UnifiedQueue] 無語音連線');
     return;
   }
+
+  const notifyChannel = _getNotifyChannel(guildId, channel);
 
   const player = createAudioPlayer();
 
@@ -244,10 +273,11 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
 
     const loopMode = loopSettings.get(guildId) || 'off';
     const isRandomPlay = randomPlaySettings.get(guildId) || false;
+    const sendTo = _getNotifyChannel(guildId, channel);
 
     // 單曲循環
     if (loopMode === 'one') {
-      await _playItem(guildId, item, channel, { silent: true });
+      await _playItem(guildId, item, channel, { silent: true, countPlay: false });
       return;
     }
 
@@ -257,7 +287,7 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
       if (!next) {
         console.log('✅ [UnifiedQueue] 隨機連播：找不到本地音樂，停止');
         stopAll(guildId);
-        channel.send('✅ 找不到本地音樂，隨機連播已停止').catch(() => {});
+        sendTo.send('✅ 找不到本地音樂，隨機連播已停止').catch(() => {});
         return;
       }
 
@@ -266,9 +296,10 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
         .setTitle('🎲 隨機連播 — 下一首')
         .setDescription(`🎧 **${next.title}**`)
         .setTimestamp();
-      channel.send({ embeds: [nextEmbed] }).catch(() => {});
+      sendTo.send({ embeds: [nextEmbed] }).catch(() => {});
 
-      await _playItem(guildId, next, channel, { silent: false });
+      // ★ 修改：隨機連播播出的曲目不計入播放次數排序
+      await _playItem(guildId, next, channel, { silent: false, countPlay: false });
       await updateControlPanel(guildId, channel);
       return;
     }
@@ -297,15 +328,26 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
 
         if (next.thumbnail) nextEmbed.setThumbnail(next.thumbnail);
 
-        channel.send({ embeds: [nextEmbed] }).catch(() => {});
+        sendTo.send({ embeds: [nextEmbed] }).catch(() => {});
       }
 
-      await _playItem(guildId, next, channel, { silent: isLoopAll });
+      // 🆕 列表循環時，判斷這首歌本輪是否已經播過（繞圈重播不計入播放次數）
+      let countPlay = true;
+      if (isLoopAll && next.type === 'local' && next.filename) {
+        const seen = getLoopAllCycleSeen(guildId);
+        if (seen.has(next.filename)) {
+          countPlay = false;
+        } else {
+          seen.add(next.filename);
+        }
+      }
+
+      await _playItem(guildId, next, channel, { silent: isLoopAll, countPlay });
       await updateControlPanel(guildId, channel);
     } else {
       console.log('✅ [UnifiedQueue] 播放完畢，佇列為空');
       stopAll(guildId);
-      channel.send('✅ 所有歌曲播放完畢').catch(() => {});
+      sendTo.send('✅ 所有歌曲播放完畢').catch(() => {});
     }
   });
 
@@ -313,13 +355,15 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
   player.on('error', (err) => {
     if (err.message?.includes('aborted') || err.message?.includes('premature close')) return;
     console.error(`❌ [UnifiedQueue] 播放器錯誤 (${guildId}):`, err.message);
-    channel.send(`❌ 播放 **${item.title}** 時發生錯誤，嘗試跳過...`).catch(() => {});
+    const sendTo = _getNotifyChannel(guildId, channel);
+    sendTo.send(`❌ 播放 **${item.title}** 時發生錯誤，嘗試跳過...`).catch(() => {});
 
     const isRandomPlay = randomPlaySettings.get(guildId) || false;
     if (isRandomPlay) {
       const next = _pickRandomLocalTrack(guildId);
       if (next) {
-        setTimeout(() => _playItem(guildId, next, channel), 1000);
+        // ★ 修改：隨機連播重試也不計入播放次數
+        setTimeout(() => _playItem(guildId, next, channel, { countPlay: false }), 1000);
       } else {
         stopAll(guildId);
       }
@@ -346,11 +390,11 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
     } else {
       const engine = _engines.local;
       if (!engine) throw new Error('local engine 未注入');
-      await engine.playStream(guildId, item, player, { silent }); // ★ 補上 await
+      await engine.playStream(guildId, item, player, { silent, countPlay }); // ★ 補上 await
     }
   } catch (err) {
     console.error('❌ [UnifiedQueue] 引擎啟動失敗:', err.message);
-    channel.send(`❌ 無法播放 **${item.title}**：${err.message}`).catch(() => {});
+    notifyChannel.send(`❌ 無法播放 **${item.title}**：${err.message}`).catch(() => {});
     nowPlaying.delete(guildId);
     return;
   }
@@ -365,8 +409,11 @@ async function _playItem(guildId, item, channel, { silent = false } = {}) {
 
 // ════════════════════════════════════════════════════════
 //  公開：加入佇列 / 立即播放
+//  ★ 這裡是「點歌動作」發生的地方，記錄下 requestChannels
 // ════════════════════════════════════════════════════════
 async function enqueue(guildId, item, channel) {
+  requestChannels.set(guildId, channel);
+
   if (nowPlaying.has(guildId)) {
     const queue = queues.get(guildId) || [];
     queue.push(item);
@@ -382,8 +429,11 @@ async function enqueue(guildId, item, channel) {
 
 // ════════════════════════════════════════════════════════
 //  公開：立即隨機播放一首本地音樂（/music randomplay 用）
+//  ★ 同樣視為一次「點歌」，更新 requestChannels
 // ════════════════════════════════════════════════════════
 async function playRandomLocal(guildId, channel, { enableContinuous = false } = {}) {
+  requestChannels.set(guildId, channel);
+
   const track = _pickRandomLocalTrack(guildId);
   if (!track) return null;
 
@@ -396,7 +446,8 @@ async function playRandomLocal(guildId, channel, { enableContinuous = false } = 
     loopSettings.set(guildId, 'off');
   }
 
-  await _playItem(guildId, track, channel);
+  // ★ 修改：若這是開啟隨機連播模式下播出的起始曲目，同樣不計入播放次數排序
+  await _playItem(guildId, track, channel, { countPlay: !enableContinuous });
   return track;
 }
 
@@ -407,15 +458,11 @@ async function ensureConnection(interaction) {
   const guildId = interaction.guildId;
   let connection = getVoiceConnection(guildId);
 
+  requestChannels.set(guildId, interaction.channel);
+
   if (connection) {
     connections.set(guildId, connection);
 
-    // ★ 修正：先前這裡直接 return，若這條連線是由別的模組（例如
-    //   autoJoinHandler 的常駐加入）建立的，voiceMonitor.startMonitoring()
-    //   永遠不會被呼叫，導致閒置偵測完全沒有在運作。
-    //   現在補上：只有在「目前完全沒有監控在跑」時才補開監控，
-    //   避免覆蓋掉 autoJoinHandler 已經在跑的常駐監控。
-    //   ※ 本專案目前只使用常駐模式（只停播放、不離開頻道）。
     const voiceChannelForMonitor = interaction.member?.voice?.channel;
     if (!voiceMonitor.isMonitoring(guildId) && voiceChannelForMonitor) {
       voiceMonitor.startMonitoring({
@@ -466,7 +513,8 @@ async function ensureConnection(interaction) {
       stopAll(guildId);
       voiceMonitor.stopMonitoring(guildId); // 真正斷線時才清理閒置監控計時器
       connections.delete(guildId);
-      interaction.channel.send('❌ 語音連線已斷開，請重新使用指令播放').catch(() => {});
+      const sendTo = _getNotifyChannel(guildId, interaction.channel);
+      sendTo.send('❌ 語音連線已斷開，請重新使用指令播放').catch(() => {});
     }
   });
 
