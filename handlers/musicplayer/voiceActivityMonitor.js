@@ -13,6 +13,9 @@
 //   一般模式（觸發後 stopMonitoring 並讓 onStop 離開頻道）已停用，
 //   相關程式碼保留在 _trigger() 內以註解方式留存，之後若要恢復可以參考。
 
+const fs   = require('fs');
+const path = require('path');
+
 const ALONE_TIMEOUT_MS   = 30 * 60 * 1000; // 30 分鐘：頻道內只剩機器人
 const SILENCE_TIMEOUT_MS = 60 * 60 * 1000; // 60 分鐘：有人在但沒人說話
 const CHECK_INTERVAL_MS  = 60 * 1000;      // 每 60 秒巡檢一次
@@ -21,8 +24,47 @@ const CHECK_INTERVAL_MS  = 60 * 1000;      // 每 60 秒巡檢一次
 //              connection, speakingHandler, channelId, client, onStop, persistent }
 const monitors = new Map();
 
+// ★ Bug 修正：enabledGuilds 先前純粹存在記憶體中，管理員用 /music idle 關閉後，
+//   Bot 一重啟設定就會消失、悄悄變回預設開啟。這裡改為持久化到 JSON 檔，
+//   做法與專案內其他設定檔（例如 aiChance.js）一致。
+const ENABLED_GUILDS_PATH = path.resolve(__dirname, '../../data/voiceMonitorEnabled.json');
+
 // guildId -> boolean（未設定時預設為 true，即預設開啟，延續現有行為）
-const enabledGuilds = new Map();
+let enabledGuilds = new Map();
+
+function _ensureDataDir() {
+  const dir = path.dirname(ENABLED_GUILDS_PATH);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+function _loadEnabledGuilds() {
+  try {
+    if (fs.existsSync(ENABLED_GUILDS_PATH)) {
+      const raw = JSON.parse(fs.readFileSync(ENABLED_GUILDS_PATH, 'utf-8'));
+      enabledGuilds = new Map(Object.entries(raw));
+      console.log(`[VoiceMonitor] 已載入 ${enabledGuilds.size} 筆閒置監控開關設定`);
+    }
+  } catch (err) {
+    console.warn('[VoiceMonitor] 載入閒置監控開關設定失敗，使用預設值:', err.message);
+    enabledGuilds = new Map();
+  }
+}
+
+function _saveEnabledGuilds() {
+  try {
+    _ensureDataDir();
+    fs.writeFileSync(
+      ENABLED_GUILDS_PATH,
+      JSON.stringify(Object.fromEntries(enabledGuilds), null, 2),
+      'utf-8'
+    );
+  } catch (err) {
+    console.error('[VoiceMonitor] 儲存閒置監控開關設定失敗:', err.message);
+  }
+}
+
+// 啟動時立即載入既有設定
+_loadEnabledGuilds();
 
 // ★ 全域單例旗標，確保 voiceStateUpdate 監聽器整個 process 只註冊一次，
 //   避免每個 guild 各自呼叫 client.on(...) 導致監聽器疊加、觸發
@@ -35,6 +77,7 @@ function isEnabled(guildId) {
 
 function setEnabled(guildId, enabled) {
   enabledGuilds.set(guildId, !!enabled);
+  _saveEnabledGuilds();
   console.log(`⚙️ [VoiceMonitor] guild ${guildId} 閒置監控功能已設定為: ${enabled ? '開啟' : '關閉'}`);
 }
 
