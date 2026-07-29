@@ -30,6 +30,23 @@ const STARTUP_DELAY_MS  = 3_000;
 // ─── 防重複註冊 ──────────────────────────────────────────
 let autoJoinMenuBound = false;
 
+// ─── 工具：找一個「可以發文字訊息」的頻道，供閒置通知 fallback 使用 ──────
+// ★ Bug 修正：先前直接把「語音頻道」物件當成 onStop 的 fallbackChannel 傳入，
+//   但 _createPersistentIdleHandler 的 fallbackChannel 必須是「文字頻道」
+//   （只有在 requestChannels 完全沒有記錄時才會用到，例如 Bot 重啟後
+//   從未有人點歌就先觸發了閒置）。語音頻道沒有 .send() 文字訊息的正常用途，
+//   一旦真的 fallback 到這裡，訊息會發送失敗或發到錯誤位置。
+//   這裡改成優先找 guild 的系統頻道，找不到就退而求其次找第一個
+//   Bot 有權限發言的文字頻道。
+function _resolveFallbackTextChannel(guild) {
+  if (guild.systemChannel) return guild.systemChannel;
+
+  const botMember = guild.members.me;
+  return guild.channels.cache.find(
+    ch => ch.isTextBased() && !ch.isVoiceBased() && botMember && ch.permissionsFor(botMember)?.has('SendMessages')
+  ) || null;
+}
+
 // ─── 工具：安全銷毀現有連線 ──────────────────────────────
 function destroyExistingConnection(guildId) {
   try {
@@ -77,13 +94,14 @@ async function joinTargetChannel(client) {
         // （例如監控先前被 destroyExistingConnection 清掉、或從未啟動過）。
         if (!voiceMonitor.isMonitoring(guildId)) {
           const { _createPersistentIdleHandler } = _getPlaybackModule();
+          const fallbackTextChannel = _resolveFallbackTextChannel(channel.guild);
           voiceMonitor.startMonitoring({
             guildId,
             connection: existing,
             channel,
             client,
             persistent: true,
-            onStop: _createPersistentIdleHandler(guildId, channel),
+            onStop: _createPersistentIdleHandler(guildId, fallbackTextChannel),
           });
         }
         isJoining = false;
@@ -118,13 +136,14 @@ async function joinTargetChannel(client) {
     // 觸發時只停止播放（stopAll），絕不 destroy 連線 / 離開頻道，
     // 監控本身會持續巡檢，供下一輪閒置狀態使用。
     const { _createPersistentIdleHandler } = _getPlaybackModule();
+    const fallbackTextChannel = _resolveFallbackTextChannel(channel.guild);
     voiceMonitor.startMonitoring({
       guildId,
       connection,
       channel,
       client,
       persistent: true,
-      onStop: _createPersistentIdleHandler(guildId, channel),
+      onStop: _createPersistentIdleHandler(guildId, fallbackTextChannel),
     });
 
     connection.on(VoiceConnectionStatus.Disconnected, async () => {

@@ -36,6 +36,9 @@ const {
   getActiveLayer,
 } = require('./audioManager');
 
+// 閒置監控：/voice leave 時必須一併停止，否則 setInterval 會永久空跑（記憶體洩漏）
+const voiceMonitor = require('./musicplayer/voiceActivityMonitor');
+
 // ── 全域 Map ─────────────────────────────────────────────
 const silenceTimers   = new Map();
 const sttActiveGuilds = new Map();
@@ -210,6 +213,11 @@ async function handleLeave(interaction) {
       }
 
       cleanupGuild(guildId);
+
+      // ★ Bug 修正：先前這裡從未呼叫 stopMonitoring，導致 /voice leave 後
+      //   voiceActivityMonitor 的 60 秒 setInterval 與 speaking 監聽器繼續在背景空跑，
+      //   直到程序重啟才會被清除（記憶體洩漏）。
+      voiceMonitor.stopMonitoring(guildId);
 
       if (silenceTimers.has(guildId)) {
         clearTimeout(silenceTimers.get(guildId));
