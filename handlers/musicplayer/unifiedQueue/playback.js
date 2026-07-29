@@ -219,6 +219,15 @@ function _createPersistentIdleHandler(guildId, fallbackChannel) {
 
     stopAll(gId);
     console.log(`⏹️ [UnifiedQueue] 常駐模式閒置觸發 (${gId})：${reason}，已停止播放（Bot 繼續留在頻道）`);
+
+    // ★ Bug 修正：fallbackChannel 現在可能因為找不到可用文字頻道而是 null/undefined
+    //   （例如 guild 沒有系統頻道、Bot 也沒有任何頻道的發言權限），
+    //   加上防呆，避免對 undefined 呼叫 .send() 直接拋出例外。
+    if (!targetChannel || typeof targetChannel.send !== 'function') {
+      console.warn(`⚠️ [UnifiedQueue] 找不到可用的通知頻道 (${gId})，略過閒置通知訊息`);
+      return;
+    }
+
     targetChannel.send(
       `${reason} ⏹️ 已自動停止播放\n`
     ).catch(() => {});
