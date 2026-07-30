@@ -11,7 +11,10 @@ const bootSummary = require('../../utils/bootSummary');
 const dns  = require('dns').promises;
 
 // audioManager 統一管理 TTS 層
-const { playTTSLayer } = require('../audioManager');
+// ★ 修改：改用 enterTTSLayer / playTTSSegment / exitTTSLayer
+//   取代原本每段都重新 subscribe 的 playTTSLayer，
+//   避免多段 TTS 播放時反覆搶佔 connection，導致音樂忽開忽停。
+const { enterTTSLayer, playTTSSegment, exitTTSLayer } = require('../audioManager');
 
 // ── TTS 排隊 Map ─────────────────────────────────────────
 // 佇列項目結構升級：加入 readyPromise / file / status 欄位，
@@ -409,7 +412,7 @@ async function generateSoVITS(text, filename, guildId) {
         });
       }
     });
-    
+
     req.on('error', (err) => done(err));
     req.end();
   });
@@ -481,6 +484,16 @@ function safeUnlink(f) { try { fs.unlinkSync(f); } catch {} }
 //  2. 佇列項目包含 readyPromise（合成完成的 Promise）
 //  3. processQueue 等待隊首項目的 readyPromise，合成完成後立即播放
 //  4. 播放下一段時，下一段的合成通常已在並行進行中（或已完成）
+//
+//  ★ 修改重點 ★
+//  原本每一段都呼叫 playTTSLayer() 建立新 player 並重新 subscribe，
+//  導致 5 段文字就會有 5 次「切到 TTS → 切回音樂」的動作，
+//  音樂被瞬間切斷又恢復，聽起來就是「一下暫停一下開始」。
+//
+//  新流程：
+//  - 整個佇列開始播放時，只呼叫一次 enterTTSLayer()（具冪等性）
+//  - 每段呼叫 playTTSSegment()，共用同一個 player，不動 subscribe
+//  - 只有佇列「真正清空」時才呼叫 exitTTSLayer()，恢復音樂/靜音
 // ════════════════════════════════════════════════════════
 
 /**
@@ -497,6 +510,7 @@ async function processQueue(guildId) {
   if (!queue || queue.length === 0) {
     ttsQueues.delete(guildId);
     ttsIsPlaying.delete(guildId);
+    exitTTSLayer(guildId); // ★ 佇列已空，離開 TTS 層，恢復音樂/靜音
     return;
   }
 
@@ -506,6 +520,7 @@ async function processQueue(guildId) {
     const items = [...queue];
     ttsQueues.delete(guildId);
     ttsIsPlaying.delete(guildId);
+    exitTTSLayer(guildId); // ★ 連線已斷，一併釋放 TTS 層
     for (const item of items) {
       item.readyPromise.then(r => { if (r?.file) safeUnlink(r.file); }).catch(() => {});
     }
@@ -513,6 +528,10 @@ async function processQueue(guildId) {
   }
 
   ttsIsPlaying.set(guildId, true);
+
+  // ★ 整段 TTS 佇列只在這裡「嘗試」進入 TTS 層一次；
+  //   enterTTSLayer 具冪等性，若已在 TTS 層則直接返回，不會重複觸發音樂暫停。
+  enterTTSLayer(guildId);
 
   const item = queue[0];
 
@@ -524,6 +543,7 @@ async function processQueue(guildId) {
     console.error(`❌ [TTS] 合成失敗，跳過此段: ${err.message}`);
     queue.shift();
     ttsIsPlaying.delete(guildId);
+    if (queue.length === 0) exitTTSLayer(guildId); // ★ 真正清空才離開
     processQueue(guildId);
     return;
   }
@@ -531,14 +551,18 @@ async function processQueue(guildId) {
   if (!result?.file) {
     queue.shift();
     ttsIsPlaying.delete(guildId);
+    if (queue.length === 0) exitTTSLayer(guildId);
     processQueue(guildId);
     return;
   }
 
-  const ok = playTTSLayer(guildId, result.file, () => {
+  // ★ 改用 playTTSSegment：共用同一個 TTS player，不會重新 subscribe，
+  //   因此段落之間切換完全不影響音樂/靜音層。
+  const ok = playTTSSegment(guildId, result.file, () => {
     safeUnlink(result.file);
     queue.shift();
     ttsIsPlaying.delete(guildId);
+    if (queue.length === 0) exitTTSLayer(guildId); // ★ 只有整段序列播完才恢復音樂
     processQueue(guildId);
   });
 
@@ -546,6 +570,7 @@ async function processQueue(guildId) {
     safeUnlink(result.file);
     queue.shift();
     ttsIsPlaying.delete(guildId);
+    if (queue.length === 0) exitTTSLayer(guildId);
     processQueue(guildId);
   }
 }
@@ -643,6 +668,7 @@ function stopTTS(guildId) {
     ttsQueues.delete(guildId);
   }
   ttsIsPlaying.delete(guildId);
+  exitTTSLayer(guildId); // ★ 手動停止時也要釋放 TTS 層，恢復音樂/靜音
   return true;
 }
 
