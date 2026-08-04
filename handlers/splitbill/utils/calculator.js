@@ -8,6 +8,44 @@ function round2(n) {
 }
 
 /**
+ * 解析使用者手動輸入的金額／匯率字串，安全地支援千分位逗號（例如 "1,000" -> 1000）。
+ *
+ * 背景：原本各處直接用 `parseFloat(str)`，但 `parseFloat("1,000")` 只會取到 `1`
+ * （在遇到逗號時就停止解析），對於習慣打千分位的使用者來說會「靜默地」把
+ * 1000 記成 1，記帳類功能完全不能接受這種無聲的錯誤金額。
+ *
+ * 做法：先用正則嚴格驗證整體格式，只接受「純數字（可含一個小數點）」或
+ * 「逗號分組正確的千分位格式（可含一個小數點）」，其餘一律視為不合法、回傳 NaN，
+ * 交由呼叫端既有的 `isNaN(...)` 檢查擋下並提示使用者重新輸入——
+ * 而不是像 `parseFloat` 那樣「盡量解析、能吃多少算多少」導致金額悄悄跑掉。
+ *
+ * 合法範例：  "1000"、"1000.5"、"1,000"、"12,345,678.9"、"0.033"
+ * 不合法範例（回傳 NaN）："1,00"（逗號分組錯誤）、"1,0000"（分組錯誤）、
+ *                        "12,3456"（分組錯誤）、"1e5"、"1..2"、"abc"、""
+ *
+ * 刻意不限制小數位數（不像單純用 `/^\d+(\.\d{1,2})?$/`），
+ * 因為此函式也共用於自訂匯率欄位，匯率常需要 3~4 位小數（例如 0.0328）。
+ * 呼叫端若需要限制到小數 2 位，請自行搭配 `round2()` 處理。
+ *
+ * @param {string} raw
+ * @returns {number} 解析後的數字；格式不合法時回傳 NaN
+ */
+function parseMoneyInput(raw) {
+  if (typeof raw !== 'string') return NaN;
+  const trimmed = raw.trim();
+  if (!trimmed) return NaN;
+
+  const plainPattern = /^\d+(\.\d+)?$/;              // 例如 1000、1000.5
+  const groupedPattern = /^\d{1,3}(,\d{3})+(\.\d+)?$/; // 例如 1,000、12,345,678.9（分組必須每 3 位一組）
+
+  if (!plainPattern.test(trimmed) && !groupedPattern.test(trimmed)) {
+    return NaN;
+  }
+
+  return parseFloat(trimmed.replace(/,/g, ''));
+}
+
+/**
  * 將某幣別金額換算成基準幣別金額
  */
 function toBase(amount, currency, rates) {
@@ -321,7 +359,7 @@ async function fetchRealTimeRate(fromCurrency, toCurrency) {
 }
 
 module.exports = {
-  round2, toBase, equalSplit, validateCustomSplit, validatePayers,
+  round2, parseMoneyInput, toBase, equalSplit, validateCustomSplit, validatePayers,
   calcNetBalances, calcNetBalancesByCurrency, convertPayerOrShareToBase,
   getUsedCurrencies, convertNetToSingleCurrency, fetchRealTimeRate,
   listTransfersByMember,
