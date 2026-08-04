@@ -6,7 +6,7 @@ const {
 } = require('discord.js');
 const storage = require('../utils/storage');
 const { resolveTrip } = require('../utils/tripHelper');
-const { fetchRealTimeRate } = require('../utils/calculator');
+const { fetchRealTimeRate, parseMoneyInput } = require('../utils/calculator');
 const { showMainMenu } = require('../commands/splitbill');
 
 const BASELINE_RATES = {
@@ -192,7 +192,7 @@ module.exports = {
 
       await interaction.deferUpdate();
 
-      const manualRate = parseFloat(rateStr);
+      const manualRate = parseMoneyInput(rateStr);
       let rate;
       let rateSource;
 
