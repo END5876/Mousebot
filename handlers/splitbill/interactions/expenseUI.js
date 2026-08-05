@@ -6,15 +6,29 @@ const {
 } = require('discord.js');
 const storage = require('../utils/storage');
 const { resolveTrip, memberDisplay } = require('../utils/tripHelper');
-const { equalSplit, validateCustomSplit, fetchRealTimeRate, round2, parseMoneyInput } = require('../utils/calculator');
+const { equalSplit, validateCustomSplit, fetchRealTimeRate, round2, parseMoneyInput, formatMoneyDisplay } = require('../utils/calculator');
 const { addDeposit } = require('../utils/deposit');
 const { showMainMenu } = require('../commands/splitbill');
 const { scanBillImage } = require('../utils/billScanner');
+const { SlidingWindowRateLimiter } = require('../utils/rateLimiter');
 // processAttachments 內部（fetchImageAsBase64 -> fetchImageUrlAsBase64）已經會把圖片
 // resize 到最長邊 1024px 以內並轉成 webp 再回傳 base64，因此帳單辨識這邊不需要再自己做壓縮。
 const { processAttachments } = require('../../ai/aiUtils');
 
 const BILL_SCAN_TIMEOUT_MS = 90 * 1000;
+
+// 一次訊息最多處理幾張圖片（每張＝一筆花費）。Discord 單則訊息最多可以夾帶 10 個附件，
+// 但這裡刻意設低一點：一次掃太多張會拉長使用者等待時間、也讓 Gemini API 費用一次噴出去，
+// 5 張對大多數「一天的收據一次補登」的情境已經很夠用。
+const BILL_SCAN_MAX_IMAGES_PER_BATCH = 5;
+
+// 每人（依 guildId+userId）在時間窗口內最多能觸發幾次「實際的 Gemini 呼叫」，避免手滑連點/
+// 惡意灌爆造成費用無上限累加。改成一次可以上傳多張圖之後，額度是算在「每一張圖」上
+// （在下面的批次迴圈裡逐張檢查），而不是算在「按下開始掃描」這個動作本身——
+// 畢竟真正花錢的是每一次 Gemini 呼叫，不是使用者點了幾次按鈕。
+const BILL_SCAN_RATE_LIMIT_MAX = 8;
+const BILL_SCAN_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const billScanRateLimiter = new SlidingWindowRateLimiter(BILL_SCAN_RATE_LIMIT_MAX, BILL_SCAN_RATE_LIMIT_WINDOW_MS);
 
 // Discord 附件的 contentType 有時會缺失（例如用戶端未回傳），因此除了檢查 MIME type，
 // 也用副檔名做保底判斷，兩者符合其一即視為圖片附件。
@@ -92,6 +106,35 @@ function stopActiveBillScan(guildId, userId, reason = 'superseded') {
     activeBillScanCollectors.delete(key);
     if (!existing.ended) existing.stop(reason);
   }
+}
+
+// ────────────────────────────────────────────────────────────────
+// 📦 一次上傳多張帳單圖片：每張圖各自獨立辨識、各自成為一筆待確認的花費。
+//
+// stateCache 原本的設計是「每個使用者同時只有一筆進行中的資料」（用 guildId+userId 當 key），
+// 對手動輸入一筆花費來說夠用，但一次掃描多張帳單時，每張圖都需要各自獨立暫存辨識結果，
+// 讓使用者可以各自修改幣別、各自決定要不要送出，彼此不能互相覆蓋。
+// 這裡不改動 stateCache 本身的 API，而是把「批次 ID + 這張圖在批次中的序號」
+// 一起編進原本的 userId 欄位，讓現有的 (guildId, userId) 兩參數介面就能安全地
+// 區分出每一張圖各自的儲存格。
+// ────────────────────────────────────────────────────────────────
+
+function generateBatchId() {
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function scanItemCacheUserId(userId, batchId, index) {
+  return `${userId}:scanbatch:${batchId}:${index}`;
+}
+
+/**
+ * 從像 `exp_btn_scan_confirm:${batchId}:${index}` 這種帶批次資訊的 customId 裡，
+ * 把 batchId 跟 index 解析出來。
+ */
+function parseScanItemSuffix(customId, prefix) {
+  const rest = customId.slice(prefix.length); // 例如 ":a1b2c3:2"
+  const parts = rest.split(':').filter(Boolean); // ['a1b2c3', '2']
+  return { batchId: parts[0] || '', index: parseInt(parts[1], 10) || 0 };
 }
 
 module.exports = {
@@ -198,8 +241,10 @@ module.exports = {
       return startBillScan(interaction, trip, cache);
     }
 
-    if (customId === 'exp_btn_scan_confirm') {
-      const state = cache.get(guildId, interaction.user.id);
+    if (customId.startsWith('exp_btn_scan_confirm')) {
+      const { batchId, index } = parseScanItemSuffix(customId, 'exp_btn_scan_confirm');
+      const itemCacheUserId = scanItemCacheUserId(interaction.user.id, batchId, index);
+      const state = cache.get(guildId, itemCacheUserId);
       if (!state || !state.scanResult) {
         return interaction.reply({ content: '⚠️ 辨識結果已逾期失效，請重新掃描一次。', flags: MessageFlags.Ephemeral });
       }
@@ -342,6 +387,67 @@ module.exports = {
   },
 
   async handleModal(interaction, cache) {
+    if (interaction.customId.startsWith('exp_modal_scan_custom_currency')) {
+      const { guildId, user } = interaction;
+      const { trip } = resolveTrip(guildId);
+      const { batchId, index } = parseScanItemSuffix(interaction.customId, 'exp_modal_scan_custom_currency');
+      const itemCacheUserId = scanItemCacheUserId(user.id, batchId, index);
+      const state = cache.get(guildId, itemCacheUserId);
+
+      if (!state || !state.scanResult) {
+        return interaction.reply({ content: '⚠️ 辨識結果已逾期失效，請重新掃描一次。', flags: MessageFlags.Ephemeral });
+      }
+
+      const currency = interaction.fields.getTextInputValue('currency').trim().toUpperCase();
+      const rateStr = interaction.fields.getTextInputValue('rate');
+
+      if (!/^[A-Z]{2,6}$/.test(currency)) {
+        return interaction.reply({ content: '⚠️ 幣別代碼格式錯誤，請輸入 2~6 個英文字母（例如：EUR）。', flags: MessageFlags.Ephemeral });
+      }
+
+      await interaction.deferUpdate();
+
+      let rateNote = '';
+
+      // 這個幣別如果這趟行程還沒設定過，比照「行程設定」既有的新增幣別流程：
+      // 手動匯率優先，留空則嘗試抓即時匯率；成功後直接寫回 trip.rates，
+      // 讓它從此變成這趟行程的正式幣別（之後手動記帳、下拉選單都會看到）。
+      if (trip.rates[currency] === undefined) {
+        const manualRate = parseMoneyInput(rateStr);
+        let rate;
+        let rateSource;
+
+        if (rateStr && !isNaN(manualRate) && manualRate > 0) {
+          rate = manualRate;
+          rateSource = '手動自訂';
+        } else {
+          const liveRate = await fetchRealTimeRate(currency, trip.baseCurrency);
+          if (liveRate) {
+            rate = liveRate;
+            rateSource = '網路即時';
+          } else {
+            // 抓不到即時匯率、使用者也沒手動填，沒辦法幫他把這個幣別加進行程——
+            // 保留原本的辨識結果畫面，附註告訴他怎麼補救，而不是讓整個流程卡死。
+            const view = buildScanResultView(trip, state.scanResult, {
+              extraFooterNote: `\n❌ 無法自動抓取 \`${currency}\` 的即時匯率，且你沒有手動輸入匯率，因此未新增此幣別。可以再選一次「➕ 其他幣別」並手動填入匯率。`
+            });
+            return interaction.editReply(view);
+          }
+        }
+
+        trip.rates[currency] = rate;
+        storage.persist();
+        rateNote = `（已新增為此行程幣別，匯率 1 ${currency} = ${rate} ${trip.baseCurrency}，${rateSource}）`;
+      }
+
+      state.scanResult.currency = currency;
+      const view = buildScanResultView(trip, state.scanResult, {
+        currencyFieldNote: rateNote,
+        extraFooterNote: '\n💡 已手動更改幣別，開啟表單後記得確認匯率是否正確（留空將自動抓即時匯率）。'
+      });
+      return interaction.editReply(view);
+    }
+
     if (interaction.customId === 'exp_modal_multi_deposit') {
       const { guildId, user } = interaction;
       const { trip } = resolveTrip(guildId);
@@ -529,18 +635,51 @@ module.exports = {
     const { customId, guildId, values, user } = interaction;
     const { trip } = resolveTrip(guildId);
 
-    if (customId === 'exp_select_scan_currency') {
-      const state = cache.get(guildId, user.id);
+    if (customId.startsWith('exp_select_scan_currency')) {
+      const { batchId, index } = parseScanItemSuffix(customId, 'exp_select_scan_currency');
+      const itemCacheUserId = scanItemCacheUserId(user.id, batchId, index);
+      const state = cache.get(guildId, itemCacheUserId);
       if (!state || !state.scanResult) {
         return interaction.reply({ content: '⚠️ 辨識結果已逾期失效，請重新掃描一次。', flags: MessageFlags.Ephemeral });
       }
 
+      const selected = values[0];
+
+      // 使用者選了「➕ 其他幣別」：這趟行程目前的幣別清單裡沒有他要的，跳一個小 Modal
+      // 讓他手動輸入代碼，流程比照「行程設定」既有的新增幣別（自動抓即時匯率／手動輸入匯率）。
+      // Modal 的 customId 也要帶上 batchId/index，submit 時才知道是在改哪一張圖的結果。
+      if (selected === SCAN_CURRENCY_CUSTOM_VALUE) {
+        const modal = new ModalBuilder()
+          .setCustomId(`exp_modal_scan_custom_currency:${batchId}:${index}`)
+          .setTitle('🪙 輸入其他幣別代碼');
+
+        const curInput = new TextInputBuilder()
+          .setCustomId('currency')
+          .setLabel('幣別代碼 (例如：EUR、SGD、CNY)')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(6);
+
+        const rateInput = new TextInputBuilder()
+          .setCustomId('rate')
+          .setLabel(`匯率：1 該幣別 = ? ${trip.baseCurrency}`)
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('💡 若此行程已有這個幣別可留空；沒有的話留空將自動抓即時匯率')
+          .setRequired(false);
+
+        modal.addComponents(new ActionRowBuilder().addComponents(curInput), new ActionRowBuilder().addComponents(rateInput));
+        return interaction.showModal(modal);
+      }
+
       // 直接覆寫使用者手動選擇的幣別；stateCache.get() 回傳的是同一個物件參照，
       // 且 get() 當下已經順帶延長了這筆狀態的 TTL，所以這裡不需要再呼叫 cache.set()。
-      state.scanResult.currency = values[0];
+      state.scanResult.currency = selected;
 
-      // 使用者已經手動選擇了，AI 原本判讀成什麼、有沒有對應成功都不重要了，重新渲染時不再顯示那則附註。
-      const view = buildScanResultView(trip, state.scanResult);
+      // 使用者已經手動選擇了，AI 原本判讀成什麼、有沒有對應成功都不重要了，重新渲染時不再顯示那則附註；
+      // 改附上一句提醒——確認表單裡的自訂匯率欄位，避免使用者以為換了幣別但金額/匯率沒對應更新。
+      const view = buildScanResultView(trip, state.scanResult, {
+        extraFooterNote: '\n💡 已手動更改幣別，開啟表單後記得確認匯率是否正確（留空將自動抓即時匯率）。'
+      });
       return interaction.update(view);
     }
 
@@ -865,45 +1004,92 @@ function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'ex
  * 3. 收到圖片後丟給 Gemini 辨識，結果暫存進 stateCache
  * 4. 顯示辨識結果，並提供「開啟表單確認並送出」按鈕（沿用既有的手動輸入 Modal 與送出邏輯）
  */
+
+// 幣別下拉選單裡「手動輸入其他幣別」選項的特殊值，跟真正的幣別代碼（一定是英文字母）區隔開來。
+const SCAN_CURRENCY_CUSTOM_VALUE = '__custom__';
+
+// 依信心程度決定結果卡片的顏色與提示文字。信心低（或完全沒辨識到東西）時要讓使用者一眼就看出
+// 「這次不太可靠，請自己再檢查一次」，而不是跟辨識成功的結果用同一種讓人安心的綠色。
+const SCAN_CONFIDENCE_META = {
+  high: { color: 0x2ecc71, badge: '' },
+  medium: { color: 0x2ecc71, badge: '🔎 AI 信心中等，建議再次核對金額與幣別。' },
+  low: { color: 0xe67e22, badge: '⚠️ AI 對這次辨識信心較低（或幾乎沒認出東西），請務必仔細核對，必要時直接手動輸入！' }
+};
+
 /**
  * 產生「辨識完成」畫面的 embed + components（包含可手動修正幣別的下拉選單）。
  * 初次顯示辨識結果、以及使用者透過下拉選單手動改幣別後重新渲染，都共用這個函式，
  * 避免兩處各寫一份容易漏改、UI 不一致。
  *
  * @param {object} trip 行程物件（需要 trip.rates 取得可選幣別清單）
- * @param {{description: string, amount: number|null, currency: string}} scanResult 目前的辨識結果（幣別可能已被使用者手動覆寫）
- * @param {string} [note] 額外附註文字（例如「AI 判讀為 X，已自動對應至 Y」），顯示在幣別欄位後面
+ * @param {{description: string, amount: number|null, currency: string, confidence?: string, date?: string, imageUrl?: string, batchId: string, index: number, batchTotal?: number}} scanResult
+ *   目前的辨識結果（幣別可能已被使用者手動覆寫）。batchId/index 用來把這張圖對應到 stateCache
+ *   裡專屬於它的儲存格，也會編進下面元件的 customId，讓多張圖各自的按鈕/選單不會互相干擾。
+ * @param {object} [options]
+ * @param {string} [options.currencyFieldNote] 附加在「💱 幣別」欄位值後面的短註記（例如「AI 判讀為 X，已自動對應至 Y」）
+ * @param {string} [options.extraFooterNote] 附加在頁尾提示文字後面的額外提醒（例如「已手動更改幣別，記得確認匯率」）
  */
-function buildScanResultView(trip, scanResult, note = '') {
+function buildScanResultView(trip, scanResult, options = {}) {
+  const { currencyFieldNote = '', extraFooterNote = '' } = options;
   const tripCurrencies = Object.keys(trip.rates);
+  const idSuffix = `:${scanResult.batchId}:${scanResult.index}`;
+
+  const meta = SCAN_CONFIDENCE_META[scanResult.confidence] || SCAN_CONFIDENCE_META.medium;
+  const amountDisplay = formatMoneyDisplay(scanResult.amount, scanResult.currency);
+
+  // 一次掃多張時，在標題標明「這是第幾張」，讓使用者在一串訊息裡不會搞混是在確認哪一張帳單。
+  const titlePrefix = scanResult.batchTotal && scanResult.batchTotal > 1
+    ? `✅ 第 ${scanResult.index + 1}／${scanResult.batchTotal} 張辨識完成！`
+    : '✅ 辨識完成！';
 
   const resultEmbed = new EmbedBuilder()
-    .setColor(0x2ecc71)
-    .setTitle('✅ 辨識完成！請確認以下內容')
+    .setColor(meta.color)
+    .setTitle(`${titlePrefix}請確認以下內容`)
     .addFields(
       { name: '📝 項目名稱', value: scanResult.description, inline: false },
-      { name: '💰 金額', value: scanResult.amount ? `${scanResult.amount}` : '⚠️ 無法辨識，請於表單中手動填寫', inline: true },
-      { name: '💱 幣別', value: `${scanResult.currency}${note}`, inline: true }
+      { name: '💰 金額', value: amountDisplay !== null ? amountDisplay : '⚠️ 無法辨識，請於表單中手動填寫', inline: true },
+      { name: '💱 幣別', value: `${scanResult.currency}${currencyFieldNote}`, inline: true }
     )
-    .setFooter({ text: '若幣別判斷錯誤，可在下方選單手動修改；確認無誤後點擊按鈕開啟表單送出。' });
+    .setFooter({ text: `若幣別判斷錯誤，可在下方選單手動修改；確認無誤後點擊按鈕開啟表單送出。${extraFooterNote}` });
+
+  if (meta.badge) resultEmbed.setDescription(meta.badge);
+
+  // 帳單上的日期只當作「給使用者核對用的參考資訊」顯示，不會拿去覆蓋花費紀錄本身的建立時間
+  // （那是系統時間戳記，語意上跟帳單印的日期是兩件事，這裡刻意不混用）。
+  if (scanResult.date) {
+    resultEmbed.addFields({ name: '🗓️ 帳單日期（僅供參考）', value: scanResult.date, inline: true });
+  }
+
+  // 附上原圖縮圖，讓使用者不用再往上滑找圖片比對，同一則訊息就能核對辨識結果對不對。
+  if (scanResult.imageUrl) resultEmbed.setThumbnail(scanResult.imageUrl);
 
   // 帳單辨識最容易出錯的地方就是幣別（例如日幣/韓幣的符號、或圖片沒拍到幣別資訊），
-  // 因此這裡额外提供一個下拉選單，讓使用者可以直接手動覆寫 AI 判斷的幣別，不用整張重掃。
+  // 因此這裡額外提供一個下拉選單，讓使用者可以直接手動覆寫 AI 判斷的幣別，不用整張重掃。
+  // 選單最後固定加一個「➕ 其他幣別」選項，涵蓋「這趟行程根本還沒設定過這個幣別」的情況
+  // （例如行程只設過 TWD/JPY，但這張帳單其實是歐元）——選了之後會跳一個小 Modal 讓使用者
+  // 輸入代碼，並比照「行程設定」既有的新增幣別流程自動抓即時匯率或手動輸入匯率。
+  const currencyOptions = tripCurrencies.slice(0, 24).map((c) => ({
+    label: c === trip.baseCurrency ? `${c}（本位幣）` : c,
+    value: c,
+    default: c === scanResult.currency
+  }));
+  currencyOptions.push({
+    label: '➕ 其他幣別（手動輸入代碼）',
+    value: SCAN_CURRENCY_CUSTOM_VALUE,
+    description: '若清單裡沒有這趟行程要用的幣別'
+  });
+
+  // customId 都帶上 `:batchId:index` 後綴，讓每張圖各自的下拉選單/按鈕互相獨立，
+  // 不會因為使用者同時開著好幾張的確認卡片，而互相蓋掉彼此的暫存資料。
   const currencySelectRow = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId('exp_select_scan_currency')
+      .setCustomId(`exp_select_scan_currency${idSuffix}`)
       .setPlaceholder('💱 若幣別辨識錯誤，可在這裡手動修改')
-      .addOptions(
-        tripCurrencies.slice(0, 25).map((c) => ({
-          label: c === trip.baseCurrency ? `${c}（本位幣）` : c,
-          value: c,
-          default: c === scanResult.currency
-        }))
-      )
+      .addOptions(currencyOptions)
   );
 
   const btnRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('exp_btn_scan_confirm').setLabel('📝 開啟表單確認並送出').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`exp_btn_scan_confirm${idSuffix}`).setLabel('📝 開啟表單確認並送出').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId('exp_btn_scan_start').setLabel('🔄 重新掃描').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主控台').setStyle(ButtonStyle.Secondary)
   );
@@ -922,9 +1108,9 @@ async function startBillScan(interaction, trip, cache) {
     .setColor(0x9b59b6)
     .setTitle('📷 掃描帳單新增花費')
     .setDescription(
-      `請在 **${BILL_SCAN_TIMEOUT_MS / 1000} 秒內**，直接在本頻道傳送一張帳單／收據照片（拍照或截圖皆可）。\n` +
+      `請在 **${BILL_SCAN_TIMEOUT_MS / 1000} 秒內**，直接在本頻道傳送帳單／收據照片（拍照或截圖皆可）。\n` +
       `我會自動幫你判讀項目名稱、金額與幣別，稍後仍可再手動確認或修改！\n` +
-      `*(僅接受圖片格式；若一次夾帶多張，只會取用第一張。這則訊息稍後會被刪除，辨識結果會直接回覆在你上傳的照片下方)*`
+      `*(可以一次夾帶多張圖片，每一張會各自算成一筆花費，單則訊息最多處理 ${BILL_SCAN_MAX_IMAGES_PER_BATCH} 張；僅接受圖片格式。這則訊息稍後會被刪除，辨識結果會直接回覆在你上傳的照片下方)*`
     );
 
   const cancelRow = new ActionRowBuilder().addComponents(
@@ -956,7 +1142,8 @@ async function startBillScan(interaction, trip, cache) {
 
     // 統一的「送出結果」函式：優先直接回覆在使用者的圖片訊息下面；
     // 萬一因權限等問題 reply 失敗，才退而求其次用 followUp() 補發一則新訊息——
-    // 面板已經被刪除了，這裡不能再用 editReply（沒有訊息可編輯）。
+    // 面板已經被刪除了，這裡不能再用 editReply（沒有訊息可編輯）。一次批次裡每張圖／
+    // 每個提示訊息都會各自呼叫一次，彼此獨立送出。
     const deliverResult = async (payload) => {
       try {
         await msg.reply(payload);
@@ -966,52 +1153,124 @@ async function startBillScan(interaction, trip, cache) {
       }
     };
 
-    try {
-      // 即使該則訊息附了多個檔案，也只挑「第一張」符合圖片格式的附件送去辨識，
-      // 避免使用者一次拖了好幾張圖／夾帶其他檔案時全部塞給 Gemini。
-      const imageAttachment = msg.attachments.find((a) => isImageAttachment(a));
-      const imageParts = imageAttachment
-        ? await processAttachments(new Map([[imageAttachment.id, imageAttachment]]))
-        : [];
+    // 一次訊息可能夾帶多張圖片，每一張都各自算一筆花費；這裡取所有符合圖片格式的附件，
+    // 依訊息中原本的順序處理，並限制單次批次最多處理的張數（見 BILL_SCAN_MAX_IMAGES_PER_BATCH 說明）。
+    const allImageAttachments = [...msg.attachments.values()].filter((a) => isImageAttachment(a));
+    const imageAttachments = allImageAttachments.slice(0, BILL_SCAN_MAX_IMAGES_PER_BATCH);
+    const truncatedCount = allImageAttachments.length - imageAttachments.length;
 
-      if (!imageParts.length) {
-        throw new Error('無法讀取您上傳的檔案，請確認上傳的是常見圖片格式 (png/jpg/webp)。');
+    if (!imageAttachments.length) {
+      await msg.react('❌').catch(() => {});
+      await deliverResult({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0xe74c3c)
+            .setTitle('❌ 辨識失敗')
+            .setDescription('無法讀取您上傳的檔案，請確認上傳的是常見圖片格式 (png/jpg/webp)。')
+        ],
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('exp_btn_scan_start').setLabel('🔄 重新掃描').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('exp_btn_add_start').setLabel('✏️ 改用手動輸入').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主控台').setStyle(ButtonStyle.Secondary)
+          )
+        ]
+      });
+      return;
+    }
+
+    const batchId = generateBatchId();
+    const batchTotal = imageAttachments.length;
+    const tripCurrencies = Object.keys(trip.rates);
+
+    let successCount = 0;
+    let failCount = 0;
+    let rateLimitedFrom = -1; // 從第幾張（0-based）開始被節流擋下；-1 表示整批都沒被擋
+
+    for (let i = 0; i < imageAttachments.length; i++) {
+      const imageAttachment = imageAttachments[i];
+
+      // 每一張圖＝一次真正的 Gemini 呼叫，額度算在這裡逐張檢查，而不是算在「按下開始掃描」
+      // 這個動作本身——這樣才能準確反映實際的 API 成本，也才擋得住「一次塞很多張圖」這種
+      // 用量突然暴增的情況。一旦被擋下，後面剩下的張數就不再繼續處理，直接跳出迴圈。
+      const rateCheck = billScanRateLimiter.check(billScanKey(guildId, user.id));
+      if (!rateCheck.allowed) {
+        rateLimitedFrom = i;
+        break;
       }
 
-      const tripCurrencies = Object.keys(trip.rates);
-      const result = await scanBillImage(imageParts, tripCurrencies, trip.baseCurrency);
+      const itemCacheUserId = scanItemCacheUserId(user.id, batchId, i);
+      const itemLabel = batchTotal > 1 ? `第 ${i + 1}／${batchTotal} 張：` : '';
 
-      const matchedCurrency = tripCurrencies.find((c) => c.toUpperCase() === result.currency) || trip.baseCurrency;
-      const currencyNote = matchedCurrency !== result.currency && result.currency
-        ? `（AI 判讀為 \`${result.currency}\`，已自動對應至此行程使用的 \`${matchedCurrency}\`）`
-        : '';
+      try {
+        const imageParts = await processAttachments(new Map([[imageAttachment.id, imageAttachment]]));
+        if (!imageParts.length) {
+          throw new Error('無法讀取這張圖片，請確認是常見圖片格式 (png/jpg/webp)。');
+        }
 
-      const scanResult = {
-        description: result.description,
-        amount: result.amount,
-        currency: matchedCurrency
-      };
-      cache.set(guildId, user.id, { scanResult });
+        const result = await scanBillImage(imageParts, tripCurrencies, trip.baseCurrency);
 
-      const view = buildScanResultView(trip, scanResult, currencyNote);
+        const matchedCurrency = tripCurrencies.find((c) => c.toUpperCase() === result.currency) || trip.baseCurrency;
+        const currencyNote = matchedCurrency !== result.currency && result.currency
+          ? `（AI 判讀為 \`${result.currency}\`，已自動對應至此行程使用的 \`${matchedCurrency}\`）`
+          : '';
 
+        const scanResult = {
+          description: result.description,
+          amount: result.amount,
+          currency: matchedCurrency,
+          confidence: result.confidence,
+          date: result.date,
+          imageUrl: imageAttachment.url,
+          batchId,
+          index: i,
+          batchTotal
+        };
+        cache.set(guildId, itemCacheUserId, { scanResult });
+
+        const view = buildScanResultView(trip, scanResult, { currencyFieldNote: currencyNote });
+        await deliverResult(view);
+        successCount++;
+      } catch (err) {
+        console.error(`⚠️ 帳單辨識失敗（${itemLabel || '單張'}）:`, err);
+        const errEmbed = new EmbedBuilder()
+          .setColor(0xe74c3c)
+          .setTitle(`❌ ${itemLabel}辨識失敗`)
+          .setDescription(`發生錯誤：${err.message || '未知錯誤'}\n這張可以重新上傳再試一次，或改用手動輸入；不影響同一批次裡的其他張。`);
+
+        const retryRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('exp_btn_scan_start').setLabel('🔄 重新掃描').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId('exp_btn_add_start').setLabel('✏️ 改用手動輸入').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主控台').setStyle(ButtonStyle.Secondary)
+        );
+
+        await deliverResult({ embeds: [errEmbed], components: [retryRow] });
+        failCount++;
+      }
+    }
+
+    // 批次裡有任何「訊息夾帶超過上限張數」或「中途被節流擋下」的情況，額外補一則簡短說明，
+    // 讓使用者清楚知道少了哪些張數、該怎麼補救，而不是自己去猜為什麼少了幾張的結果。
+    if (truncatedCount > 0 || rateLimitedFrom >= 0) {
+      const noteLines = [];
+      if (truncatedCount > 0) {
+        noteLines.push(`📦 這則訊息夾帶了 ${allImageAttachments.length} 張圖片，單次批次最多處理 ${BILL_SCAN_MAX_IMAGES_PER_BATCH} 張，其餘 ${truncatedCount} 張未處理，請再傳一次。`);
+      }
+      if (rateLimitedFrom >= 0) {
+        const skipped = imageAttachments.length - rateLimitedFrom;
+        noteLines.push(`⚠️ 已達到目前的辨識次數上限（每人每 ${BILL_SCAN_RATE_LIMIT_WINDOW_MS / 1000} 秒最多 ${BILL_SCAN_RATE_LIMIT_MAX} 次），這批還有 ${skipped} 張未處理，請稍後再試。`);
+      }
+      await deliverResult({ content: noteLines.join('\n') });
+    }
+
+    // 整批的最終反應：全部成功給 ✅、全部失敗給 ❌、有成功有失敗給 ⚠️，讓使用者不用逐一點開訊息
+    // 也能從反應圖示大致看出這批處理得順不順利。
+    if (failCount === 0 && rateLimitedFrom < 0) {
       await msg.react('✅').catch(() => {});
-      await deliverResult(view);
-    } catch (err) {
-      console.error('⚠️ 帳單辨識失敗:', err);
-      const errEmbed = new EmbedBuilder()
-        .setColor(0xe74c3c)
-        .setTitle('❌ 辨識失敗')
-        .setDescription(`發生錯誤：${err.message || '未知錯誤'}\n可以重新嘗試，或改用手動輸入。`);
-
-      const retryRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('exp_btn_scan_start').setLabel('🔄 重新掃描').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('exp_btn_add_start').setLabel('✏️ 改用手動輸入').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主控台').setStyle(ButtonStyle.Secondary)
-      );
-
+    } else if (successCount === 0) {
       await msg.react('❌').catch(() => {});
-      await deliverResult({ embeds: [errEmbed], components: [retryRow] });
+    } else {
+      await msg.react('⚠️').catch(() => {});
     }
   });
 

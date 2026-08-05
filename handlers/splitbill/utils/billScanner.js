@@ -139,17 +139,19 @@ async function scanBillImage(imageParts, tripCurrencies = [], baseCurrency = 'TW
 
   const amount = Number(parsed.amount);
   const description = (parsed.description || '').toString().trim().slice(0, 90);
+  const recognizedNothing = !description && !(Number.isFinite(amount) && amount > 0);
 
-  if (!description && !(Number.isFinite(amount) && amount > 0)) {
-    throw new Error('無法從圖片中辨識出任何有效資訊，請確認圖片清晰、完整拍到金額欄位後再試一次。');
-  }
-
+  // 過去這裡「兩項都辨識不到」時會直接 throw，把使用者導向純錯誤畫面（只能重掃或整個改手動輸入），
+  // 之前辨識到的任何蛛絲馬跡（例如幣別、日期）就全部作廢，體驗上很挫折。
+  // 現在改成：即使什麼都沒認出來，也還是回傳一個「空白預設值」的結果，讓使用者一樣走進
+  // 「確認並送出」那個表單（欄位空著讓他自己填），而不是被卡在死路。信心程度強制標成
+  // low，讓下面 UI 對這種情況顯示醒目的警示提示使用者仔細檢查／自行輸入。
   return {
     description: description || '帳單花費',
     amount: Number.isFinite(amount) && amount > 0 ? Math.round((amount + Number.EPSILON) * 100) / 100 : null,
     currency: (parsed.currency || '').toString().trim().toUpperCase(),
     date: (parsed.date || '').toString().trim(),
-    confidence: parsed.confidence || 'medium'
+    confidence: recognizedNothing ? 'low' : (parsed.confidence || 'medium')
   };
 }
 
