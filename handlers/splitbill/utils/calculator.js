@@ -7,6 +7,32 @@ function round2(n) {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
+// 「零小數位」貨幣清單：這些幣別在日常生活中沒有比 1 更小的計價單位（沒有「角、分」的概念），
+// 顯示成 1500.00 這種樣子反而不自然、也容易讓使用者誤會實際金額精度。
+// 清單取自業界常見的 zero-decimal currency 列表（例如 Stripe 文件採用的分類），
+// 只用來「顯示」帳單辨識結果，不影響 round2() 等實際計算/分帳邏輯。
+const ZERO_DECIMAL_CURRENCIES = new Set([
+  'BIF', 'CLP', 'DJF', 'GNF', 'ISK', 'JPY', 'KMF', 'KRW',
+  'MGA', 'PYG', 'RWF', 'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF'
+]);
+
+/**
+ * 依幣別格式化金額顯示（僅供 UI 呈現用，不影響背後儲存/計算的實際數字）。
+ * 零小數位幣別（JPY/KRW/VND...）顯示成整數＋千分位；其餘幣別固定顯示到小數 2 位。
+ *
+ * @param {number|null|undefined} amount
+ * @param {string} currency
+ * @returns {string|null} 格式化後的字串；amount 不是有效數字時回傳 null，讓呼叫端自行決定要顯示什麼提示文字
+ */
+function formatMoneyDisplay(amount, currency) {
+  if (amount === null || amount === undefined || !Number.isFinite(amount)) return null;
+
+  if (ZERO_DECIMAL_CURRENCIES.has((currency || '').toUpperCase())) {
+    return Math.round(amount).toLocaleString('en-US');
+  }
+  return amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 /**
  * 解析使用者手動輸入的金額／匯率字串，安全地支援千分位逗號（例如 "1,000" -> 1000）。
  *
@@ -359,7 +385,7 @@ async function fetchRealTimeRate(fromCurrency, toCurrency) {
 }
 
 module.exports = {
-  round2, parseMoneyInput, toBase, equalSplit, validateCustomSplit, validatePayers,
+  round2, parseMoneyInput, formatMoneyDisplay, toBase, equalSplit, validateCustomSplit, validatePayers,
   calcNetBalances, calcNetBalancesByCurrency, convertPayerOrShareToBase,
   getUsedCurrencies, convertNetToSingleCurrency, fetchRealTimeRate,
   listTransfersByMember,
