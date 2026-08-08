@@ -33,18 +33,9 @@ const {
 
 // ════════════════════════════════════════════════════════
 //  記錄每個 guild「點歌的頻道」
-//  guildId -> TextChannel
-//  這是所有自動通知（下一首 / 播放完畢 / 錯誤 / 閒置停止）唯一
-//  應該參考的來源，避免因為觸發事件當下所在的頻道不同
-//  （例如語音頻道內建聊天室），導致通知亂跑。
 // ════════════════════════════════════════════════════════
 const requestChannels = new Map();
 
-/**
- * 取得該 guild 應該發送通知的頻道：
- * 優先使用「點歌時記錄下來的頻道」，
- * 若尚未有任何記錄（極端邊界情況），才 fallback 用當下傳入的 channel。
- */
 function _getNotifyChannel(guildId, fallbackChannel) {
   return requestChannels.get(guildId) || fallbackChannel;
 }
@@ -84,7 +75,6 @@ function _buildEmbed(guildId) {
       );
     if (item.thumbnail) embed.setThumbnail(item.thumbnail);
   } else {
-    // local：不顯示副檔名 / 檔案大小
     embed
       .setDescription(`🎧 **${item.title}**`)
       .addFields(
@@ -136,10 +126,6 @@ async function updateControlPanel(guildId, channel) {
   const targetChannel = _getNotifyChannel(guildId, channel);
 
   try {
-    // ★ 永遠刪除舊的控制面板訊息、重新發送新訊息，
-    //   確保面板永遠是頻道中「最新一則」訊息、固定顯示在最下面，
-    //   不會因為原地 edit() 而被之後送出的其他音樂通知
-    //   （例如「下一首」、佇列加入、錯誤訊息等）擠到上面。
     const oldMsg = controlMsgs.get(guildId);
     if (oldMsg) {
       try {
@@ -157,24 +143,10 @@ async function updateControlPanel(guildId, channel) {
 }
 
 // ════════════════════════════════════════════════════════
-//  【新增】隨機連播 — 洗牌袋（Shuffle Bag）
-//
-//  guildId -> {
-//    bag: [track, track, ...],   // 本輪尚未播放過的曲目（已洗牌）
-//    total: number,              // 建立本輪洗牌袋當下的曲庫總數（用來偵測曲庫異動）
-//    lastPlayed: filename,       // 上一次播放的檔名（用來避免跨輪銜接時連續重複）
-//  }
-//
-//  規則：
-//  1. 一輪內每首歌只會被抽到一次，播完整輪（bag 清空）才重新洗牌。
-//  2. 新一輪洗牌時，若第一首剛好等於上一輪最後一首，會與其他位置互換，
-//     避免使用者感覺「同一首歌連續播放兩次」。
-//  3. 若偵測到曲庫內容改變（新增/刪除音樂檔案），會捨棄舊袋、重新洗牌，
-//     確保新加入的歌曲能被涵蓋進隨機池。
+//  隨機連播 — 洗牌袋（Shuffle Bag）
 // ════════════════════════════════════════════════════════
 const shuffleBags = new Map();
 
-/** Fisher-Yates 洗牌演算法（不改動原陣列，回傳新陣列） */
 function _shuffleArray(arr) {
   const result = [...arr];
   for (let i = result.length - 1; i > 0; i--) {
@@ -184,7 +156,6 @@ function _shuffleArray(arr) {
   return result;
 }
 
-/** 產生新一輪洗牌袋，並盡量避免開頭與上一輪結尾重複 */
 function _generateShuffleBag(files, avoidFilename) {
   const shuffled = _shuffleArray(files);
 
@@ -196,18 +167,10 @@ function _generateShuffleBag(files, avoidFilename) {
   return shuffled;
 }
 
-/**
- * 【新增】清空指定 guild 的洗牌袋。
- * 供 stopAll() 及外部（例如按鈕切換隨機連播開關的 handler）呼叫，
- * 確保每次「重新開始」隨機連播時都是全新的一輪。
- */
 function resetShuffleBag(guildId) {
   shuffleBags.delete(guildId);
 }
 
-// ════════════════════════════════════════════════════════
-//  隨機挑一首本地音樂（洗牌袋版：整輪不重複）
-// ════════════════════════════════════════════════════════
 function _pickRandomLocalTrack(guildId) {
   const engine = _engines.local;
   if (!engine) return null;
@@ -220,14 +183,12 @@ function _pickRandomLocalTrack(guildId) {
 
   let state = shuffleBags.get(guildId);
 
-  // 偵測曲庫是否異動（新增 / 刪除檔案），若異動則視為過期，重新洗牌
   const currentFilenames = new Set(files.map(f => f.filename));
   const isStale =
     !state ||
     state.total !== files.length ||
     !state.bag.every(f => currentFilenames.has(f.filename));
 
-  // 洗牌袋為空（整輪播完）或已過期 → 重新洗牌，開始新的一輪
   if (isStale || state.bag.length === 0) {
     const avoidFilename = state?.lastPlayed ?? nowPlaying.get(guildId)?.item?.filename;
     state = {
@@ -247,6 +208,27 @@ function _pickRandomLocalTrack(guildId) {
     title: picked.name,
     type: 'local',
   };
+}
+
+// ════════════════════════════════════════════════════════
+//  【新增】隨機連播中，優先播放使用者手動加入佇列的歌曲
+//
+//  修正問題：先前 enqueue() 允許在隨機連播模式下把歌塞進 queue，
+//  但 Idle / error 分支從不讀取 queue，導致手動點的歌永久卡死、
+//  被靜默吞掉，使用者完全不會發現。
+//
+//  規則：
+//  1. 每次要決定「隨機連播的下一首」時，先看 queue 是否有歌。
+//  2. 有 → 視為「插播」，優先播放，計入正常播放次數（countPlay: true），
+//     並用專屬 embed 提示使用者（避免跟真正的隨機挑選混淆）。
+//  3. 沒有 → 才照原本邏輯呼叫 _pickRandomLocalTrack() 隨機挑歌。
+// ════════════════════════════════════════════════════════
+function _dequeueManualRequest(guildId) {
+  const queue = queues.get(guildId) || [];
+  if (queue.length === 0) return null;
+  const next = queue.shift();
+  queues.set(guildId, queue);
+  return next;
 }
 
 // ════════════════════════════════════════════════════════
@@ -278,8 +260,33 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
       return;
     }
 
-    // 隨機連播模式：忽略佇列，直接從洗牌袋抽下一首
+    // 隨機連播模式
     if (isRandomPlay) {
+      // 🆕 優先檢查佇列：使用者手動點的歌不該被隨機邏輯吞掉
+      const manualNext = _dequeueManualRequest(guildId);
+      if (manualNext) {
+        console.log(`🎵 [UnifiedQueue] 隨機連播中插播使用者點歌: ${manualNext.title}`);
+
+        const manualEmbed = new EmbedBuilder()
+          .setColor(0x1DB954)
+          .setTitle('▶️ 正在播放（插播）')
+          .setDescription(
+            manualNext.type === 'bilibili'
+              ? `[${manualNext.title}](${manualNext.url})`
+              : `🎧 **${manualNext.title}**`
+          )
+          .addFields({ name: '提示', value: '此曲播放完畢後將繼續隨機連播', inline: false })
+          .setTimestamp();
+        if (manualNext.thumbnail) manualEmbed.setThumbnail(manualNext.thumbnail);
+        sendTo.send({ embeds: [manualEmbed] }).catch(() => {});
+
+        // 手動點歌視為正常請求，計入播放次數
+        await _playItem(guildId, manualNext, channel, { silent: false, countPlay: true });
+        await updateControlPanel(guildId, channel);
+        return;
+      }
+
+      // 佇列沒有手動點歌，才走原本的隨機挑選邏輯
       const next = _pickRandomLocalTrack(guildId);
       if (!next) {
         console.log('✅ [UnifiedQueue] 隨機連播：找不到本地音樂，停止');
@@ -295,7 +302,7 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
         .setTimestamp();
       sendTo.send({ embeds: [nextEmbed] }).catch(() => {});
 
-      // ★ 隨機連播播出的曲目不計入播放次數排序
+      // 隨機連播播出的曲目不計入播放次數排序
       await _playItem(guildId, next, channel, { silent: false, countPlay: false });
       await updateControlPanel(guildId, channel);
       return;
@@ -328,7 +335,6 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
         sendTo.send({ embeds: [nextEmbed] }).catch(() => {});
       }
 
-      // 🆕 列表循環時，判斷這首歌本輪是否已經播過（繞圈重播不計入播放次數）
       let countPlay = true;
       if (isLoopAll && next.type === 'local' && next.filename) {
         const seen = getLoopAllCycleSeen(guildId);
@@ -357,9 +363,15 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
 
     const isRandomPlay = randomPlaySettings.get(guildId) || false;
     if (isRandomPlay) {
+      // 🆕 錯誤重試時，同樣優先播放使用者手動點的歌
+      const manualNext = _dequeueManualRequest(guildId);
+      if (manualNext) {
+        setTimeout(() => _playItem(guildId, manualNext, channel, { countPlay: true }), 1000);
+        return;
+      }
+
       const next = _pickRandomLocalTrack(guildId);
       if (next) {
-        // ★ 隨機連播重試也不計入播放次數
         setTimeout(() => _playItem(guildId, next, channel, { countPlay: false }), 1000);
       } else {
         stopAll(guildId);
@@ -396,7 +408,6 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
     return;
   }
 
-  // 將 silent 作為第四個參數傳入
   setMusicPlayer(guildId, player, undefined, silent);
 
   if (!silent) {
@@ -417,14 +428,13 @@ function stopAll(guildId) {
   loopSettings.delete(guildId);
   controlMsgs.delete(guildId);
   randomPlaySettings.delete(guildId);
-  resetShuffleBag(guildId); // 【新增】清空洗牌袋，避免殘留上次的播放順序
+  resetShuffleBag(guildId);
   stopMusicLayer(guildId);
   resetLoopAllCycle(guildId);
 
   if (_engines.bilibili && typeof _engines.bilibili.clearErrorCount === 'function') {
     _engines.bilibili.clearErrorCount(guildId);
   }
-  // ★ 同時重置 YouTube client 輪替狀態，避免下次播放新影片時延續舊的失敗策略
   if (_engines.bilibili && typeof _engines.bilibili.resetYtClient === 'function') {
     _engines.bilibili.resetYtClient(guildId);
   }
@@ -469,8 +479,11 @@ async function enqueue(guildId, item, channel) {
     const queue = queues.get(guildId) || [];
     queue.push(item);
     queues.set(guildId, queue);
-    console.log(`➕ [UnifiedQueue] 加入佇列: ${item.title} (位置 ${queue.length})`);
-    return { queued: true, position: queue.length };
+
+    // 🆕 若目前是隨機連播模式，補充提示：這首歌會在下一次切歌時優先插播
+    const isRandomPlay = randomPlaySettings.get(guildId) || false;
+    console.log(`➕ [UnifiedQueue] 加入佇列: ${item.title} (位置 ${queue.length})${isRandomPlay ? '（隨機連播中，將優先插播）' : ''}`);
+    return { queued: true, position: queue.length, willInterruptRandom: isRandomPlay };
   } else {
     queues.set(guildId, []);
     await _playItem(guildId, item, channel);
@@ -484,22 +497,18 @@ async function enqueue(guildId, item, channel) {
 async function playRandomLocal(guildId, channel, { enableContinuous = false } = {}) {
   requestChannels.set(guildId, channel);
 
-  // 【新增】手動觸發時視為「重新開始」，清空舊洗牌袋，確保是全新的一輪
   resetShuffleBag(guildId);
 
   const track = _pickRandomLocalTrack(guildId);
   if (!track) return null;
 
-  // 清空佇列，確保隨機連播模式下不受舊佇列影響
   queues.set(guildId, []);
 
   if (enableContinuous) {
     randomPlaySettings.set(guildId, true);
-    // 關閉其他循環模式，避免衝突
     loopSettings.set(guildId, 'off');
   }
 
-  // ★ 若這是開啟隨機連播模式下播出的起始曲目，同樣不計入播放次數排序
   await _playItem(guildId, track, channel, { countPlay: !enableContinuous });
   return track;
 }
@@ -590,5 +599,5 @@ module.exports = {
   isPlaying,
   getNowPlaying,
   playRandomLocal,
-  resetShuffleBag, // 【新增匯出】供其他 handler（例如按鈕切換）手動清空洗牌袋
+  resetShuffleBag,
 };
