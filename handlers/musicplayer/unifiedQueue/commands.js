@@ -20,6 +20,7 @@ const {
   _createPersistentIdleHandler,
   ensureConnection,
   playRandomLocal,
+  resetShuffleBag, // ★ 新增：開啟隨機連播時用來重置洗牌袋，確保是全新一輪
 } = require('./playback');
 const { handlePlay, handleAutocomplete } = require('./search');
 const bootSummary = require('../../../utils/bootSummary');
@@ -140,6 +141,10 @@ function setupUnifiedCommands(client) {
           if (next) {
             // 開啟隨機連播時，關閉其他循環模式（互斥）
             loopSettings.set(guildId, 'off');
+            // ★ 新增：每次「開啟」隨機連播都視為全新一輪，
+            //   重置洗牌袋，避免沿用上次關閉前播到一半的舊順序，
+            //   與 /music randomplay（playRandomLocal 內部）的行為保持一致
+            resetShuffleBag(guildId);
             await interaction.reply({
               content: '🎲 隨機連播已開啟，播完當前歌曲後將自動隨機挑選下一首本地音樂',
               flags: MessageFlags.Ephemeral,
