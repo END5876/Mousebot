@@ -13,6 +13,7 @@ const {
   StreamType,
 } = require('@discordjs/voice');
 const logger = require('../../utils/logger');
+const bootSummary = require('../../utils/bootSummary');
 const { nowPlaying } = require('../musicplayer/unifiedQueue/state');
 
 const SOUND_DIR = path.join(__dirname, '../../data/timeAnnouncer');
@@ -302,6 +303,14 @@ function setupTimeAnnouncer(client) {
 
   setInterval(checkAndTrigger, POLL_INTERVAL_MS);
   logger.success('HourlyReport', '整點報時排程已啟動（5 秒輪詢真實時間模式，預設關閉）');
+
+  bootSummary.report(
+    '整點報時 (/timeannounce)',
+    enabledGuildIds.size > 0 ? 'ok' : 'off',
+    enabledGuildIds.size > 0
+      ? `${enabledGuildIds.size} 個伺服器已開啟，${POLL_INTERVAL_MS / 1000} 秒輪詢`
+      : '預設關閉，尚無伺服器啟用，用 /timeannounce 開啟'
+  );
 }
 
 module.exports = {

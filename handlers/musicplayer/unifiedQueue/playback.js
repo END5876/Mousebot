@@ -136,15 +136,19 @@ async function updateControlPanel(guildId, channel) {
   const targetChannel = _getNotifyChannel(guildId, channel);
 
   try {
-    const msg = controlMsgs.get(guildId);
-    if (msg) {
+    // ★ 永遠刪除舊的控制面板訊息、重新發送新訊息，
+    //   確保面板永遠是頻道中「最新一則」訊息、固定顯示在最下面，
+    //   不會因為原地 edit() 而被之後送出的其他音樂通知
+    //   （例如「下一首」、佇列加入、錯誤訊息等）擠到上面。
+    const oldMsg = controlMsgs.get(guildId);
+    if (oldMsg) {
       try {
-        await msg.edit({ embeds: [embed], components: [row] });
-        return;
+        await oldMsg.delete();
       } catch {
-        // 訊息已被刪除，重新發送
+        // 舊訊息可能已被使用者手動刪除或找不到，忽略即可
       }
     }
+
     const newMsg = await targetChannel.send({ embeds: [embed], components: [row] });
     controlMsgs.set(guildId, newMsg);
   } catch (err) {
