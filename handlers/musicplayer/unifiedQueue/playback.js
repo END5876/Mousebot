@@ -157,107 +157,91 @@ async function updateControlPanel(guildId, channel) {
 }
 
 // ════════════════════════════════════════════════════════
-//  停止
-// ════════════════════════════════════════════════════════
-function stopAll(guildId) {
-  const np = nowPlaying.get(guildId);
-  if (np) {
-    try { np.player.stop(true); } catch {}
-  }
-  nowPlaying.delete(guildId);
-  queues.delete(guildId);
-  loopSettings.delete(guildId);
-  controlMsgs.delete(guildId);
-  randomPlaySettings.delete(guildId);
-  stopMusicLayer(guildId);
-  resetLoopAllCycle(guildId);
-
-  if (_engines.bilibili && typeof _engines.bilibili.clearErrorCount === 'function') {
-    _engines.bilibili.clearErrorCount(guildId);
-  }
-  // ★ 新增：同時重置 YouTube client 輪替狀態，避免下次播放新影片時延續舊的失敗策略
-  if (_engines.bilibili && typeof _engines.bilibili.resetYtClient === 'function') {
-    _engines.bilibili.resetYtClient(guildId);
-  }
-
-  console.log(`⏹️ [UnifiedQueue] 停止播放 (${guildId})`);
-}
-
-// ════════════════════════════════════════════════════════
-//  閒置自動離開的共用 onStop callback 產生器（已停用，僅保留註解）
-//  ※ 本專案目前只使用常駐模式（見下方 _createPersistentIdleHandler），
-//    Bot 永遠待在 TARGET_VOICE_CHANNEL_ID，不會因閒置而離開頻道。
-//    若之後需要恢復「閒置自動離開頻道」的行為，可以取消下面的註解。
-// ════════════════════════════════════════════════════════
-// function _createIdleStopHandler(guildId, connection, channel) {
-//   return (gId, reason) => {
-//     console.log(`🔌 [UnifiedQueue] 閒置自動斷線 (${gId}): ${reason}`);
-//     stopAll(gId);
-//     try { connection.destroy(); } catch {}
-//     connections.delete(gId);
-//     channel.send(
-//       `⏹️ 已因閒置自動停止播放並離開語音頻道\n📌 原因：${reason}`
-//     ).catch(() => {});
-//   };
-// }
-
-// ════════════════════════════════════════════════════════
-//  閒置自動「停止播放但不離開頻道」的共用 onStop callback 產生器
-//  （給常駐頻道場景使用，例如 autoJoinHandler 設定了
-//    TARGET_VOICE_CHANNEL_ID、Bot 永遠待在頻道內的情況；
-//    搭配 voiceMonitor.startMonitoring 的 persistent: true 使用）
+//  【新增】隨機連播 — 洗牌袋（Shuffle Bag）
 //
-//  ★ 通知一律優先查 requestChannels（點歌頻道），
-//    確保通知永遠回到使用者真正下指令的文字頻道。
+//  guildId -> {
+//    bag: [track, track, ...],   // 本輪尚未播放過的曲目（已洗牌）
+//    total: number,              // 建立本輪洗牌袋當下的曲庫總數（用來偵測曲庫異動）
+//    lastPlayed: filename,       // 上一次播放的檔名（用來避免跨輪銜接時連續重複）
+//  }
+//
+//  規則：
+//  1. 一輪內每首歌只會被抽到一次，播完整輪（bag 清空）才重新洗牌。
+//  2. 新一輪洗牌時，若第一首剛好等於上一輪最後一首，會與其他位置互換，
+//     避免使用者感覺「同一首歌連續播放兩次」。
+//  3. 若偵測到曲庫內容改變（新增/刪除音樂檔案），會捨棄舊袋、重新洗牌，
+//     確保新加入的歌曲能被涵蓋進隨機池。
 // ════════════════════════════════════════════════════════
-function _createPersistentIdleHandler(guildId, fallbackChannel) {
-  return (gId, reason) => {
-    const wasPlaying = isPlaying(gId);
-    const targetChannel = _getNotifyChannel(gId, fallbackChannel);
+const shuffleBags = new Map();
 
-    // 沒有在播放時，直接跳過，不要執行 stopAll() 造成無意義的清理與洗版 log
-    if (!wasPlaying) {
-      console.log(`⏭️ [UnifiedQueue] 常駐模式閒置觸發 (${gId})：${reason}（原本未在播放，直接略過）`);
-      return;
-    }
+/** Fisher-Yates 洗牌演算法（不改動原陣列，回傳新陣列） */
+function _shuffleArray(arr) {
+  const result = [...arr];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
 
-    stopAll(gId);
-    console.log(`⏹️ [UnifiedQueue] 常駐模式閒置觸發 (${gId})：${reason}，已停止播放（Bot 繼續留在頻道）`);
+/** 產生新一輪洗牌袋，並盡量避免開頭與上一輪結尾重複 */
+function _generateShuffleBag(files, avoidFilename) {
+  const shuffled = _shuffleArray(files);
 
-    // ★ Bug 修正：fallbackChannel 現在可能因為找不到可用文字頻道而是 null/undefined
-    //   （例如 guild 沒有系統頻道、Bot 也沒有任何頻道的發言權限），
-    //   加上防呆，避免對 undefined 呼叫 .send() 直接拋出例外。
-    if (!targetChannel || typeof targetChannel.send !== 'function') {
-      console.warn(`⚠️ [UnifiedQueue] 找不到可用的通知頻道 (${gId})，略過閒置通知訊息`);
-      return;
-    }
+  if (avoidFilename && shuffled.length > 1 && shuffled[0].filename === avoidFilename) {
+    const swapIndex = 1 + Math.floor(Math.random() * (shuffled.length - 1));
+    [shuffled[0], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[0]];
+  }
 
-    targetChannel.send(
-      `${reason} ⏹️ 已自動停止播放\n`
-    ).catch(() => {});
-  };
+  return shuffled;
+}
+
+/**
+ * 【新增】清空指定 guild 的洗牌袋。
+ * 供 stopAll() 及外部（例如按鈕切換隨機連播開關的 handler）呼叫，
+ * 確保每次「重新開始」隨機連播時都是全新的一輪。
+ */
+function resetShuffleBag(guildId) {
+  shuffleBags.delete(guildId);
 }
 
 // ════════════════════════════════════════════════════════
-//  隨機挑一首本地音樂（排除當前正在播放的那首）
+//  隨機挑一首本地音樂（洗牌袋版：整輪不重複）
 // ════════════════════════════════════════════════════════
 function _pickRandomLocalTrack(guildId) {
   const engine = _engines.local;
   if (!engine) return null;
 
   const files = engine.getMusicFiles();
-  if (files.length === 0) return null;
-
-  // 若有多首，嘗試排除當前曲目，避免連續重複
-  const np = nowPlaying.get(guildId);
-  const currentFilename = np?.item?.filename;
-
-  let candidates = files;
-  if (currentFilename && files.length > 1) {
-    candidates = files.filter(f => f.filename !== currentFilename);
+  if (files.length === 0) {
+    shuffleBags.delete(guildId);
+    return null;
   }
 
-  const picked = candidates[Math.floor(Math.random() * candidates.length)];
+  let state = shuffleBags.get(guildId);
+
+  // 偵測曲庫是否異動（新增 / 刪除檔案），若異動則視為過期，重新洗牌
+  const currentFilenames = new Set(files.map(f => f.filename));
+  const isStale =
+    !state ||
+    state.total !== files.length ||
+    !state.bag.every(f => currentFilenames.has(f.filename));
+
+  // 洗牌袋為空（整輪播完）或已過期 → 重新洗牌，開始新的一輪
+  if (isStale || state.bag.length === 0) {
+    const avoidFilename = state?.lastPlayed ?? nowPlaying.get(guildId)?.item?.filename;
+    state = {
+      bag: _generateShuffleBag(files, avoidFilename),
+      total: files.length,
+      lastPlayed: avoidFilename,
+    };
+    console.log(`🔀 [UnifiedQueue] 隨機連播開始新一輪洗牌 (${guildId})，共 ${files.length} 首`);
+  }
+
+  const picked = state.bag.shift();
+  state.lastPlayed = picked.filename;
+  shuffleBags.set(guildId, state);
+
   return {
     ...picked,
     title: picked.name,
@@ -294,7 +278,7 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
       return;
     }
 
-    // 隨機連播模式：忽略佇列，直接隨機挑下一首
+    // 隨機連播模式：忽略佇列，直接從洗牌袋抽下一首
     if (isRandomPlay) {
       const next = _pickRandomLocalTrack(guildId);
       if (!next) {
@@ -311,7 +295,7 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
         .setTimestamp();
       sendTo.send({ embeds: [nextEmbed] }).catch(() => {});
 
-      // ★ 修改：隨機連播播出的曲目不計入播放次數排序
+      // ★ 隨機連播播出的曲目不計入播放次數排序
       await _playItem(guildId, next, channel, { silent: false, countPlay: false });
       await updateControlPanel(guildId, channel);
       return;
@@ -375,7 +359,7 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
     if (isRandomPlay) {
       const next = _pickRandomLocalTrack(guildId);
       if (next) {
-        // ★ 修改：隨機連播重試也不計入播放次數
+        // ★ 隨機連播重試也不計入播放次數
         setTimeout(() => _playItem(guildId, next, channel, { countPlay: false }), 1000);
       } else {
         stopAll(guildId);
@@ -403,7 +387,7 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
     } else {
       const engine = _engines.local;
       if (!engine) throw new Error('local engine 未注入');
-      await engine.playStream(guildId, item, player, { silent, countPlay }); // ★ 補上 await
+      await engine.playStream(guildId, item, player, { silent, countPlay });
     }
   } catch (err) {
     console.error('❌ [UnifiedQueue] 引擎啟動失敗:', err.message);
@@ -421,8 +405,62 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
 }
 
 // ════════════════════════════════════════════════════════
+//  停止
+// ════════════════════════════════════════════════════════
+function stopAll(guildId) {
+  const np = nowPlaying.get(guildId);
+  if (np) {
+    try { np.player.stop(true); } catch {}
+  }
+  nowPlaying.delete(guildId);
+  queues.delete(guildId);
+  loopSettings.delete(guildId);
+  controlMsgs.delete(guildId);
+  randomPlaySettings.delete(guildId);
+  resetShuffleBag(guildId); // 【新增】清空洗牌袋，避免殘留上次的播放順序
+  stopMusicLayer(guildId);
+  resetLoopAllCycle(guildId);
+
+  if (_engines.bilibili && typeof _engines.bilibili.clearErrorCount === 'function') {
+    _engines.bilibili.clearErrorCount(guildId);
+  }
+  // ★ 同時重置 YouTube client 輪替狀態，避免下次播放新影片時延續舊的失敗策略
+  if (_engines.bilibili && typeof _engines.bilibili.resetYtClient === 'function') {
+    _engines.bilibili.resetYtClient(guildId);
+  }
+
+  console.log(`⏹️ [UnifiedQueue] 停止播放 (${guildId})`);
+}
+
+// ════════════════════════════════════════════════════════
+//  閒置自動「停止播放但不離開頻道」的共用 onStop callback 產生器
+// ════════════════════════════════════════════════════════
+function _createPersistentIdleHandler(guildId, fallbackChannel) {
+  return (gId, reason) => {
+    const wasPlaying = isPlaying(gId);
+    const targetChannel = _getNotifyChannel(gId, fallbackChannel);
+
+    if (!wasPlaying) {
+      console.log(`⏭️ [UnifiedQueue] 常駐模式閒置觸發 (${gId})：${reason}（原本未在播放，直接略過）`);
+      return;
+    }
+
+    stopAll(gId);
+    console.log(`⏹️ [UnifiedQueue] 常駐模式閒置觸發 (${gId})：${reason}，已停止播放（Bot 繼續留在頻道）`);
+
+    if (!targetChannel || typeof targetChannel.send !== 'function') {
+      console.warn(`⚠️ [UnifiedQueue] 找不到可用的通知頻道 (${gId})，略過閒置通知訊息`);
+      return;
+    }
+
+    targetChannel.send(
+      `${reason} ⏹️ 已自動停止播放\n`
+    ).catch(() => {});
+  };
+}
+
+// ════════════════════════════════════════════════════════
 //  公開：加入佇列 / 立即播放
-//  ★ 這裡是「點歌動作」發生的地方，記錄下 requestChannels
 // ════════════════════════════════════════════════════════
 async function enqueue(guildId, item, channel) {
   requestChannels.set(guildId, channel);
@@ -442,10 +480,12 @@ async function enqueue(guildId, item, channel) {
 
 // ════════════════════════════════════════════════════════
 //  公開：立即隨機播放一首本地音樂（/music randomplay 用）
-//  ★ 同樣視為一次「點歌」，更新 requestChannels
 // ════════════════════════════════════════════════════════
 async function playRandomLocal(guildId, channel, { enableContinuous = false } = {}) {
   requestChannels.set(guildId, channel);
+
+  // 【新增】手動觸發時視為「重新開始」，清空舊洗牌袋，確保是全新的一輪
+  resetShuffleBag(guildId);
 
   const track = _pickRandomLocalTrack(guildId);
   if (!track) return null;
@@ -459,7 +499,7 @@ async function playRandomLocal(guildId, channel, { enableContinuous = false } = 
     loopSettings.set(guildId, 'off');
   }
 
-  // ★ 修改：若這是開啟隨機連播模式下播出的起始曲目，同樣不計入播放次數排序
+  // ★ 若這是開啟隨機連播模式下播出的起始曲目，同樣不計入播放次數排序
   await _playItem(guildId, track, channel, { countPlay: !enableContinuous });
   return track;
 }
@@ -505,7 +545,6 @@ async function ensureConnection(interaction) {
 
   startSilenceLayer(guildId);
 
-  // ── 啟動閒置自動停止監控（常駐模式：只停播放，不離開頻道）───
   voiceMonitor.startMonitoring({
     guildId,
     connection,
@@ -524,7 +563,7 @@ async function ensureConnection(interaction) {
       console.warn(`⚠️ [UnifiedQueue] 語音連線斷開 (${guildId})`);
       try { connection.destroy(); } catch {}
       stopAll(guildId);
-      voiceMonitor.stopMonitoring(guildId); // 真正斷線時才清理閒置監控計時器
+      voiceMonitor.stopMonitoring(guildId);
       connections.delete(guildId);
       const sendTo = _getNotifyChannel(guildId, interaction.channel);
       sendTo.send('❌ 語音連線已斷開，請重新使用指令播放').catch(() => {});
@@ -545,11 +584,11 @@ module.exports = {
   _buildEmbed,
   updateControlPanel,
   stopAll,
-  // _createIdleStopHandler, // 已停用（一般模式），保留註解供之後參考
   _createPersistentIdleHandler,
   enqueue,
   ensureConnection,
   isPlaying,
   getNowPlaying,
   playRandomLocal,
+  resetShuffleBag, // 【新增匯出】供其他 handler（例如按鈕切換）手動清空洗牌袋
 };
