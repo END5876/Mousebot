@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const fs   = require('fs');
 const path = require('path');
+const bootSummary = require('../utils/bootSummary');
 
 // ── 常數 ────────────────────────────────────────────────
 const ALLOWED_USER_ID = '598054316510806017';
@@ -245,6 +246,20 @@ function setupCustomResponses(client) {
       }
     }
   });
+
+  // ── 開機摘要 ─────────────────────────────────────────────
+  try {
+    const responses = loadResponses();
+    const exactCount    = Object.keys(responses.exact ?? {}).length;
+    const containsCount = Object.keys(responses.contains ?? {}).length;
+    bootSummary.report(
+      '自訂回應 (/response)',
+      'ok',
+      `完全匹配 ${exactCount} 筆、包含匹配 ${containsCount} 筆`
+    );
+  } catch (err) {
+    bootSummary.report('自訂回應 (/response)', 'warn', `讀取 responses.json 失敗: ${err.message}`);
+  }
 }
 
 module.exports = { setupCustomResponses };

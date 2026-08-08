@@ -6,9 +6,15 @@
 //
 // 用法：
 //   const bootSummary = require('../../utils/bootSummary');
-//   bootSummary.report('AI 對話', 'ok', 'Gemini API 已連線');
-//   bootSummary.report('TTS', 'warn', 'SoVITS 離線，改用 edge-tts fallback');
-//   bootSummary.report('限免通知', 'off', '尚未設定任何通知頻道');
+//   bootSummary.report('AI 對話 (/ai)', 'ok', 'Gemini API 已連線，9 種人格模式可用');
+//   bootSummary.report('文字轉語音 (/tts)', 'warn', 'SoVITS 離線，改用 edge-tts fallback');
+//   bootSummary.report('限免通知 (/notify)', 'off', '尚未設定任何通知頻道');
+//
+// 目前所有會回報的模組（依 index.js 載入順序）：
+//   語音頻道 (/voice)、基本指令、自訂回應 (/response)、AI 對話 (/ai)、
+//   自動加入語音頻道、文字轉語音 (/tts)、語音辨識 STT、限免通知 (/notify)、
+//   整點報時 (/timeannounce)、分帳系統 (/splitbill, /splitbill-quick)、
+//   音樂播放 (/play, /music)、線上音樂 (YouTube/Bilibili)、Slash Commands 註冊
 
 const items = [];
 
