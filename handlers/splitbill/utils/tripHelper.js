@@ -44,6 +44,14 @@ function memberDisplay(trip, userId) {
   return m ? m.name : `<@${userId}>`;
 }
 
+/**
+ * 判斷某使用者是否為指定行程的成員。
+ * 用於權限管控：非行程內成員一律禁止操作該行程（記帳／成員／結算／行程設定等）。
+ */
+function isTripMember(trip, userId) {
+  return !!trip && Array.isArray(trip.members) && trip.members.some((m) => m.id === userId);
+}
+
 function ensureMembersExist(trip, userIds) {
   const memberIds = new Set(trip.members.map((m) => m.id));
   const missing = userIds.filter((id) => !memberIds.has(id));
@@ -54,4 +62,4 @@ function ensureMembersExist(trip, userIds) {
   }
 }
 
-module.exports = { resolveTrip, listTripChoices, memberDisplay, ensureMembersExist };
+module.exports = { resolveTrip, listTripChoices, memberDisplay, ensureMembersExist, isTripMember };
