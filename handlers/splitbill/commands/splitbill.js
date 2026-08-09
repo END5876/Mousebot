@@ -75,7 +75,7 @@ module.exports = {
     // 🆕 快速分帳：不受「必須先有行程」的限制，任何人都能臨時算一筆帳單怎麼分，
     // 所以獨立成第二排、永遠可點擊（不隨 trip 是否存在而 disabled）。
     const quickRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('qs_start').setLabel('⚡ 快速分帳（免建立行程）').setStyle(ButtonStyle.Primary)
+      new ButtonBuilder().setCustomId('qs_start').setLabel('⚡ 快速分帳').setStyle(ButtonStyle.Primary)
     );
 
     const payload = { 
