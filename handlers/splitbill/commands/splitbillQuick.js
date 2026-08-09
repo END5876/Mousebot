@@ -2,7 +2,7 @@
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const storage = require('../utils/storage');
-const { resolveTrip, memberDisplay, ensureMembersExist } = require('../utils/tripHelper');
+const { resolveTrip, memberDisplay, ensureMembersExist, isTripMember } = require('../utils/tripHelper');
 const { equalSplit, fetchRealTimeRate, round2 } = require('../utils/calculator');
 const { parsePayerField, parseSplitField } = require('../utils/parse');
 
@@ -38,6 +38,14 @@ module.exports = {
     if (!trip) {
       return interaction.reply({
         content: `⚠️ ${error || '尚未指定行程，請先用 /splitbill 面板建立或選擇行程。'}`,
+        flags: MessageFlags.Ephemeral
+      });
+    }
+
+    // 🔒 只有行程內的成員才能對此行程記帳，避免非相關人士誤操作或惡意灌帳
+    if (!isTripMember(trip, user.id)) {
+      return interaction.reply({
+        content: `❌ 你不是行程「${trip.name}」的成員，無法對此行程記帳。請先請行程內的成員從 \`/splitbill\` 面板「👥 成員管理 → ➕ 新增成員」把你加入。`,
         flags: MessageFlags.Ephemeral
       });
     }
