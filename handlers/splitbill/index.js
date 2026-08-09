@@ -115,7 +115,7 @@ function setupSplitbillCommands(client) {
     } catch (error) {
       console.error('⚠️ Splitbill UI 發生異常錯誤:', error);
       const errorMsg = `❌ 操作失敗：${error.message || '未知錯誤'}`;
-      
+
       if (interaction.replied || interaction.deferred) {
         await interaction.followUp({ content: errorMsg, flags: MessageFlags.Ephemeral });
       } else {
@@ -171,8 +171,7 @@ async function handleSelectInteraction(interaction) {
   if (customId.startsWith('mem_')) return memberUI.handleSelectMenu(interaction, stateCache);
   if (customId.startsWith('set_')) return settleUI.handleSelectMenu(interaction, stateCache);
   if (customId.startsWith('trip_')) return tripUI.handleSelectMenu(interaction, stateCache);
-  // 注意：⚡ 快速分帳全部改用單一 Modal（含代墊人／分攤方式文字欄位）完成，
-  // 不再需要下拉選單這一步，因此這裡不需要 qs_ 的路由。
+  if (customId.startsWith('qs_')) return quickSplitUI.handleSelectMenu(interaction, stateCache);
 }
 
 module.exports = { setupSplitbillCommands };
