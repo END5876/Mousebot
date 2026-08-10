@@ -420,17 +420,26 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
 // ════════════════════════════════════════════════════════
 function stopAll(guildId) {
   const np = nowPlaying.get(guildId);
-  if (np) {
-    try { np.player.stop(true); } catch {}
-  }
+
+  // ⚠️ 順序很重要：必須先清空 nowPlaying（以及其他狀態），
+  // 再呼叫 player.stop(true)。
+  // 因為 stop(true) 會同步觸發 _playItem() 裡註冊的 'Idle' 監聽器，
+  // 那個監聽器會用 nowPlaying.get(guildId) 是否還等於當前 player
+  // 來判斷「是自然播完該接下一首」還是「已經被外部停止」。
+  // 若先呼叫 stop() 才刪 nowPlaying，監聽器會誤判成播完，
+  // 因而先接了下一首（隨機/佇列），導致停止鍵要等下一首播完才真的停。
   nowPlaying.delete(guildId);
   queues.delete(guildId);
   loopSettings.delete(guildId);
   controlMsgs.delete(guildId);
   randomPlaySettings.delete(guildId);
   resetShuffleBag(guildId);
-  stopMusicLayer(guildId);
   resetLoopAllCycle(guildId);
+
+  if (np) {
+    try { np.player.stop(true); } catch {}
+  }
+  stopMusicLayer(guildId);
 
   if (_engines.bilibili && typeof _engines.bilibili.clearErrorCount === 'function') {
     _engines.bilibili.clearErrorCount(guildId);
