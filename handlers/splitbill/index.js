@@ -52,7 +52,7 @@ function isTripScopedCustomId(customId) {
  * 而不是目前作用中的行程，所以要單獨處理。
  */
 function resolveTargetTrip(interaction) {
-  const { customId, guildId } = interaction;
+  const { customId, guildId, user } = interaction;
 
   if (customId === 'trip_select_switch') {
     const guild = storage.getGuild(guildId);
@@ -60,7 +60,20 @@ function resolveTargetTrip(interaction) {
     return targetTripId ? guild.trips[targetTripId] || null : null;
   }
 
-  const { trip } = resolveTrip(guildId);
+  // 🔒 [修正：race condition] 若這個互動的 customId 帶有「::<tripId>」鎖定後綴
+  // （例如 trip_modal_add_currency::trip_xxx，見 tripUI.js），代表這是某個多步驟
+  // 流程「開始當下」就鎖定好的目標行程，權限檢查也必須針對同一個 tripId 進行，
+  // 而不是重新查一次「現在」的作用行程——否則使用者在流程中途換了自己的作用行程，
+  // 這裡驗證到的就會是錯的行程。
+  if (customId.includes('::')) {
+    const pinnedTripId = customId.split('::')[1];
+    const guild = storage.getGuild(guildId);
+    return guild.trips[pinnedTripId] || null;
+  }
+
+  // 🔒 [修正：切換行程影響全體] 一般情況下改以「發起互動的使用者」自己的作用
+  // 行程來源，每個人彼此獨立，不再共用同一個全伺服器指標。
+  const { trip } = resolveTrip(guildId, null, user.id);
   return trip;
 }
 

@@ -5,7 +5,7 @@ const {
   ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, MessageFlags 
 } = require('discord.js');
 const storage = require('../utils/storage');
-const { resolveTrip } = require('../utils/tripHelper');
+const { resolveTrip, resolveTripById, setUserActiveTrip } = require('../utils/tripHelper');
 const { fetchRealTimeRate, parseMoneyInput } = require('../utils/calculator');
 const { showMainMenu } = require('../commands/splitbill');
 
@@ -20,14 +20,16 @@ const BASELINE_RATES = {
 async function renderTripNav(interaction, alertMsg = null) {
   const guildId = interaction.guildId;
   const guild = storage.getGuild(guildId);
-  const { trip } = resolveTrip(guildId);
+  // 🔒 [修正：切換行程影響全體] 這裡一律代入 interaction.user.id，
+  // 讓畫面顯示的「目前作用行程」永遠是「這個使用者自己的」，不受其他人切換影響。
+  const { trip } = resolveTrip(guildId, null, interaction.user.id);
   const activeName = trip ? `**${trip.name}**` : '無';
   const trips = Object.values(guild.trips).filter(t => !t.archived);
 
   const embed = new EmbedBuilder()
     .setColor(0xe74c3c)
     .setTitle('🧳 行程與外幣設定')
-    .setDescription(`目前作用行程：${activeName}\n\n請直接由下方選單切換行程，或使用按鈕建立/刪除行程、新增幣別匯率。`);
+    .setDescription(`你目前的作用行程：${activeName}\n*(每人各自獨立，切換行程不會影響其他成員看到的行程)*\n\n請直接由下方選單切換行程，或使用按鈕建立/刪除行程、新增幣別匯率。`);
 
   if (trip) {
     const rateLines = Object.entries(trip.rates)
@@ -51,7 +53,7 @@ async function renderTripNav(interaction, alertMsg = null) {
     const selectRow = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId('trip_select_switch')
-        .setPlaceholder('🔄 快速切換其他行程...')
+        .setPlaceholder('🔄 快速切換其他行程（只影響你自己）...')
         .addOptions(trips.map(t => ({ label: t.name, value: t.id, description: `基準幣別: ${t.baseCurrency}` })))
     );
     components.push(selectRow);
@@ -70,7 +72,7 @@ async function renderTripNav(interaction, alertMsg = null) {
 
 module.exports = {
   async handleButton(interaction) {
-    const { customId, guildId } = interaction;
+    const { customId, guildId, user } = interaction;
     const guild = storage.getGuild(guildId);
     
     if (customId === 'nav_main') return showMainMenu(interaction);
@@ -90,10 +92,14 @@ module.exports = {
 
     // 🪙 新增幣別：讓行程支援 BASELINE_RATES 預設清單以外的幣別（例如 VND、SGD）
     if (customId === 'trip_btn_add_currency') {
-      const { trip } = resolveTrip(guildId);
+      const { trip } = resolveTrip(guildId, null, user.id);
       if (!trip) return interaction.reply({ content: '⚠️ 請先建立或選擇一個行程。', flags: MessageFlags.Ephemeral });
 
-      const modal = new ModalBuilder().setCustomId('trip_modal_add_currency').setTitle('🪙 新增幣別匯率');
+      // 🔒 [修正：race condition] 把「開啟這個 Modal 當下」鎖定的行程 ID 直接寫進
+      // Modal 的 customId 裡，送出表單時就不再重新查詢「現在的作用行程」，
+      // 而是直接鎖定操作這一個 tripId——就算使用者在填表單期間手滑切換了自己的
+      // 作用行程，這筆新幣別匯率仍然會正確寫入「當初按下按鈕時」的那個行程。
+      const modal = new ModalBuilder().setCustomId(`trip_modal_add_currency::${trip.id}`).setTitle('🪙 新增幣別匯率');
       const curInput = new TextInputBuilder()
         .setCustomId('currency')
         .setLabel('幣別代碼 (例如：VND、SGD、CNY)')
@@ -112,7 +118,7 @@ module.exports = {
     }
 
     if (customId === 'trip_btn_delete_ui') {
-      const { trip } = resolveTrip(guildId);
+      const { trip } = resolveTrip(guildId, null, user.id);
       const embed = new EmbedBuilder()
         .setColor(0xd35400)
         .setTitle(`⚠️ 警告：確定要刪除行程「${trip.name}」？`)
@@ -127,8 +133,15 @@ module.exports = {
     }
 
     if (customId === 'trip_btn_delete_confirm') {
-      const { trip } = resolveTrip(guildId);
-      if (guild.activeTripId === trip.id) guild.activeTripId = null;
+      const { trip } = resolveTrip(guildId, null, user.id);
+
+      if (guild.defaultTripId === trip.id) guild.defaultTripId = null;
+      // 🔒 [修正：切換行程影響全體 - 收尾] 行程被刪除後，順手清掉所有指向它的
+      // 個人指標，避免資料檔留下指向不存在行程的殘影（resolveTrip 本身雖已對此
+      // 做防呆，但清乾淨比較不容易日後踩到）。
+      for (const uid of Object.keys(guild.activeTripByUser)) {
+        if (guild.activeTripByUser[uid] === trip.id) delete guild.activeTripByUser[uid];
+      }
       delete guild.trips[trip.id];
       storage.persist();
 
@@ -164,17 +177,32 @@ module.exports = {
       });
 
       guild.trips[newTripId] = newTrip;
-      guild.activeTripId = newTripId;
+      // 🔒 [修正：切換行程影響全體] 新行程只切換「建立者自己」的作用行程，
+      // 不會動到伺服器裡其他人正在使用的行程。
+      setUserActiveTrip(guildId, interaction.user.id, newTripId);
+      // 如果伺服器還沒有預設行程（例如這是第一個被建立的行程），順便設成預設值，
+      // 讓之後「從未選過行程」的新使用者有個合理的起點，而不是直接報錯。
+      if (!guild.defaultTripId) guild.defaultTripId = newTripId;
       storage.persist();
 
-      return showMainMenu(interaction, `🎉 成功創立新行程！\n**名稱**：${name}\n**本位幣別**：${baseCur}\n已自動帶入常用多國匯率，並切換為當前作用行程！`);
+      return showMainMenu(interaction, `🎉 成功創立新行程！\n**名稱**：${name}\n**本位幣別**：${baseCur}\n已自動帶入常用多國匯率，並切換為你的作用行程！`);
     }
 
     // 🪙 新增幣別：驗證格式 → 手動匯率優先，留空則嘗試即時匯率
-    if (interaction.customId === 'trip_modal_add_currency') {
+    if (interaction.customId.startsWith('trip_modal_add_currency')) {
       const guildId = interaction.guildId;
-      const { trip } = resolveTrip(guildId);
-      if (!trip) return interaction.reply({ content: '⚠️ 找不到行程，請重新操作。', flags: MessageFlags.Ephemeral });
+
+      // 🔒 [修正：race condition] 優先使用 Modal customId 裡鎖定的 tripId
+      // （見 trip_btn_add_currency），只有舊版沒帶 tripId 的情況才退回舊行為，
+      // 確保這筆幣別一定寫進「使用者當初按下按鈕時」看到的那個行程。
+      const [, pinnedTripId] = interaction.customId.split('::');
+      const trip = pinnedTripId
+        ? resolveTripById(guildId, pinnedTripId)
+        : resolveTrip(guildId, null, interaction.user.id).trip;
+
+      if (!trip) {
+        return interaction.reply({ content: '⚠️ 找不到行程（可能已被刪除），請重新操作。', flags: MessageFlags.Ephemeral });
+      }
 
       const currency = interaction.fields.getTextInputValue('currency').trim().toUpperCase();
       const rateStr = interaction.fields.getTextInputValue('rate');
@@ -224,10 +252,12 @@ module.exports = {
 
       if (!guild.trips[selectedTripId]) return interaction.reply({ content: '⚠️ 選擇的行程不存在。', flags: MessageFlags.Ephemeral });
 
-      guild.activeTripId = selectedTripId;
+      // 🔒 [修正：切換行程影響全體] 只設定「這個使用者自己」的作用行程指標，
+      // 伺服器裡其他人的畫面與正在進行中的操作完全不受影響。
+      setUserActiveTrip(guildId, interaction.user.id, selectedTripId);
       storage.persist();
 
-      return showMainMenu(interaction, `🔄 已成功切換目前主作用行程至：**${guild.trips[selectedTripId].name}**`);
+      return showMainMenu(interaction, `🔄 已將你自己的作用行程切換至：**${guild.trips[selectedTripId].name}**\n*(僅影響你自己，其他成員看到的行程不會被改變)*`);
     }
   }
 };

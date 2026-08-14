@@ -183,17 +183,18 @@ function _pickRandomLocalTrack(guildId) {
 
   let state = shuffleBags.get(guildId);
 
-  const currentFilenames = new Set(files.map(f => f.filename));
-  const isStale =
-    !state ||
-    state.total !== files.length ||
-    !state.bag.every(f => currentFilenames.has(f.filename));
+  // 只清掉「已經不存在的檔案」（例如被刪除），不因為「新增檔案」
+  // （例如線上歌曲插播後被快取進 data/music/cache）而讓當輪重洗。
+  // 新加入的檔案要等這輪 bag 播完、開新一輪時才會被 getMusicFiles() 掃進來。
+  if (state) {
+    const currentFilenames = new Set(files.map(f => f.filename));
+    state.bag = state.bag.filter(f => currentFilenames.has(f.filename));
+  }
 
-  if (isStale || state.bag.length === 0) {
+  if (!state || state.bag.length === 0) {
     const avoidFilename = state?.lastPlayed ?? nowPlaying.get(guildId)?.item?.filename;
     state = {
       bag: _generateShuffleBag(files, avoidFilename),
-      total: files.length,
       lastPlayed: avoidFilename,
     };
     console.log(`🔀 [UnifiedQueue] 隨機連播開始新一輪洗牌 (${guildId})，共 ${files.length} 首`);
@@ -228,6 +229,22 @@ function _dequeueManualRequest(guildId) {
   if (queue.length === 0) return null;
   const next = queue.shift();
   queues.set(guildId, queue);
+
+  // 插播的若是「本地歌曲」，代表它本來就已經在當輪的洗牌袋裡，
+  // 提前把它從 bag 中移除，避免同一輪內被重複挑到、重播第二次。
+  // （線上歌曲不在 bag 裡，不受影響；bag 剩餘順序完全不變。）
+  if (next?.type === 'local' && next.filename) {
+    const state = shuffleBags.get(guildId);
+    if (state) {
+      const before = state.bag.length;
+      state.bag = state.bag.filter(f => f.filename !== next.filename);
+      if (state.bag.length !== before) {
+        state.lastPlayed = next.filename;
+        console.log(`🔀 [UnifiedQueue] 插播本地歌「${next.title}」已從本輪洗牌袋移除，避免重播`);
+      }
+    }
+  }
+
   return next;
 }
 

@@ -5,7 +5,7 @@ const {
   ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, MessageFlags
 } = require('discord.js');
 const storage = require('../../utils/storage');
-const { resolveTrip } = require('../../utils/tripHelper');
+const { resolveTrip, resolveTripById } = require('../../utils/tripHelper');
 const { validateCustomSplit, fetchRealTimeRate, round2, parseMoneyInput } = require('../../utils/calculator');
 const { addDeposit } = require('../../utils/deposit');
 const { showMainMenu } = require('../../commands/splitbill');
@@ -15,7 +15,8 @@ const { renderSplitMethodUI, completeExpenseLoggingWithShares } = require('./exp
 async function handleModal(interaction, cache) {
     if (interaction.customId.startsWith('exp_modal_scan_custom_currency')) {
       const { guildId, user } = interaction;
-      const { trip } = resolveTrip(guildId);
+      // 🔒 [修正：切換行程影響全體] 改用發起者自己的作用行程
+      const { trip } = resolveTrip(guildId, null, user.id);
       const { batchId, index } = parseScanItemSuffix(interaction.customId, 'exp_modal_scan_custom_currency');
       const itemCacheUserId = scanItemCacheUserId(user.id, batchId, index);
       const state = cache.get(guildId, itemCacheUserId);
@@ -76,11 +77,20 @@ async function handleModal(interaction, cache) {
 
     if (interaction.customId === 'exp_modal_multi_deposit') {
       const { guildId, user } = interaction;
-      const { trip } = resolveTrip(guildId);
       const state = cache.get(guildId, user.id);
 
       if (!state || !state.depositCurrency || !state.depositCollectorId || !state.depositPayerIds) {
         return interaction.reply({ content: '⚠️ 快取失效，請重新操作。', flags: MessageFlags.Ephemeral });
+      }
+
+      // 🔒 [修正：race condition] 用流程一開始（選幣別那一步）鎖定的 tripId，
+      // 而不是重新查詢「現在」的作用行程，避免這幾步操作期間使用者切換了
+      // 自己的作用行程，導致訂金被寫入錯誤的行程。找不到（例如行程已被刪除）
+      // 就直接中止，不寫入任何資料。
+      const trip = resolveTripById(guildId, state.tripId);
+      if (!trip) {
+        cache.delete(guildId, user.id);
+        return interaction.reply({ content: '⚠️ 找不到原本的行程（可能已被刪除），操作已取消，請重新開始。', flags: MessageFlags.Ephemeral });
       }
 
       let note = '預收款/訂金';
@@ -129,9 +139,21 @@ async function handleModal(interaction, cache) {
 
     if (interaction.customId.startsWith('exp_modal_add_')) {
       const { guildId, user } = interaction;
-      const { trip } = resolveTrip(guildId);
 
-      const currency = interaction.customId.replace('exp_modal_add_', '');
+      // 🔒 [修正：race condition] customId 可能帶有「::<tripId>」鎖定後綴
+      // （見 buttonHandler.js / selectMenuHandler.js 開啟這個 Modal 的地方），
+      // 代表這是「選幣別當下」就鎖定好的行程，優先用它，而不是重新查一次
+      // 現在的作用行程；沒有鎖定資訊時（理論上不會發生）才退回舊行為。
+      const [rawId, pinnedTripId] = interaction.customId.split('::');
+      const trip = pinnedTripId
+        ? resolveTripById(guildId, pinnedTripId)
+        : resolveTrip(guildId, null, user.id).trip;
+
+      if (!trip) {
+        return interaction.reply({ content: '⚠️ 找不到行程（可能已被刪除），請重新操作一次。', flags: MessageFlags.Ephemeral });
+      }
+
+      const currency = rawId.replace('exp_modal_add_', '');
       const desc = interaction.fields.getTextInputValue('desc');
       const amount = parseMoneyInput(interaction.fields.getTextInputValue('amount'));
       const customRateStr = interaction.fields.getTextInputValue('custom_rate');
@@ -169,7 +191,10 @@ async function handleModal(interaction, cache) {
         amount,
         currency,
         exchangeRate: actualRate,
-        rateSource
+        rateSource,
+        // 🔒 把鎖定的 tripId 一併存進狀態，讓「選代墊人 → 選分攤方式 → 送出」
+        // 這整條後續流程都繼續鎖定在同一個行程上。
+        tripId: trip.id
       });
 
       const embed = new EmbedBuilder()
@@ -197,10 +222,13 @@ async function handleModal(interaction, cache) {
 
     if (interaction.customId === 'exp_modal_multi_payer') {
       const { guildId, user } = interaction;
-      const { trip } = resolveTrip(guildId);
       const state = cache.get(guildId, user.id);
       
       if (!state || !state.tempPayerIds) return interaction.reply({ content: '⚠️ 快取過期，請重新開啟。', flags: MessageFlags.Ephemeral });
+
+      // 這一步只是彙整代墊金額、還不會寫入行程資料，故不需要在此解析 trip；
+      // 實際寫入（completeExpenseLoggingWithShares／completeExpenseLogging）
+      // 會統一使用 state.tripId 鎖定的行程。
 
       let sum = 0;
       const payers = [];
@@ -228,11 +256,18 @@ async function handleModal(interaction, cache) {
 
     if (interaction.customId === 'exp_modal_custom_split') {
       const { guildId, user } = interaction;
-      const { trip } = resolveTrip(guildId);
       const state = cache.get(guildId, user.id);
 
       if (!state || !state.tempCustomParticipantIds) {
         return interaction.reply({ content: '⚠️ 快取過期，請重新開啟。', flags: MessageFlags.Ephemeral });
+      }
+
+      // 🔒 [修正：race condition] 沿用「新增花費」流程一開始鎖定的 tripId，
+      // 而不是重新查一次現在的作用行程，最終寫入時就不會跑到別的行程去。
+      const trip = resolveTripById(guildId, state.tripId);
+      if (!trip) {
+        cache.delete(guildId, user.id);
+        return showMainMenu(interaction, '⚠️ **記帳已取消**：找不到原本的行程（可能已被刪除）。');
       }
 
       const shares = [];

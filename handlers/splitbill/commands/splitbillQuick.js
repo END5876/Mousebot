@@ -33,7 +33,8 @@ module.exports = {
 
   async execute(interaction) {
     const { guildId, user } = interaction;
-    const { trip, error } = resolveTrip(guildId);
+    // 🔒 [修正：切換行程影響全體] 用發起指令的使用者自己的作用行程
+    const { trip, error } = resolveTrip(guildId, null, user.id);
 
     if (!trip) {
       return interaction.reply({

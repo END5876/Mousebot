@@ -22,7 +22,14 @@ const DEFAULT_TRIP = () => ({
 });
 
 const DEFAULT_GUILD = () => ({
-  activeTripId: null,
+  // 🔄 [修正：切換行程影響全體] 舊版用單一 activeTripId 讓「整個伺服器」共用同一個
+  // 作用中行程，任何人按下「切換行程」都會讓全部人的畫面一起跳轉，甚至讓別人正在
+  // 操作到一半的記帳流程被切換到別的行程去。
+  // 新版拆成兩個欄位：
+  //   - defaultTripId：伺服器層級的「預設」行程，只在使用者「從未自己選過」時作為後備
+  //   - activeTripByUser：{ [userId]: tripId }，每個使用者各自獨立的作用中行程
+  defaultTripId: null,
+  activeTripByUser: {},
   trips: {},
 });
 
@@ -106,13 +113,30 @@ function repairGuild(rawGuild) {
   const guild = { ...def, ...(rawGuild || {}) };
   guild.trips = typeof guild.trips === 'object' && guild.trips !== null ? guild.trips : {};
 
+  // 🔄 舊資料相容：把舊版全域 activeTripId 遷移成新版 defaultTripId，
+  // 讓升級前就存在的伺服器不會突然找不到行程。
+  if (rawGuild && rawGuild.activeTripId && !guild.defaultTripId) {
+    guild.defaultTripId = rawGuild.activeTripId;
+  }
+  delete guild.activeTripId;
+
+  guild.activeTripByUser = (typeof guild.activeTripByUser === 'object' && guild.activeTripByUser !== null)
+    ? guild.activeTripByUser
+    : {};
+
   for (const tripId of Object.keys(guild.trips)) {
     guild.trips[tripId] = repairTrip(guild.trips[tripId]);
     guild.trips[tripId].id = tripId; // 確保 key 與 id 一致
   }
 
-  if (guild.activeTripId && !guild.trips[guild.activeTripId]) {
-    guild.activeTripId = null; // 指向不存在的行程時清空，避免崩潰
+  if (guild.defaultTripId && !guild.trips[guild.defaultTripId]) {
+    guild.defaultTripId = null; // 指向不存在的行程時清空，避免崩潰
+  }
+
+  // 個人指標若指向已刪除的行程，一併清掉，避免資料檔越長越大
+  for (const uid of Object.keys(guild.activeTripByUser)) {
+    const tid = guild.activeTripByUser[uid];
+    if (!tid || !guild.trips[tid]) delete guild.activeTripByUser[uid];
   }
 
   return guild;

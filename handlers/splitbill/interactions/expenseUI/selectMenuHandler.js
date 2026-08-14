@@ -4,14 +4,15 @@ const {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, MessageFlags
 } = require('discord.js');
-const { resolveTrip, memberDisplay } = require('../../utils/tripHelper');
+const { resolveTrip, resolveTripById, memberDisplay } = require('../../utils/tripHelper');
 const { formatAmountConversion, formatParticipantsList } = require('./helpers');
 const { parseScanItemSuffix, scanItemCacheUserId, buildScanResultView, SCAN_CURRENCY_CUSTOM_VALUE } = require('./billScan');
 const { renderSplitMethodUI, completeExpenseLogging } = require('./expenseCompletion');
 
 async function handleSelectMenu(interaction, cache) {
     const { customId, guildId, values, user } = interaction;
-    const { trip } = resolveTrip(guildId);
+    // 🔒 [修正：切換行程影響全體] 用發起互動的使用者自己的作用行程
+    const { trip } = resolveTrip(guildId, null, user.id);
 
     if (customId.startsWith('exp_select_scan_currency')) {
       const { batchId, index } = parseScanItemSuffix(customId, 'exp_select_scan_currency');
@@ -63,7 +64,11 @@ async function handleSelectMenu(interaction, cache) {
 
     if (customId === 'exp_select_deposit_currency') {
       const selectedCurrency = values[0];
-      cache.set(guildId, user.id, { depositCurrency: selectedCurrency });
+      // 🔒 [修正：race condition] 從流程一開始就把「目前這個行程」的 ID 鎖進暫存
+      // 狀態裡，後續每一步（選收款人/付款人/輸入金額）都用這個 tripId 直接找行程，
+      // 不再重新查「現在的作用行程」，這樣就算使用者中途手滑切換了自己的作用行程，
+      // 這筆訂金仍然會正確寫入「一開始選幣別時」的那個行程。
+      cache.set(guildId, user.id, { depositCurrency: selectedCurrency, tripId: trip.id });
 
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
@@ -141,8 +146,10 @@ async function handleSelectMenu(interaction, cache) {
 
     if (customId === 'exp_select_currency') {
       const selectedCurrency = values[0];
+      // 🔒 [修正：race condition] 把當下這個行程的 ID 鎖進 Modal 的 customId，
+      // 送出表單時直接鎖定這個 tripId，不受使用者中途切換作用行程影響。
       const modal = new ModalBuilder()
-        .setCustomId(`exp_modal_add_${selectedCurrency}`)
+        .setCustomId(`exp_modal_add_${selectedCurrency}::${trip.id}`)
         .setTitle(`步驟 2/3：新增花費 (${selectedCurrency})`);
 
       const descInput = new TextInputBuilder().setCustomId('desc').setLabel('項目名稱 (例如：計程車、晚餐)').setStyle(TextInputStyle.Short).setRequired(true);
@@ -187,7 +194,10 @@ async function handleSelectMenu(interaction, cache) {
       const participantIds = values.filter(id => trip.members.some(m => m.id === id));
       if (!participantIds.length) return interaction.reply({ content: '⚠️ 所選成員皆不在行程中。', flags: MessageFlags.Ephemeral });
 
-      return completeExpenseLogging(interaction, trip, state, participantIds, cache);
+      // 🔒 [修正：race condition] 最終寫入時，優先使用流程一開始鎖定的 tripId，
+      // 而不是這次互動當下重新查到的作用行程——避免中途漂移到別的行程。
+      const pinnedTrip = resolveTripById(guildId, state.tripId) || trip;
+      return completeExpenseLogging(interaction, pinnedTrip, state, participantIds, cache);
     }
 
     if (customId === 'exp_select_custom_participants') {
