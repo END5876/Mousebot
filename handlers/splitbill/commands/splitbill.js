@@ -19,7 +19,8 @@ module.exports = {
    */
   async showMainMenu(interaction, alertMsg = null) {
     const guildId = interaction.guildId;
-    const { trip } = resolveTrip(guildId); // 抓取目前伺服器啟用中的行程
+    // 🔒 [修正：切換行程影響全體] 抓取「這個使用者自己」的作用行程，而非全伺服器共用一個
+    const { trip } = resolveTrip(guildId, null, interaction.user.id);
 
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
@@ -47,7 +48,7 @@ module.exports = {
       // 剩下的「累計帳目」與「總花費」合併成一個滿版（非 inline）欄位，改用換行分開兩項資訊，
       // 避免手機寬度不夠時，長金額文字把整列擠爆或截斷。
       embed.addFields(
-        { name: '🧳 當前作用行程', value: `**${trip.name}**`, inline: true },
+        { name: '🧳 你的作用行程', value: `**${trip.name}**`, inline: true },
         { name: '🪙 基準幣別', value: `\`${trip.baseCurrency}\``, inline: true },
         { name: '👥 行程人數', value: `\`${trip.members.length} 人\``, inline: true },
         {
@@ -59,7 +60,7 @@ module.exports = {
     } else {
       embed.addFields({
         name: '⚠️ 提示',
-        value: '目前此伺服器尚未設定或選擇任何行程。請點選下方 **「🧳 行程設定」** 開始建立第一個行程！'
+        value: '你尚未設定或選擇任何行程。請點選下方 **「🧳 行程設定」** 建立或選擇一個行程！'
       });
     }
 

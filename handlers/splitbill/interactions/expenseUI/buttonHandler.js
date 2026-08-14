@@ -5,7 +5,7 @@ const {
   ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, MessageFlags
 } = require('discord.js');
 const storage = require('../../utils/storage');
-const { resolveTrip, memberDisplay } = require('../../utils/tripHelper');
+const { resolveTrip, resolveTripById, memberDisplay } = require('../../utils/tripHelper');
 const { showMainMenu } = require('../../commands/splitbill');
 const { parseLedgerSuffix } = require('./helpers');
 const { stopActiveBillScan, parseScanItemSuffix, scanItemCacheUserId } = require('./billScan');
@@ -14,8 +14,9 @@ const { renderLedgerPage } = require('./ledger');
 const { completeExpenseLogging } = require('./expenseCompletion');
 
 async function handleButton(interaction, cache) {
-    const { customId, guildId } = interaction;
-    const { trip } = resolveTrip(guildId);
+    const { customId, guildId, user } = interaction;
+    // 🔒 [修正：切換行程影響全體] 用發起互動的使用者自己的作用行程
+    const { trip } = resolveTrip(guildId, null, user.id);
 
     // 除了「開始掃描」本身（它會在 startBillScan 內部自行處理舊 collector 的替換）之外，
     // 只要使用者點了任何其他按鈕，就視為離開了帳單掃描等待畫面，
@@ -127,7 +128,7 @@ async function handleButton(interaction, cache) {
       const { description, amount, currency } = state.scanResult;
 
       const modal = new ModalBuilder()
-        .setCustomId(`exp_modal_add_${currency}`)
+        .setCustomId(`exp_modal_add_${currency}::${trip.id}`)
         .setTitle(`確認並送出花費 (${currency})`);
 
       const descInput = new TextInputBuilder()
@@ -210,7 +211,9 @@ async function handleButton(interaction, cache) {
       const state = cache.get(guildId, interaction.user.id);
       if (!state) return interaction.reply({ content: '⚠️ 狀態過期，請重新操作。', flags: MessageFlags.Ephemeral });
       const allMemberIds = trip.members.map(m => m.id);
-      return completeExpenseLogging(interaction, trip, state, allMemberIds, cache);
+      // 🔒 [修正：race condition] 優先用流程一開始鎖定的 tripId 寫入，避免中途漂移
+      const pinnedTrip = resolveTripById(guildId, state.tripId) || trip;
+      return completeExpenseLogging(interaction, pinnedTrip, state, allMemberIds, cache);
     }
 
     if (customId === 'exp_btn_split_custom') {

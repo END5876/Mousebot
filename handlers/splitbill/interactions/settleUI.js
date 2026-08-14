@@ -99,8 +99,8 @@ function toTreeBlock(sections, flatLines) {
 
 module.exports = {
   async handleButton(interaction, cache) {
-    const { customId, guildId } = interaction;
-    const { trip } = resolveTrip(guildId);
+    const { customId, guildId, user } = interaction;
+    const { trip } = resolveTrip(guildId, null, user.id);
     if (customId === 'nav_main') {
       return showMainMenu(interaction);
     }
@@ -240,8 +240,8 @@ module.exports = {
   },
 
   async handleSelectMenu(interaction) {
-    const { customId, guildId, values } = interaction;
-    const { trip } = resolveTrip(guildId);
+    const { customId, guildId, values, user } = interaction;
+    const { trip } = resolveTrip(guildId, null, user.id);
 
     if (customId === 'set_select_convert_target') {
       const targetCurrency = values[0];

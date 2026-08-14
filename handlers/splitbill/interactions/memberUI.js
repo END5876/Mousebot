@@ -2,13 +2,13 @@
 
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, UserSelectMenuBuilder, StringSelectMenuBuilder, MessageFlags } = require('discord.js');
 const storage = require('../utils/storage');
-const { resolveTrip } = require('../utils/tripHelper');
+const { resolveTrip, wouldLeaveTripNonEmpty } = require('../utils/tripHelper');
 const { showMainMenu } = require('../commands/splitbill');
 
 module.exports = {
   async handleButton(interaction) {
-    const { customId, guildId } = interaction;
-    const { trip } = resolveTrip(guildId);
+    const { customId, guildId, user } = interaction;
+    const { trip } = resolveTrip(guildId, null, user.id);
     
     if (customId === 'nav_main') return showMainMenu(interaction);
 
@@ -39,15 +39,28 @@ module.exports = {
         return interaction.reply({ content: '⚠️ 目前行程內沒有任何成員可供移除。', flags: MessageFlags.Ephemeral });
       }
 
-      const embed = new EmbedBuilder().setColor(0xe74c3c).setTitle('🗑️ 從行程移出成員').setDescription('請從下方選單選取欲退出的成員 (可多選)：');
+      // 🔒 [修正：孤兒行程] 只剩最後 1 位成員時，不允許再透過「移除成員」把最後
+      // 一人移出——那會讓行程變成 0 成員，之後任何人（含原成員）都無法再操作或刪除它。
+      // 如果真的要結束這個行程，請引導使用者改走「🧳 行程設定 → ❌ 刪除此行程」。
+      if (trip.members.length === 1) {
+        return interaction.reply({
+          content: '⚠️ 這是行程「' + trip.name + '」的最後 1 位成員，無法移除——移除後將沒有任何人能再操作或刪除這個行程。\n如果要結束這趟行程，請改用「🧳 行程設定 → ❌ 刪除此行程」。',
+          flags: MessageFlags.Ephemeral
+        });
+      }
+
+      const embed = new EmbedBuilder().setColor(0xe74c3c).setTitle('🗑️ 從行程移出成員').setDescription('請從下方選單選取欲退出的成員 (可多選)：\n*(至少需保留 1 位成員，所以最多只能整批選到剩 1 人)*');
       
       const memberOptions = trip.members.slice(0, 25).map(m => ({ label: m.name, value: m.id }));
+      // 🔒 上限設為「總數 - 1」，讓使用者在選單層級就不可能一次選光所有成員，
+      // 而不是等送出後才被攔下來——UI 上直接不給選超過安全範圍。
+      const maxRemovable = Math.max(1, memberOptions.length - 1);
       const menuRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId('mem_select_remove')
           .setPlaceholder('選取退出成員 (可多選)...')
           .setMinValues(1)
-          .setMaxValues(memberOptions.length) // 💡 允許一次選擇多個行程內的成員
+          .setMaxValues(maxRemovable)
           .addOptions(memberOptions)
       );
       
@@ -66,8 +79,8 @@ module.exports = {
   },
 
   async handleSelectMenu(interaction) {
-    const { customId, guildId, values } = interaction;
-    const { trip } = resolveTrip(guildId);
+    const { customId, guildId, values, user } = interaction;
+    const { trip } = resolveTrip(guildId, null, user.id);
 
     if (customId === 'mem_select_add') {
       let addedCount = 0;
@@ -85,6 +98,18 @@ module.exports = {
 
     if (customId === 'mem_select_remove') {
       const targetUserIds = values; // 💡 這裡現在是一個包含多個 ID 的陣列
+
+      // 🔒 [修正：孤兒行程] 最終防線——即使上面 UI 層已經把選單上限設為「總數-1」，
+      // 仍可能因為多人同時操作、或成員名單在選擇期間被別人改動等情況，讓「移除後
+      // 剩餘成員數」在送出當下才變成 0。這裡以當下最新的 trip.members 重新驗證一次，
+      // 只要會導致 0 成員就整批拒絕、完全不寫入，不留下任何孤兒行程。
+      if (!wouldLeaveTripNonEmpty(trip, targetUserIds)) {
+        return interaction.reply({
+          content: `❌ 無法移除：這會讓行程「${trip.name}」變成 0 位成員，屆時將沒有任何人能再操作或刪除它。請至少保留 1 位成員（如需結束行程，請改用「🧳 行程設定 → ❌ 刪除此行程」）。`,
+          flags: MessageFlags.Ephemeral
+        });
+      }
+
       const beforeLength = trip.members.length;
       
       // 💡 過濾掉所有被選中的成員
