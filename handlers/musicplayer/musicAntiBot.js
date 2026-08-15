@@ -216,11 +216,21 @@ function buildYouTubeArgs(url, strategy, streamMode = true) {
   args.push(
     '--user-agent',  YOUTUBE_HEADERS['User-Agent'],
     '--add-header',  `Accept-Language:${YOUTUBE_HEADERS['Accept-Language']}`,
-    '--sleep-requests',     '1',
-    '--sleep-interval',     '1',
-    '--max-sleep-interval', '3',
-    '--no-check-certificate', '--ignore-errors'
   );
+
+  // ⚡ 效能優化：--sleep-* 是刻意放慢 yt-dlp 對外請求速度以避免被判定為機器人，
+  // 但這在 streamMode（即時串流播放，使用者正在等下一首歌）下會直接變成
+  // 使用者聽得到的「切歌延遲」。背景快取下載（streamMode=false）不卡播放流程，
+  // 才需要保留這個偽裝節流；即時播放路徑則跳過，換取反應速度。
+  if (!streamMode) {
+    args.push(
+      '--sleep-requests',     '1',
+      '--sleep-interval',     '1',
+      '--max-sleep-interval', '3',
+    );
+  }
+
+  args.push('--no-check-certificate', '--ignore-errors');
 
   args.push(url);
   return args;
@@ -242,9 +252,20 @@ function buildBilibiliArgs(url, streamMode = true) {
     '--referer',    BILIBILI_HEADERS['Referer'],
     '--add-header', `Origin:${BILIBILI_HEADERS['Origin']}`,
     '--add-header', `Accept:${BILIBILI_HEADERS['Accept']}`,
-    '--sleep-requests',     '2',
-    '--sleep-interval',     '2',
-    '--max-sleep-interval', '5',
+  );
+
+  // ⚡ 效能優化：同 YouTube，sleep 節流只在背景快取下載時保留；
+  // 即時串流播放（streamMode=true）拿掉，Bilibili 這組原本最多可能睡到 5 秒，
+  // 是切歌延遲感最明顯的來源之一。
+  if (!streamMode) {
+    args.push(
+      '--sleep-requests',     '2',
+      '--sleep-interval',     '2',
+      '--max-sleep-interval', '5',
+    );
+  }
+
+  args.push(
     '--no-check-certificate',
     '--extractor-args', 'bilibili:getcomments=false',
     '--extractor-args', 'bilibili:getdanmaku=false'
