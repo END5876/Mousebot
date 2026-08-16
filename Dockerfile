@@ -81,5 +81,8 @@ RUN apt-get purge -y make g++ && apt-get autoremove -y && rm -rf /var/lib/apt/li
 # ── 複製專案檔案 ────────────────────────────────────────
 COPY . .
 
+# ── 分帳系統網頁記帳介面 ────────────────────────────────
+EXPOSE 3000
+
 # ── 啟動 ────────────────────────────────────────────────
 CMD ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
