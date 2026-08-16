@@ -17,6 +17,9 @@ const { setupTimeAnnouncer }     = require('./handlers/notice/timeAnnouncer');
 // ── 導入分帳系統 ────────────────────────
 const { setupSplitbillCommands } = require('./handlers/splitbill/index');
 
+// ── 分帳系統的網頁記帳介面（與 Bot 同一個 process 共用資料快取）──
+const { startWebApi } = require('./webui/server');
+
 // ── 重構後的音樂模組 ───────────────────────────────────────
 const { setupUnifiedCommands }   = require('./handlers/musicplayer/unifiedQueue');
 const { setupOnlineMusicEngine } = require('./handlers/musicplayer/onlineMusicHandler');
@@ -124,6 +127,15 @@ client.once('clientReady', async () => {
   });
 
   await registerSlashCommands();
+
+  // ── 啟動分帳系統的網頁記帳介面 ──────────────────────────
+  try {
+    startWebApi({ port: process.env.SPLITBILL_WEB_PORT || 3000 });
+    bootSummary.report('分帳網頁介面 (webui)', 'ok', `監聽埠 ${process.env.SPLITBILL_WEB_PORT || 3000}`);
+  } catch (err) {
+    bootSummary.report('分帳網頁介面 (webui)', 'off', `啟動失敗: ${err.message}`);
+    console.error('❌ 分帳網頁介面啟動失敗:', err);
+  }
 
   // ── 所有模組都已回報狀態，統一印出開機摘要 ────────────
   bootSummary.print();
