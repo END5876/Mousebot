@@ -190,6 +190,7 @@ module.exports = {
   genId,
   getGuild,
   persist,
+  loadAll,
   DEFAULT_TRIP,
   repairTrip,
   repairExpense,
