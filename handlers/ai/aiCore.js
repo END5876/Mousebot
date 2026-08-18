@@ -58,8 +58,10 @@ const GENERAL_TEXT_ADDON = `
 
 ## 全局回覆與注意力規則
 - 【最高優先】請務必針對使用者的「最新一則訊息」與「當下指令」進行回覆。歷史紀錄與引用訊息僅供語境參考。
-- 【格式區分】對話中會以「【發言者：暱稱】」來標示是誰說的話。絕對不要把暱稱當成對話內容來回答！
+- 【格式區分】對話中會以「【發言者：暱稱 | 回覆他時：語氣描述】」來標示是誰說的話，以及你回覆那個人時應使用的語氣。絕對不要把暱稱或標籤當成對話內容來回答！
 - 絕對不要輸出「【發言者：...】」這樣的標籤，請直接給出回覆內容即可。
+- 「回覆他時：...」標籤只規範你**主動回覆或直接回應那個人**時的語氣，不影響你對頻道內容的客觀理解與陳述。
+- 對話歷史中，帶有「[背景參考 → 先前對 ...」標註的訊息，是你過去對其他人說的話，僅供了解頻道脈絡，不要把那段話的語氣或稱謂帶入當前對話。
 - 若為日常閒聊或一般對話，回覆字數請盡量控制在 30 字以內，保持自然、簡短的聊天節奏。
 - 若使用者詢問技術問題、需要詳細解說或撰寫程式碼時，則不受此字數限制，請給出完整的解答。
 `;
@@ -134,6 +136,60 @@ function getModel(mode, isVoice = false) {
 }
 
 // ════════════════════════════════════════════════════════
+//  語氣淨化：對非目標使用者的機器人訊息進行中性化處理
+// ════════════════════════════════════════════════════════
+const SANITIZE_SYSTEM_PROMPT = `你是一個文字處理工具，負責將帶有特定人格語氣的訊息進行「語氣淨化」。
+
+你的任務：
+1. 完整保留原文中所有的事實內容、承諾、資訊、答案與條件。
+2. 將語氣改為中性、平鋪直敘的陳述方式，像是在轉述一段對話紀錄。
+3. 只輸出淨化後的純文字內容，不要加任何前綴、說明或標點符號以外的格式。
+4. 不要改變原文的語言（繁體中文維持繁體中文）。`;
+
+// 語氣淨化快取，避免對同一訊息重複呼叫 API
+const sanitizeCache = new Map();
+const SANITIZE_CACHE_MAX = 500;
+
+async function sanitizeBotMessage(text, targetUserName) {
+    if (!text?.trim()) return text;
+
+    const cacheKey = `${targetUserName}::${text}`;
+    if (sanitizeCache.has(cacheKey)) {
+        return sanitizeCache.get(cacheKey);
+    }
+
+    try {
+        const sanitizeModel = genAI.getGenerativeModel({
+            model: MODEL_NAME,
+            systemInstruction: SANITIZE_SYSTEM_PROMPT,
+            safetySettings: [
+                { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_NONE },
+                { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_NONE },
+                { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+            ]
+        });
+
+        const result = await sanitizeModel.generateContent(
+            `請對以下訊息進行語氣淨化（這是機器人對「${targetUserName}」說的話）：\n\n${text}`
+        );
+        const sanitized = result.response.text().trim();
+        logTokenUsage(`sanitizeBotMessage / target:${targetUserName}`, result.response);
+
+        // 寫入快取，超過上限時刪除最舊的一筆
+        if (sanitizeCache.size >= SANITIZE_CACHE_MAX) {
+            const firstKey = sanitizeCache.keys().next().value;
+            sanitizeCache.delete(firstKey);
+        }
+        sanitizeCache.set(cacheKey, sanitized);
+        return sanitized;
+    } catch (err) {
+        console.warn('[Sanitize] 語氣淨化失敗，使用原文：', err.message);
+        return text;
+    }
+}
+
+// ════════════════════════════════════════════════════════
 //  歷史記錄
 // ════════════════════════════════════════════════════════
 function mergeConsecutiveRoles(history) {
@@ -153,15 +209,30 @@ function mergeConsecutiveRoles(history) {
     return merged;
 }
 
-function isBotReplyToUser(msg, userId, fetchedMessages) {
-    if (msg.reference?.messageId) {
-        const refMsg = fetchedMessages.get(msg.reference.messageId);
-        if (refMsg && refMsg.author.id === userId) return true;
-        if (!refMsg || refMsg.author.id !== userId) return false;
+// ════════════════════════════════════════════════════════
+//  輔助：取得使用者的回覆語氣標籤（用於歷史紀錄標注）
+// ════════════════════════════════════════════════════════
+function getModeLabel(targetUserId, targetUserName, currentUserId) {
+    const mode = selectMode(targetUserId, '');
+    const modeModule = MODE_MAP[mode];
+    const desc = modeModule?.shortDescription ?? null;
+
+    if (targetUserId === currentUserId) {
+        // 當前對話者：標示為主要對象，附上語氣描述（若有）
+        return desc
+            ? `【發言者：${targetUserName} | 回覆他時：${desc} | ← 當前對話者】`
+            : `【發言者：${targetUserName} | ← 當前對話者】`;
+    } else {
+        // 其他人：標示語氣描述（若有），無則標示中立
+        return desc
+            ? `【發言者：${targetUserName} | 回覆他時：${desc}】`
+            : `【發言者：${targetUserName} | 回覆他時：中立禮貌】`;
     }
-    return true;
 }
 
+// ════════════════════════════════════════════════════════
+//  完整頻道時間軸歷史記錄（第二步：保留所有人的發言）
+// ════════════════════════════════════════════════════════
 async function fetchUserChannelHistory(channel, userId, currentMessageId, botId) {
     try {
         const channelId = channel.id;
@@ -182,21 +253,21 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
         const currentTimestamp = currentMsg?.createdTimestamp ?? Date.now();
         const clearTime        = getMemoryClearTime(userId);
 
+        // ── 第二步：保留時間窗內所有人的完整發言，不再依使用者篩選 ──
         let relevantMessages = fetched
             .filter(msg => {
                 if (msg.id === currentMessageId) return false;
                 if ((currentTimestamp - msg.createdTimestamp) > HISTORY_TIME_LIMIT_MS) return false;
                 if (msg.createdTimestamp <= clearTime) return false;
-                
+
                 const textContent = msg.cleanContent || msg.content;
                 if (!textContent?.trim().length && msg.attachments.size === 0) return false;
-                
-                if (msg.author.id === userId) return true;
-                if (msg.author.id === botId) return isBotReplyToUser(msg, userId, fetched);
-                return false;
+
+                return true; // 保留所有人（使用者、機器人、其他人）的發言
             })
             .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 
+        // 移除開頭連續的機器人訊息，確保歷史以使用者發言開頭
         while (relevantMessages.size > 0) {
             const first = relevantMessages.first();
             if (first.author.id === botId) {
@@ -204,27 +275,48 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
             } else break;
         }
 
-        relevantMessages = relevantMessages.last(HISTORY_PAIR_LIMIT);
+        relevantMessages = relevantMessages.last(HISTORY_PAIR_LIMIT * 3); // 擴大取樣範圍以容納多人對話
 
         const history = [];
         for (const msg of relevantMessages.values()) {
             const parts = [];
+
+            // 處理附件圖片
             if (msg.attachments.size > 0) {
                 const imgParts = await processAttachments(msg.attachments);
                 imgParts.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } }));
             }
-            
+
             const textContent = msg.cleanContent || msg.content;
-            if (textContent?.trim().length > 0) {
-                // 歷史紀錄中，明確標示發言者
-                if (msg.author.id === botId) {
-                    parts.push({ text: textContent.trim() });
+
+            if (msg.author.id === botId) {
+                // ── 第一步 & 第三步：查詢機器人訊息的原始對象，決定是否進行語氣淨化 ──
+                const cachedCtx = getBotMessageContext(msg.id);
+
+                if (cachedCtx && cachedCtx.userId !== userId) {
+                    // 這句話是機器人對「其他人」說的 → 進行語氣淨化並加上背景標註
+                    const targetUserName = cachedCtx.userName ?? '其他人';
+                    if (textContent?.trim().length > 0) {
+                        const sanitized = await sanitizeBotMessage(textContent.trim(), targetUserName);
+                        parts.push({ text: `[背景參考 → 先前對 ${targetUserName} 說的話]\n${sanitized}` });
+                    }
                 } else {
-                    parts.push({ text: `【發言者：${msg.author.username}】\n${textContent.trim()}` });
+                    // 這句話是機器人對「目前使用者」說的（或快取中查不到，保守處理不動）
+                    if (textContent?.trim().length > 0) {
+                        parts.push({ text: textContent.trim() });
+                    }
+                }
+            } else {
+                // ── 第四步：人類使用者的發言，原封不動，加上含回覆語氣的結構化標籤 ──
+                if (textContent?.trim().length > 0) {
+                    const label = getModeLabel(msg.author.id, msg.author.username, userId);
+                    parts.push({ text: `${label}\n${textContent.trim()}` });
                 }
             }
-            
+
             if (parts.length === 0) parts.push({ text: '[使用者傳了一張無法讀取的圖片]' });
+
+            // 機器人訊息 → model role；其他人（包含目前使用者及其他人類）→ user role
             history.push({ role: msg.author.id === botId ? 'model' : 'user', parts });
         }
 
@@ -237,7 +329,7 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
             finalHistory = [];
         }
 
-        console.log(`[History] 載入 ${finalHistory.length} 筆對話紀錄`);
+        console.log(`[History] 載入 ${finalHistory.length} 筆對話紀錄（完整頻道時間軸）`);
         return finalHistory;
     } catch (err) {
         console.error('[History] 抓取頻道歷史失敗：', err.message);
