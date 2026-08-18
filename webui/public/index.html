@@ -2,10 +2,11 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#1B2731">
 <title>拆帳本｜Mousebot Splitbill</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@500;700;900&family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@500;700;900&family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" referrerpolicy="no-referrer-when-downgrade">
 <style>
   :root{
     --ink:#1E2A33;
@@ -13,15 +14,20 @@
     --paper:#EEF0E6;
     --card:#FBFBF6;
     --card-line:#D9DCC9;
-    --brass:#9C7A34;
+    --brass:#8A6A28;         /* 深化以提高文字對比度，且此後只代表「跟 Bot 雲端同步」 */
+    --brass-bg:#9C7A34;
     --brass-soft:#C9A85C;
     --credit:#2F6E52;
     --credit-bg:#E4EFE7;
     --debt:#A63D3D;
     --debt-bg:#F5E6E2;
+    --header-bg:#1B2731;
     --shadow: 0 1px 0 rgba(30,42,51,0.06), 0 8px 24px rgba(30,42,51,0.06);
+    --safe-b: env(safe-area-inset-bottom, 0px);
+    --bottomnav-h: 62px;
+    --focus-ring: 0 0 0 3px rgba(154,116,52,0.35);
   }
-  *{box-sizing:border-box;}
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{margin:0;padding:0;}
   body{
     background:
@@ -30,158 +36,258 @@
     color:var(--ink);
     font-family:'Noto Sans TC', system-ui, sans-serif;
     min-height:100vh;
-    padding:28px 16px 80px;
+    padding-bottom: calc(var(--bottomnav-h) + var(--safe-b) + 18px);
   }
-  .wrap{max-width:920px;margin:0 auto;}
+  .wrap{max-width:880px; margin:0 auto; padding:0 14px;}
+  a{color:inherit;}
 
-  /* ---------- Header / passbook cover ---------- */
-  .cover{
+  /* ---------- Focus visibility (a11y) ---------- */
+  a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
+  textarea:focus-visible, [tabindex]:focus-visible{
+    outline:2px solid var(--brass); outline-offset:2px; border-radius:4px;
+  }
+
+  /* ---------- Sticky app header ---------- */
+  .app-header{
+    position:sticky; top:0; z-index:50;
     background:linear-gradient(155deg,#22303A,#1B2731 60%,#182229);
     color:#F3EEDD;
-    border-radius:14px;
-    padding:26px 28px;
-    box-shadow:var(--shadow);
-    position:relative;
-    overflow:hidden;
+    padding:calc(10px + env(safe-area-inset-top, 0px)) 14px 10px;
+    box-shadow:0 2px 10px rgba(0,0,0,0.18);
   }
-  .cover::before{
-    content:"";
-    position:absolute; inset:0;
-    background:
-      radial-gradient(circle at 88% -10%, rgba(201,168,92,0.25), transparent 45%);
-    pointer-events:none;
+  .app-header-inner{max-width:880px; margin:0 auto;}
+  .header-row1{display:flex; align-items:center; gap:10px;}
+  .header-row1 .brand{
+    font-family:'Noto Serif TC',serif; font-weight:900; font-size:16px;
+    color:var(--brass-soft); white-space:nowrap; letter-spacing:.02em;
   }
-  .cover .eyebrow{
-    font-family:'IBM Plex Mono',monospace;
-    font-size:11px;
-    letter-spacing:.18em;
-    color:var(--brass-soft);
-    text-transform:uppercase;
+  #tripName{
+    flex:1; min-width:0;
+    background:transparent; border:none; color:#F3EEDD;
+    font-family:'Noto Serif TC',serif; font-weight:700; font-size:16px;
+    padding:6px 8px; border-radius:6px;
   }
-  .cover h1{
-    font-family:'Noto Serif TC',serif;
-    font-weight:900;
-    font-size:28px;
-    margin:6px 0 14px;
-    letter-spacing:.02em;
+  #tripName:focus-visible{outline:2px solid var(--brass-soft); background:rgba(255,255,255,0.08);}
+  #tripName::placeholder{color:#8B978E;}
+  .header-currency{
+    background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.22);
+    color:#F3EEDD; padding:6px 8px; border-radius:8px; font-size:12.5px;
+    font-family:'IBM Plex Mono',monospace; max-width:92px; flex-shrink:0;
   }
-  .cover-row{display:flex; gap:14px; flex-wrap:wrap; align-items:flex-end;}
-  .cover-field{display:flex; flex-direction:column; gap:4px;}
-  .cover-field label{font-size:11px; color:#B9C2B8; font-family:'IBM Plex Mono',monospace;}
-  .cover-field input, .cover-field select{
-    background:rgba(255,255,255,0.08);
-    border:1px solid rgba(255,255,255,0.22);
-    color:#F3EEDD;
-    padding:8px 10px;
-    border-radius:8px;
-    font-family:'Noto Sans TC',sans-serif;
-    font-size:14px;
-    min-width:160px;
+  .header-currency option{color:#1E2A33;}
+  .status-pills{display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;}
+  .pill{
+    font-size:11px; padding:4px 10px; border-radius:20px;
+    display:inline-flex; align-items:center; gap:5px;
+    font-family:'IBM Plex Mono',monospace; cursor:pointer; border:none;
+    background:rgba(255,255,255,0.08); color:#C7CDC2;
   }
-  .cover-field input::placeholder{color:#8B978E;}
-  .cover-field select option{color:#1E2A33;}
+  .pill .dot{width:6px; height:6px; border-radius:50%; background:#7C8A80; flex-shrink:0;}
+  .pill.on{background:rgba(47,110,82,0.28); color:#B9EAC9;}
+  .pill.on .dot{background:#4FCB7E;}
+  .pill.warn{background:rgba(201,138,45,0.28); color:#F0D19B;}
+  .pill.warn .dot{background:#E2A23F;}
 
-  /* ---------- Tabs ---------- */
-  .tabs{
-    display:flex; gap:4px; margin-top:18px; flex-wrap:wrap;
-    border-bottom:2px solid var(--card-line);
-  }
-  .tab-btn{
-    font-family:'Noto Serif TC',serif;
-    font-weight:700;
-    font-size:14.5px;
+  /* ---------- Top tabs (desktop) ---------- */
+  .top-nav{display:none; gap:2px; margin-top:22px; border-bottom:2px solid var(--card-line);}
+  .top-nav .nav-btn{
+    font-family:'Noto Serif TC',serif; font-weight:700; font-size:14.5px;
     background:none; border:none; cursor:pointer;
-    padding:10px 16px 12px;
-    color:var(--ink-soft);
-    border-bottom:3px solid transparent;
-    margin-bottom:-2px;
-    transition:color .15s;
+    padding:10px 18px 12px; color:var(--ink-soft);
+    border-bottom:3px solid transparent; margin-bottom:-2px;
+    transition:color .15s; display:flex; align-items:center; gap:7px;
   }
-  .tab-btn.active{color:var(--ink); border-bottom-color:var(--brass);}
-  .tab-btn:hover{color:var(--ink);}
+  .top-nav .nav-btn.active{color:var(--ink); border-bottom-color:var(--brass-bg);}
+  .top-nav .nav-btn:hover{color:var(--ink);}
 
-  .panel{display:none; padding-top:20px; animation:fade .18s ease;}
+  /* ---------- Bottom nav (mobile) ---------- */
+  .bottom-nav{
+    position:fixed; left:0; right:0; bottom:0; z-index:60;
+    display:flex; background:var(--card);
+    border-top:1px solid var(--card-line);
+    padding-bottom:var(--safe-b);
+    box-shadow:0 -4px 16px rgba(30,42,51,0.08);
+  }
+  .bottom-nav .nav-btn{
+    flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:2px; background:none; border:none; cursor:pointer;
+    padding:9px 2px 7px; color:var(--ink-soft); font-size:10.5px;
+    font-family:'Noto Sans TC',sans-serif; font-weight:500;
+    min-height:var(--bottomnav-h);
+  }
+  .bottom-nav .nav-btn .ic{font-size:19px; line-height:1;}
+  .bottom-nav .nav-btn.active{color:var(--brass);}
+  .bottom-nav .nav-btn.has-dot{position:relative;}
+  .bottom-nav .nav-btn.has-dot .ic::after{
+    content:""; position:absolute; top:6px; right:calc(50% - 16px);
+    width:8px; height:8px; border-radius:50%; background:var(--debt); border:2px solid var(--card);
+  }
+
+  main{padding-top:16px;}
+  .panel{display:none; animation:fade .18s ease;}
   .panel.active{display:block;}
+  .subpanel{display:none; animation:fade .18s ease;}
+  .subpanel.active{display:block;}
   @keyframes fade{from{opacity:0; transform:translateY(3px);} to{opacity:1; transform:none;}}
 
+  .settings-subnav{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px;}
+  .subtab-btn{
+    font-family:'Noto Sans TC',sans-serif; font-weight:700; font-size:12.5px;
+    background:var(--card); border:1px solid var(--card-line); border-radius:20px;
+    padding:8px 14px; cursor:pointer; color:var(--ink-soft);
+  }
+  .subtab-btn.active{background:var(--ink); color:#F3EEDD; border-color:var(--ink);}
+
   h2.section-title{
-    font-family:'Noto Serif TC',serif; font-weight:700; font-size:18px;
-    margin:0 0 12px; display:flex; align-items:center; gap:8px;
+    font-family:'Noto Serif TC',serif; font-weight:700; font-size:17px;
+    margin:0 0 12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;
   }
-  h2.section-title .n{
-    font-family:'IBM Plex Mono',monospace; color:var(--brass); font-size:13px;
-  }
+  h2.section-title .n{font-family:'IBM Plex Mono',monospace; color:var(--brass); font-size:13px;}
 
   .card{
-    background:var(--card);
-    border:1px solid var(--card-line);
-    border-radius:12px;
-    padding:18px 20px;
-    box-shadow:var(--shadow);
-    margin-bottom:16px;
+    background:var(--card); border:1px solid var(--card-line); border-radius:12px;
+    padding:16px 16px; box-shadow:var(--shadow); margin-bottom:14px;
   }
 
   /* ---------- Forms ---------- */
   .field{margin-bottom:12px;}
-  .field label{display:block; font-size:12.5px; color:var(--ink-soft); margin-bottom:4px; font-weight:500;}
+  .field label{display:block; font-size:12.5px; color:var(--ink-soft); margin-bottom:5px; font-weight:500;}
   .row{display:flex; gap:12px; flex-wrap:wrap;}
-  .row > .field{flex:1; min-width:140px;}
-  input[type=text], input[type=number], select, textarea{
-    width:100%;
-    border:1px solid var(--card-line);
-    background:#fff;
-    padding:9px 11px;
-    border-radius:8px;
-    font-size:14px;
-    font-family:'Noto Sans TC',sans-serif;
-    color:var(--ink);
+  .row > .field{flex:1; min-width:130px;}
+  input[type=text], input[type=number], input[type=password], select, textarea{
+    width:100%; border:1px solid var(--card-line); background:#fff;
+    padding:11px 12px; border-radius:8px; font-size:15px;
+    font-family:'Noto Sans TC',sans-serif; color:var(--ink);
   }
   input:focus, select:focus, textarea:focus{outline:2px solid var(--brass-soft); outline-offset:1px;}
   textarea{font-family:'IBM Plex Mono',monospace; font-size:12.5px; resize:vertical;}
   .num{font-family:'IBM Plex Mono',monospace;}
+  .input-with-toggle{position:relative;}
+  .input-with-toggle input{padding-right:56px;}
+  .input-toggle-btn{
+    position:absolute; right:4px; top:50%; transform:translateY(-50%);
+    background:none; border:none; color:var(--ink-soft); font-size:11.5px;
+    padding:8px 8px; cursor:pointer; font-family:'IBM Plex Mono',monospace;
+  }
 
+  /* ---------- Buttons: 語意化色彩 ----------
+     ink    = 這個畫面「唯一」的主要動作
+     brass  = 只用在跟 Bot 雲端同步有關的動作（讀取/載入/存回 Bot）
+     ghost  = 次要、可逆、輔助性操作
+     danger = 破壞性操作（刪除）
+  */
   .btn{
-    font-family:'Noto Sans TC',sans-serif;
-    font-weight:700;
-    font-size:13.5px;
-    border:none;
-    border-radius:8px;
-    padding:9px 16px;
-    cursor:pointer;
-    transition:transform .1s, background .15s;
+    font-family:'Noto Sans TC',sans-serif; font-weight:700; font-size:14px;
+    border:none; border-radius:9px; padding:11px 18px; cursor:pointer;
+    transition:transform .1s, background .15s, opacity .15s; min-height:44px;
+    display:inline-flex; align-items:center; justify-content:center; gap:7px;
   }
   .btn:active{transform:scale(.97);}
-  .btn:disabled{opacity:.4; cursor:not-allowed; transform:none;}
+  .btn:disabled{opacity:.55; cursor:not-allowed; transform:none;}
   .btn-primary{background:var(--ink); color:#F3EEDD;}
   .btn-primary:hover{background:#0F171C;}
-  .btn-brass{background:var(--brass); color:#fff;}
-  .btn-brass:hover{background:#8A6A2C;}
+  .btn-brass{background:var(--brass-bg); color:#fff;}
+  .btn-brass:hover{background:var(--brass);}
   .btn-ghost{background:transparent; color:var(--ink-soft); border:1px solid var(--card-line);}
   .btn-ghost:hover{border-color:var(--ink-soft); color:var(--ink);}
   .btn-danger{background:transparent; color:var(--debt); border:1px solid var(--debt-bg);}
   .btn-danger:hover{background:var(--debt-bg);}
-  .btn-sm{padding:5px 10px; font-size:12px; border-radius:6px;}
+  .btn-sm{padding:7px 12px; font-size:12.5px; min-height:34px; border-radius:7px;}
   .btn-row{display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;}
+  .btn-block{width:100%;}
+
+  .spinner{
+    width:14px; height:14px; border-radius:50%;
+    border:2px solid rgba(255,255,255,0.4); border-top-color:#fff;
+    animation:spin .7s linear infinite; flex-shrink:0;
+  }
+  .btn-ghost .spinner, .btn-danger .spinner{border-color:rgba(30,42,51,0.25); border-top-color:var(--ink);}
+  @keyframes spin{to{transform:rotate(360deg);}}
 
   .chip-select{display:flex; flex-wrap:wrap; gap:8px;}
   .chip{
     display:flex; align-items:center; gap:8px;
-    border:1px solid var(--card-line); border-radius:20px;
-    padding:6px 12px 6px 10px; font-size:13px; cursor:pointer;
-    background:#fff; user-select:none;
+    border:1.5px solid var(--card-line); border-radius:20px;
+    padding:9px 14px 9px 12px; font-size:13.5px; cursor:pointer;
+    background:#fff; user-select:none; min-height:40px;
   }
-  .chip input{margin:0; accent-color:var(--brass);}
-  .chip.checked{border-color:var(--brass); background:#FBF4E4;}
+  .chip input[type=checkbox]{margin:0; accent-color:var(--brass-bg); width:17px; height:17px;}
+  .chip .checkmark{display:none; color:var(--brass); font-weight:900;}
+  .chip.checked{border-color:var(--brass-bg); background:#FBF4E4;}
+  .chip.checked .checkmark{display:inline;}
   .chip .amt{
-    width:78px; border:none; border-bottom:1px solid var(--card-line);
-    background:transparent; font-family:'IBM Plex Mono',monospace; font-size:13px;
-    padding:2px 2px; text-align:right; display:none;
+    width:76px; border:none; border-bottom:1px solid var(--card-line);
+    background:transparent; font-family:'IBM Plex Mono',monospace; font-size:13.5px;
+    padding:3px 2px; text-align:right; display:none;
   }
   .chip.checked .amt{display:inline-block;}
 
-  .msg{
-    font-size:13px; padding:9px 12px; border-radius:8px; margin:10px 0; display:none;
+  /* ---------- Toast system (統一取代原本分散的 msg 區塊) ---------- */
+  #toastStack{
+    position:fixed; left:14px; right:14px; z-index:200;
+    bottom:calc(var(--bottomnav-h) + var(--safe-b) + 12px);
+    display:flex; flex-direction:column; gap:8px; align-items:center;
+    pointer-events:none;
   }
+  .toast{
+    pointer-events:auto;
+    max-width:480px; width:100%;
+    background:var(--ink); color:#F3EEDD;
+    border-radius:10px; padding:12px 14px;
+    display:flex; align-items:center; gap:10px;
+    font-size:13.5px; line-height:1.5;
+    box-shadow:0 8px 24px rgba(0,0,0,0.25);
+    animation:toast-in .18s ease;
+  }
+  .toast .ic{font-size:16px; flex-shrink:0;}
+  .toast .msg-text{flex:1;}
+  .toast.success{background:#1F3A2C;}
+  .toast.error{background:#3E2222;}
+  .toast .undo-btn{
+    background:rgba(255,255,255,0.12); border:none; color:#F3EEDD;
+    font-weight:700; font-size:12.5px; padding:6px 11px; border-radius:7px;
+    cursor:pointer; flex-shrink:0;
+  }
+  .toast .undo-btn:hover{background:rgba(255,255,255,0.22);}
+  .toast.closing{animation:toast-out .18s ease forwards;}
+  @keyframes toast-in{from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:none;}}
+  @keyframes toast-out{to{opacity:0; transform:translateY(8px);}}
+  @media (min-width:860px){
+    #toastStack{left:auto; right:20px; bottom:20px; align-items:flex-end;}
+  }
+
+  /* ---------- Modal system ---------- */
+  .modal-overlay{
+    position:fixed; inset:0; z-index:300; background:rgba(20,26,30,0.55);
+    display:flex; align-items:flex-end; justify-content:center;
+    padding:0; animation:overlay-in .15s ease;
+  }
+  @keyframes overlay-in{from{opacity:0;} to{opacity:1;}}
+  .modal-box{
+    background:var(--card); width:100%; max-width:460px;
+    border-radius:16px 16px 0 0; padding:22px 20px calc(20px + var(--safe-b));
+    box-shadow:0 -8px 30px rgba(0,0,0,0.3);
+    animation:modal-in .2s ease;
+    max-height:82vh; overflow-y:auto;
+  }
+  @keyframes modal-in{from{transform:translateY(24px); opacity:0;} to{transform:none; opacity:1;}}
+  .modal-title{font-family:'Noto Serif TC',serif; font-weight:700; font-size:17px; margin:0 0 10px;}
+  .modal-body{font-size:14px; color:var(--ink-soft); line-height:1.65; margin-bottom:18px;}
+  .modal-actions{display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;}
+  .modal-list{display:flex; flex-direction:column; gap:8px; margin-bottom:6px;}
+  .modal-list-item{
+    text-align:left; width:100%; background:#fff; border:1.5px solid var(--card-line);
+    border-radius:10px; padding:12px 14px; cursor:pointer; font-family:inherit; font-size:14px; color:var(--ink);
+  }
+  .modal-list-item:hover{border-color:var(--brass-bg); background:#FBF4E4;}
+  .modal-list-item .mli-title{font-weight:700;}
+  .modal-list-item .mli-sub{font-size:12px; color:var(--ink-soft); margin-top:3px; font-family:'IBM Plex Mono',monospace;}
+  @media (min-width:640px){
+    .modal-overlay{align-items:center;}
+    .modal-box{border-radius:16px;}
+  }
+
+  .msg{font-size:13px; padding:10px 12px; border-radius:8px; margin:10px 0; display:none; line-height:1.5;}
   .msg.show{display:block;}
   .msg.err{background:var(--debt-bg); color:var(--debt);}
   .msg.ok{background:var(--credit-bg); color:var(--credit);}
@@ -189,15 +295,20 @@
   /* ---------- Lists / ledger rows ---------- */
   .ledger-row{
     display:flex; justify-content:space-between; align-items:flex-start;
-    padding:12px 0; border-bottom:1px dashed var(--card-line); gap:12px;
+    padding:13px 0; border-bottom:1px dashed var(--card-line); gap:12px;
   }
   .ledger-row:last-child{border-bottom:none;}
   .ledger-main{flex:1; min-width:0;}
   .ledger-title{font-weight:700; font-size:14.5px;}
-  .ledger-sub{font-size:12.5px; color:var(--ink-soft); margin-top:3px; line-height:1.6;}
+  .ledger-sub{font-size:12.5px; color:var(--ink-soft); margin-top:3px; line-height:1.65;}
   .ledger-amt{font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:15px; white-space:nowrap;}
-  .ledger-actions{display:flex; gap:6px; margin-top:8px;}
-  .empty{color:var(--ink-soft); font-size:13.5px; padding:14px 4px; text-align:center;}
+  .ledger-actions{display:flex; gap:6px; margin-top:9px;}
+
+  .empty-state{
+    text-align:center; padding:30px 16px; color:var(--ink-soft);
+  }
+  .empty-state .ic{font-size:30px; margin-bottom:8px; opacity:.7;}
+  .empty-state p{font-size:13.5px; margin:0 0 12px;}
 
   /* ---------- Member tags ---------- */
   .member-list{display:flex; flex-wrap:wrap; gap:10px;}
@@ -206,11 +317,9 @@
     background:#fff; border:1px solid var(--card-line); border-radius:10px;
     padding:8px 10px 8px 12px;
   }
-  .member-tag .dot{
-    width:9px; height:9px; border-radius:50%; background:var(--brass-soft); flex-shrink:0;
-  }
+  .member-tag .dot{width:9px; height:9px; border-radius:50%; background:var(--brass-soft); flex-shrink:0;}
   .member-tag input{border:none; background:transparent; font-size:14px; width:100px; padding:2px;}
-  .member-tag input:focus{outline:none; border-bottom:1px solid var(--brass);}
+  .member-tag input:focus-visible{outline:none; border-bottom:1px solid var(--brass);}
 
   /* ---------- Overview / receipt ---------- */
   .receipt{
@@ -218,114 +327,144 @@
     box-shadow:var(--shadow); position:relative; overflow:hidden;
   }
   .receipt-head{
-    padding:18px 22px 14px; border-bottom:1px dashed var(--card-line);
-    display:flex; justify-content:space-between; align-items:center;
+    padding:16px 18px 13px; border-bottom:1px dashed var(--card-line);
+    display:flex; justify-content:space-between; align-items:center; gap:10px;
   }
-  .receipt-head .t1{font-family:'Noto Serif TC',serif; font-weight:700; font-size:16.5px;}
-  .receipt-head .t2{font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-soft);}
+  .receipt-head .t1{font-family:'Noto Serif TC',serif; font-weight:700; font-size:16px;}
+  .receipt-head .t2{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft);}
   .balance-row{
     display:flex; justify-content:space-between; align-items:center;
-    padding:13px 22px; border-bottom:1px dashed var(--card-line);
+    padding:13px 18px; border-bottom:1px dashed var(--card-line); gap:10px;
   }
   .balance-row:last-of-type{border-bottom:none;}
   .balance-name{font-weight:700; font-size:14.5px;}
   .balance-tagline{font-size:11.5px; color:var(--ink-soft); margin-top:2px;}
-  .balance-amt{font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:16px; padding:3px 10px; border-radius:6px;}
+  .balance-amt{font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:15.5px; padding:4px 10px; border-radius:6px; white-space:nowrap;}
   .balance-amt.pos{background:var(--credit-bg); color:var(--credit);}
   .balance-amt.neg{background:var(--debt-bg); color:var(--debt);}
   .balance-amt.zero{background:#EEE; color:var(--ink-soft);}
 
   .stamp{
-    position:absolute; top:16px; right:22px;
     font-family:'IBM Plex Mono',monospace; font-size:11px; font-weight:600;
     color:var(--brass); border:2px solid var(--brass); border-radius:6px;
-    padding:4px 8px; transform:rotate(6deg); letter-spacing:.06em; opacity:.85;
+    padding:4px 8px; letter-spacing:.06em; opacity:.9; white-space:nowrap; flex-shrink:0;
   }
+  .stamp.settled{color:var(--credit); border-color:var(--credit);}
 
-  .settle-list{padding:6px 22px 18px;}
+  .settle-list{padding:4px 18px 16px;}
   .settle-item{
-    display:flex; align-items:center; gap:10px; font-size:14px;
-    padding:9px 0; border-bottom:1px dashed var(--card-line);
+    display:flex; align-items:center; gap:8px; font-size:13.5px; flex-wrap:wrap;
+    padding:10px 0; border-bottom:1px dashed var(--card-line);
   }
   .settle-item:last-child{border-bottom:none;}
   .settle-arrow{color:var(--brass); font-family:'IBM Plex Mono',monospace;}
   .settle-amt{margin-left:auto; font-family:'IBM Plex Mono',monospace; font-weight:700;}
 
-  .kv-summary{display:flex; gap:18px; flex-wrap:wrap; margin-bottom:16px;}
-  .kv-card{
-    flex:1; min-width:140px; background:var(--card); border:1px solid var(--card-line);
-    border-radius:10px; padding:14px 16px;
-  }
-  .kv-card .k{font-size:11.5px; color:var(--ink-soft); font-family:'IBM Plex Mono',monospace;}
-  .kv-card .v{font-family:'Noto Serif TC',serif; font-weight:700; font-size:20px; margin-top:4px;}
+  .kv-summary{display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:14px;}
+  .kv-card{background:var(--card); border:1px solid var(--card-line); border-radius:10px; padding:12px 14px;}
+  .kv-card .k{font-size:10.5px; color:var(--ink-soft); font-family:'IBM Plex Mono',monospace;}
+  .kv-card .v{font-family:'Noto Serif TC',serif; font-weight:700; font-size:19px; margin-top:4px; word-break:break-all;}
 
   .rate-table{width:100%; border-collapse:collapse;}
   .rate-table th{
     text-align:left; font-size:11.5px; color:var(--ink-soft); font-weight:600;
     padding:6px 8px; border-bottom:1px solid var(--card-line); font-family:'IBM Plex Mono',monospace;
   }
-  .rate-table td{padding:7px 8px; border-bottom:1px dashed var(--card-line); font-size:14px;}
-  .rate-table input{width:110px;}
+  .rate-table td{padding:9px 8px; border-bottom:1px dashed var(--card-line); font-size:14px;}
+  .rate-table input{width:100px;}
 
-  .hint{font-size:12px; color:var(--ink-soft); margin-top:6px;}
-  code.inline{background:#EDEAD9; border-radius:4px; padding:1px 5px; font-family:'IBM Plex Mono',monospace; font-size:12px;}
+  .hint{font-size:12px; color:var(--ink-soft); margin-top:6px; line-height:1.6;}
+  code.inline{background:#EDEAD9; border-radius:4px; padding:1px 5px; font-family:'IBM Plex Mono',monospace; font-size:12px; word-break:break-all;}
 
-  footer{text-align:center; font-size:11.5px; color:var(--ink-soft); margin-top:30px; font-family:'IBM Plex Mono',monospace;}
+  details.adv{border:1px dashed var(--card-line); border-radius:10px; padding:2px 14px; margin-top:4px;}
+  details.adv > summary{
+    cursor:pointer; padding:10px 0; font-weight:700; font-size:13.5px; color:var(--ink-soft);
+    list-style:none; display:flex; align-items:center; gap:6px;
+  }
+  details.adv > summary::-webkit-details-marker{display:none;}
+  details.adv > summary::before{content:"▸"; font-size:11px; transition:transform .15s;}
+  details.adv[open] > summary::before{transform:rotate(90deg);}
+  details.adv > summary:focus-visible{outline:2px solid var(--brass); outline-offset:2px; border-radius:4px;}
+  details.adv .adv-inner{padding-bottom:14px;}
 
-  @media (max-width:520px){
-    .cover h1{font-size:22px;}
-    .balance-row{flex-direction:column; align-items:flex-start; gap:6px;}
+  footer{text-align:center; font-size:11px; color:var(--ink-soft); margin-top:26px; font-family:'IBM Plex Mono',monospace; padding:0 4px;}
+
+  /* ---------- Small phones ---------- */
+  @media (max-width:420px){
+    .kv-summary{grid-template-columns:repeat(2,1fr);}
+    .balance-row{flex-wrap:wrap;}
+    .ledger-row{flex-direction:column;}
+    .ledger-amt{align-self:flex-end;}
+    .rate-table thead{display:none;}
+    .rate-table, .rate-table tbody, .rate-table tr, .rate-table td{display:block; width:100%;}
+    .rate-table tr{border-bottom:1px dashed var(--card-line); padding:8px 0;}
+    .rate-table td{border:none; padding:3px 0; display:flex; justify-content:space-between; align-items:center;}
+    .rate-table td::before{content:attr(data-label); font-size:11px; color:var(--ink-soft); font-family:'IBM Plex Mono',monospace;}
+  }
+
+  /* ---------- Desktop layout ---------- */
+  @media (min-width:860px){
+    body{padding-bottom:60px;}
+    .wrap{padding:0 20px;}
+    .app-header{padding:16px 20px;}
+    .header-row1 .brand{font-size:18px;}
+    #tripName{font-size:19px;}
+    .top-nav{display:flex;}
+    .bottom-nav{display:none;}
+    main{padding-top:20px;}
+    .kv-summary{grid-template-columns:repeat(4,1fr);}
+    .card{padding:22px 24px;}
   }
 </style>
 </head>
 <body>
-<div class="wrap">
 
-  <div class="cover">
-    <div class="eyebrow">SPLITBILL LEDGER · MOUSEBOT-COMPATIBLE JSON</div>
-    <h1>拆帳本</h1>
-    <div class="cover-row">
-      <div class="cover-field">
-        <label>行程名稱</label>
-        <input type="text" id="tripName" placeholder="例如：沖繩三天兩夜">
-      </div>
-      <div class="cover-field">
-        <label>基準幣別</label>
-        <select id="baseCurrency"></select>
-      </div>
-      <div class="cover-field" style="flex:1; min-width:200px;">
-        <label>行程 ID</label>
-        <input type="text" id="tripId" readonly style="opacity:.75; cursor:default;">
-      </div>
+<div id="toastStack" aria-live="polite"></div>
+<div id="modalRoot"></div>
+
+<header class="app-header">
+  <div class="app-header-inner">
+    <div class="header-row1">
+      <span class="brand">拆帳本</span>
+      <input type="text" id="tripName" placeholder="行程名稱，例如：沖繩三天兩夜">
+      <select id="baseCurrency" class="header-currency"></select>
+    </div>
+    <div class="status-pills">
+      <button class="pill" id="botStatusPill" onclick="showMainTab('settings'); showSettingsSub('connect');" type="button">
+        <span class="dot"></span><span id="botStatusText">未連線 Bot</span>
+      </button>
+      <button class="pill" id="fileStatusPill" onclick="showMainTab('settings'); showSettingsSub('io');" type="button">
+        <span class="dot"></span><span id="fileStatusText">未連結本機檔案</span>
+      </button>
     </div>
   </div>
+</header>
 
-  <div class="tabs" id="tabs">
-    <button class="tab-btn active" data-tab="overview">總覽結算</button>
-    <button class="tab-btn" data-tab="members">成員</button>
-    <button class="tab-btn" data-tab="rates">幣別匯率</button>
-    <button class="tab-btn" data-tab="expenses">支出記帳</button>
-    <button class="tab-btn" data-tab="deposits">轉帳／預收</button>
-    <button class="tab-btn" data-tab="connect">連線 Bot</button>
-    <button class="tab-btn" data-tab="io">匯入匯出 JSON</button>
-  </div>
+<nav class="top-nav wrap" id="topNav">
+  <button class="nav-btn active" data-tab="overview" onclick="showMainTab('overview')"><span class="ic">📊</span>總覽結算</button>
+  <button class="nav-btn" data-tab="expenses" onclick="showMainTab('expenses')"><span class="ic">🧾</span>支出記帳</button>
+  <button class="nav-btn" data-tab="deposits" onclick="showMainTab('deposits')"><span class="ic">💸</span>轉帳／預收</button>
+  <button class="nav-btn" data-tab="settings" onclick="showMainTab('settings')"><span class="ic">⚙️</span>設定</button>
+</nav>
+
+<main class="wrap">
 
   <!-- ================= OVERVIEW ================= -->
-  <div class="panel active" id="panel-overview">
+  <div class="panel active" id="panel-overview" data-panel="overview">
     <div class="kv-summary">
-      <div class="kv-card"><div class="k">MEMBERS</div><div class="v" id="kvMembers">0</div></div>
-      <div class="kv-card"><div class="k">EXPENSES</div><div class="v" id="kvExpenses">0</div></div>
-      <div class="kv-card"><div class="k">TRANSFERS</div><div class="v" id="kvDeposits">0</div></div>
-      <div class="kv-card"><div class="k">TOTAL SPENT (基準幣)</div><div class="v" id="kvTotal">0</div></div>
+      <div class="kv-card"><div class="k">成員</div><div class="v" id="kvMembers">0</div></div>
+      <div class="kv-card"><div class="k">支出筆數</div><div class="v" id="kvExpenses">0</div></div>
+      <div class="kv-card"><div class="k">轉帳筆數</div><div class="v" id="kvDeposits">0</div></div>
+      <div class="kv-card"><div class="k">總花費（基準幣）</div><div class="v" id="kvTotal">0</div></div>
     </div>
 
-    <div class="receipt" style="margin-bottom:16px;">
-      <div class="stamp" id="stampBadge">待結算</div>
+    <div class="receipt" style="margin-bottom:14px;">
       <div class="receipt-head">
         <div>
           <div class="t1">各成員淨額</div>
           <div class="t2">正值＝應收回　·　負值＝需補交</div>
         </div>
+        <div class="stamp" id="stampBadge">待結算</div>
       </div>
       <div id="balanceList"></div>
     </div>
@@ -341,51 +480,20 @@
     </div>
   </div>
 
-  <!-- ================= MEMBERS ================= -->
-  <div class="panel" id="panel-members">
-    <div class="card">
-      <h2 class="section-title">成員名單 <span class="n" id="memberCount"></span></h2>
-      <div class="member-list" id="memberList"></div>
-      <div class="btn-row">
-        <input type="text" id="newMemberName" placeholder="新成員名稱" style="max-width:180px;">
-        <button class="btn btn-brass" onclick="addMember()">＋ 新增成員</button>
-      </div>
-      <div class="msg" id="memberMsg"></div>
-    </div>
-  </div>
-
-  <!-- ================= RATES ================= -->
-  <div class="panel" id="panel-rates">
-    <div class="card">
-      <h2 class="section-title">匯率設定</h2>
-      <p class="hint">1 該幣別 = <code class="inline">rate</code> 基準幣別（<span id="baseLabel">TWD</span>）。基準幣別本身固定為 1。</p>
-      <table class="rate-table">
-        <thead><tr><th>幣別代碼</th><th>兌基準幣匯率</th><th></th></tr></thead>
-        <tbody id="rateTableBody"></tbody>
-      </table>
-      <div class="btn-row">
-        <input type="text" id="newRateCurrency" placeholder="幣別代碼 (如 JPY)" style="max-width:140px; text-transform:uppercase;">
-        <input type="number" id="newRateValue" placeholder="匯率" step="0.0001" style="max-width:120px;">
-        <button class="btn btn-brass" onclick="addRate()">＋ 新增幣別</button>
-      </div>
-      <div class="msg" id="rateMsg"></div>
-    </div>
-  </div>
-
   <!-- ================= EXPENSES ================= -->
-  <div class="panel" id="panel-expenses">
+  <div class="panel" id="panel-expenses" data-panel="expenses">
     <div class="card">
       <h2 class="section-title" id="expenseFormTitle">新增一筆支出</h2>
+      <div class="field">
+        <label>項目說明</label>
+        <input type="text" id="expDesc" placeholder="例如：晚餐、租車費">
+      </div>
       <div class="row">
-        <div class="field">
-          <label>項目說明</label>
-          <input type="text" id="expDesc" placeholder="例如：晚餐、租車費">
-        </div>
-        <div class="field" style="max-width:140px;">
+        <div class="field" style="max-width:160px;">
           <label>金額</label>
-          <input type="number" id="expAmount" class="num" placeholder="0" step="0.01">
+          <input type="number" inputmode="decimal" id="expAmount" class="num" placeholder="0" step="0.01">
         </div>
-        <div class="field" style="max-width:120px;">
+        <div class="field" style="max-width:130px;">
           <label>幣別</label>
           <select id="expCurrency"></select>
         </div>
@@ -393,36 +501,36 @@
       <p class="hint" id="expBaseHint"></p>
 
       <div class="field">
-        <label>誰代墊付款？（勾選並填金額，總和需等於金額）</label>
+        <label>誰代墊付款？（只勾一位時會自動帶入全額；勾多位請自行填金額，總和需等於金額）</label>
         <div class="chip-select" id="payerChips"></div>
-        <div class="btn-row">
-          <button class="btn btn-ghost btn-sm" onclick="equalFillChips('payer')">依人數平均代墊</button>
-        </div>
       </div>
 
       <div class="field">
-        <label>誰要分攤？（勾選並填金額，總和需等於金額）</label>
+        <label>誰要分攤？（預設全員平均分攤，取消勾選可排除某人；手動改金額後就不會再自動平均）</label>
         <div class="chip-select" id="participantChips"></div>
         <div class="btn-row">
-          <button class="btn btn-ghost btn-sm" onclick="equalFillChips('participant')">依人數平均分攤</button>
+          <button class="btn btn-ghost btn-sm" onclick="equalFillChips('participant')">依已勾選人數重新平均</button>
+          <button class="btn btn-ghost btn-sm" onclick="checkAllParticipants()">全部人平均分攤</button>
         </div>
       </div>
 
-      <div class="msg" id="expenseMsg"></div>
       <div class="btn-row">
-        <button class="btn btn-primary" onclick="saveExpense()">儲存這筆支出</button>
+        <button class="btn btn-primary btn-block" id="btnSaveExpense" onclick="saveExpense()">儲存這筆支出</button>
+        <button class="btn btn-brass" id="btnSaveExpenseSync" onclick="withLoading(this,'同步中…',saveExpenseAndSync)">儲存並同步到 Bot</button>
         <button class="btn btn-ghost" onclick="resetExpenseForm()">清空表單</button>
       </div>
     </div>
 
     <div class="card">
-      <h2 class="section-title">支出明細 <span class="n" id="expenseCount"></span></h2>
+      <h2 class="section-title">支出明細 <span class="n" id="expenseCount"></span>
+        <button class="btn btn-brass btn-sm" style="margin-left:auto;" id="btnSyncExpenseList" onclick="withLoading(this,'同步中…',()=>saveTripToApi())">☁️ 儲存到 Bot</button>
+      </h2>
       <div id="expenseList"></div>
     </div>
   </div>
 
   <!-- ================= DEPOSITS ================= -->
-  <div class="panel" id="panel-deposits">
+  <div class="panel" id="panel-deposits" data-panel="deposits">
     <div class="card">
       <h2 class="section-title" id="depositFormTitle">新增一筆轉帳／預收款</h2>
       <div class="row">
@@ -436,119 +544,179 @@
         </div>
       </div>
       <div class="row">
-        <div class="field" style="max-width:140px;">
+        <div class="field" style="max-width:160px;">
           <label>金額</label>
-          <input type="number" id="depAmount" class="num" placeholder="0" step="0.01">
+          <input type="number" inputmode="decimal" id="depAmount" class="num" placeholder="0" step="0.01">
         </div>
-        <div class="field" style="max-width:120px;">
+        <div class="field" style="max-width:130px;">
           <label>幣別</label>
           <select id="depCurrency"></select>
         </div>
-        <div class="field">
-          <label>備註（選填）</label>
-          <input type="text" id="depNote" placeholder="例如：提前收團費">
-        </div>
       </div>
-      <div class="msg" id="depositMsg"></div>
+      <div class="field">
+        <label>備註（選填）</label>
+        <input type="text" id="depNote" placeholder="例如：提前收團費">
+      </div>
       <div class="btn-row">
-        <button class="btn btn-primary" onclick="saveDeposit()">儲存這筆轉帳</button>
+        <button class="btn btn-primary btn-block" id="btnSaveDeposit" onclick="saveDeposit()">儲存這筆轉帳</button>
+        <button class="btn btn-brass" id="btnSaveDepositSync" onclick="withLoading(this,'同步中…',saveDepositAndSync)">儲存並同步到 Bot</button>
         <button class="btn btn-ghost" onclick="resetDepositForm()">清空表單</button>
       </div>
     </div>
 
     <div class="card">
-      <h2 class="section-title">轉帳明細 <span class="n" id="depositCount"></span></h2>
+      <h2 class="section-title">轉帳明細 <span class="n" id="depositCount"></span>
+        <button class="btn btn-brass btn-sm" style="margin-left:auto;" id="btnSyncDepositList" onclick="withLoading(this,'同步中…',()=>saveTripToApi())">☁️ 儲存到 Bot</button>
+      </h2>
       <div id="depositList"></div>
     </div>
   </div>
 
-  <!-- ================= CONNECT TO BOT ================= -->
-  <div class="panel" id="panel-connect">
-    <div class="card">
-      <h2 class="section-title">連線到 Discord Bot</h2>
-      <p class="hint">
-        需要 Bot 主機上跑著對應的 <code class="inline">webui/server.js</code>（見部署說明）。
-        這個頁面若是由該伺服器提供（同一個網址開出來的），下方會自動嘗試連線；
-        若是你直接用瀏覽器開這個 .html 檔案，請先手動填寫 API 位址。
-      </p>
-      <div class="row">
+  <!-- ================= SETTINGS (成員／匯率／連線 Bot／檔案) ================= -->
+  <div class="panel" id="panel-settings" data-panel="settings">
+    <div class="settings-subnav">
+      <button class="subtab-btn active" data-subtab="members" onclick="showSettingsSub('members')">👥 成員</button>
+      <button class="subtab-btn" data-subtab="rates" onclick="showSettingsSub('rates')">💱 匯率</button>
+      <button class="subtab-btn" data-subtab="connect" onclick="showSettingsSub('connect')">🔌 連線 Bot</button>
+      <button class="subtab-btn" data-subtab="io" onclick="showSettingsSub('io')">📁 檔案</button>
+    </div>
+
+    <!-- ---- members ---- -->
+    <div class="subpanel active" id="panel-members" data-subpanel="members">
+      <div class="card">
+        <h2 class="section-title">成員名單 <span class="n" id="memberCount"></span></h2>
+        <div class="member-list" id="memberList"></div>
+        <div class="btn-row">
+          <input type="text" id="newMemberName" placeholder="新成員名稱" style="max-width:180px;">
+          <button class="btn btn-primary" onclick="addMember()">＋ 新增成員</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2 class="section-title">行程資訊</h2>
+        <div class="field">
+          <label>行程 ID</label>
+          <input type="text" id="tripId" readonly style="opacity:.7; cursor:default;">
+        </div>
+        <p class="hint">此 ID 是匯入／匯出 JSON、或連線 Bot API 時用來識別這個行程的代碼。</p>
+      </div>
+    </div>
+
+    <!-- ---- rates ---- -->
+    <div class="subpanel" id="panel-rates" data-subpanel="rates">
+      <div class="card">
+        <h2 class="section-title">匯率設定</h2>
+        <p class="hint">1 該幣別 = <code class="inline">rate</code> 基準幣別（<span id="baseLabel">TWD</span>）。基準幣別本身固定為 1。</p>
+        <table class="rate-table">
+          <thead><tr><th>幣別代碼</th><th>兌基準幣匯率</th><th></th></tr></thead>
+          <tbody id="rateTableBody"></tbody>
+        </table>
+        <div class="btn-row">
+          <input type="text" id="newRateCurrency" placeholder="幣別代碼 (如 JPY)" style="max-width:140px; text-transform:uppercase;">
+          <input type="number" inputmode="decimal" id="newRateValue" placeholder="匯率" step="0.0001" style="max-width:120px;">
+          <button class="btn btn-primary" onclick="addRate()">＋ 新增幣別</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---- connect to bot ---- -->
+    <div class="subpanel" id="panel-connect" data-subpanel="connect">
+      <div class="card">
+        <h2 class="section-title">連線到 Discord Bot</h2>
+        <p class="hint">
+          需要 Bot 主機上跑著對應的 <code class="inline">webui/server.js</code>。
+          這個頁面若是由該伺服器提供（同一個網址開出來的），下方會自動嘗試連線；
+          若是你直接用瀏覽器開這個 .html 檔案，請先手動填寫 API 位址。
+        </p>
         <div class="field">
           <label>API 位址（同伺服器提供時可留空，會自動用目前網址）</label>
-          <input type="text" id="apiBase" placeholder="例如：http://your-vps-ip:3000">
+          <input type="text" id="apiBase" placeholder="例如：https://your-app.zeabur.app">
         </div>
-        <div class="field" style="max-width:220px;">
+        <div class="field">
           <label>API Key</label>
-          <input type="text" id="apiKey" placeholder="在伺服器 .env 設定的金鑰">
+          <div class="input-with-toggle">
+            <input type="password" id="apiKey" placeholder="在伺服器環境變數設定的金鑰" autocomplete="off">
+            <button type="button" class="input-toggle-btn" onclick="toggleApiKeyVisibility()" id="apiKeyToggleBtn">顯示</button>
+          </div>
         </div>
-      </div>
-      <div class="btn-row">
-        <button class="btn btn-brass" onclick="refreshGuildList()">連線並讀取伺服器清單</button>
-        <button class="btn btn-ghost" onclick="copyBookmarkUrl()">🔖 複製一鍵連線書籤網址</button>
-      </div>
-      <p class="hint">小技巧：連線＋選好伺服器／行程後按「複製一鍵連線書籤網址」，把網址存成瀏覽器書籤。之後每次點書籤就會自動帶入金鑰並直接載入行程，不用再手動輸入。</p>
-      <div class="msg" id="connectMsg"></div>
+        <div class="btn-row">
+          <button class="btn btn-brass" id="btnConnect" onclick="withLoading(this,'連線中…',refreshGuildList)">連線並讀取伺服器清單</button>
+          <button class="btn btn-ghost" onclick="copyBookmarkUrl()">🔖 複製一鍵連線書籤網址</button>
+        </div>
+        <p class="hint">小技巧：連線＋選好伺服器／行程後按「複製一鍵連線書籤網址」，存成瀏覽器書籤或加到手機主畫面。之後點一下就會自動帶入金鑰並直接載入行程。</p>
 
-      <div class="row" style="margin-top:10px;">
-        <div class="field">
-          <label>伺服器 (Guild)</label>
-          <select id="guildSelect"><option value="">－ 請先連線 －</option></select>
+        <div class="row" style="margin-top:6px;">
+          <div class="field">
+            <label>伺服器 (Guild)</label>
+            <select id="guildSelect"><option value="">－ 請先連線 －</option></select>
+          </div>
+          <div class="field">
+            <label>行程 (Trip)</label>
+            <select id="tripSelect"><option value="">－ 請先選伺服器 －</option></select>
+          </div>
         </div>
-        <div class="field">
-          <label>行程 (Trip)</label>
-          <select id="tripSelect"><option value="">－ 請先選伺服器 －</option></select>
+        <div class="btn-row">
+          <button class="btn btn-brass" id="btnLoadTrip" onclick="withLoading(this,'載入中…',loadTripFromApi)">⬇ 從 Bot 載入這個行程</button>
+          <button class="btn btn-brass" id="btnSaveTrip" onclick="withLoading(this,'儲存中…',()=>saveTripToApi())">⬆ 儲存回 Bot（覆蓋）</button>
         </div>
+        <p class="hint">「儲存回 Bot」會覆蓋伺服器上該行程的資料；如果偵測到伺服器上的版本跟你最後一次同步的不一樣，會先跳出提醒再決定要不要覆蓋。</p>
       </div>
-      <div class="btn-row">
-        <button class="btn btn-primary" onclick="loadTripFromApi()">⬇ 從 Bot 載入這個行程</button>
-        <button class="btn btn-brass" onclick="saveTripToApi()">⬆ 儲存回 Bot（覆蓋）</button>
-      </div>
-      <p class="hint">「儲存回 Bot」會直接覆蓋伺服器上該行程的資料，請先載入最新版本再編輯，避免蓋掉別人剛記的帳。</p>
+    </div>
+
+    <!-- ---- local file / import export (進階／備用) ---- -->
+    <div class="subpanel" id="panel-io" data-subpanel="io">
+      <p class="hint" style="margin-bottom:14px;">已連線 Bot 時，資料會直接同步到雲端；以下是離線編輯或備援用的本機方式，平常不一定會用到。</p>
+
+      <details class="adv" id="advFileDetails">
+        <summary>本機檔案與匯入匯出（進階／備用）</summary>
+        <div class="adv-inner">
+          <div class="card" id="localFileCard">
+            <h2 class="section-title">直接覆寫本機檔案</h2>
+            <p class="hint" id="fsApiHint">檢查瀏覽器支援中...</p>
+            <div class="btn-row">
+              <button class="btn btn-primary" onclick="withLoading(this,'開啟中…',openLocalFile)" id="btnOpenLocal">📂 選擇 trip.json</button>
+              <button class="btn btn-primary" onclick="withLoading(this,'儲存中…',()=>saveToLocalFile())" id="btnSaveLocal">💾 儲存並覆寫檔案</button>
+            </div>
+            <label class="chip" style="margin-top:10px; cursor:pointer;">
+              <input type="checkbox" id="autoSaveLocal" onchange="onAutoSaveToggle(this.checked)">
+              每次新增／編輯後自動覆寫（需先連結檔案）
+            </label>
+            <p class="hint" id="localFileStatus">尚未連結本機檔案</p>
+          </div>
+
+          <div class="card">
+            <h2 class="section-title">下載／貼上（備用方式）</h2>
+            <p class="hint">匯出的 JSON 結構與 Mousebot <code class="inline">splitbill.js</code> 儲存格式相容。</p>
+            <div class="btn-row">
+              <button class="btn btn-ghost" onclick="downloadJson()">⬇ 下載 trip.json</button>
+              <button class="btn btn-ghost" onclick="copyJson()">複製 JSON 到剪貼簿</button>
+            </div>
+            <textarea id="jsonPreview" rows="8" readonly style="margin-top:12px;"></textarea>
+          </div>
+
+          <div class="card">
+            <h2 class="section-title">匯入</h2>
+            <p class="hint">貼上單一 trip 的 JSON，或整個 <code class="inline">{ guildId: { trips: {...} } }</code> 檔案。</p>
+            <input type="file" id="fileInput" accept="application/json" onchange="handleFileImport(event)">
+            <textarea id="jsonInput" rows="6" placeholder="貼上 JSON 內容..." style="margin-top:10px;"></textarea>
+            <div class="btn-row">
+              <button class="btn btn-primary" onclick="importJson()">載入這份 JSON</button>
+              <button class="btn btn-danger" onclick="confirmNewTrip()">清空並開新行程</button>
+            </div>
+          </div>
+        </div>
+      </details>
     </div>
   </div>
 
-  <!-- ================= IMPORT / EXPORT ================= -->
-  <div class="panel" id="panel-io">
-    <div class="card" id="localFileCard">
-      <h2 class="section-title">直接覆寫本機檔案（免下載、免手動貼上）</h2>
-      <p class="hint" id="fsApiHint">檢查瀏覽器支援中...</p>
-      <div class="btn-row">
-        <button class="btn btn-brass" onclick="openLocalFile()" id="btnOpenLocal">📂 選擇 trip.json（建立連結）</button>
-        <button class="btn btn-primary" onclick="saveToLocalFile()" id="btnSaveLocal">💾 儲存並覆寫檔案</button>
-      </div>
-      <label class="chip" style="margin-top:10px; cursor:pointer;">
-        <input type="checkbox" id="autoSaveLocal" onchange="onAutoSaveToggle(this.checked)">
-        每次新增／編輯後自動覆寫（需先連結檔案）
-      </label>
-      <p class="hint" id="localFileStatus">尚未連結本機檔案</p>
-      <div class="msg" id="localFileMsg"></div>
-    </div>
+  <footer>拆帳本 · Mousebot Splitbill Schema</footer>
+</main>
 
-    <div class="card">
-      <h2 class="section-title">或：下載／貼上（所有瀏覽器都適用的備用方式）</h2>
-      <p class="hint">匯出的 JSON 結構與 Mousebot <code class="inline">splitbill.js</code> 儲存格式相容，可直接放回機器人的 <code class="inline">data/splitbill.json</code>（該筆 trip 物件）。</p>
-      <div class="btn-row">
-        <button class="btn btn-brass" onclick="downloadJson()">⬇ 下載 trip.json</button>
-        <button class="btn btn-ghost" onclick="copyJson()">複製 JSON 到剪貼簿</button>
-      </div>
-      <div class="msg" id="ioMsg"></div>
-      <textarea id="jsonPreview" rows="14" readonly style="margin-top:12px;"></textarea>
-    </div>
-
-    <div class="card">
-      <h2 class="section-title">匯入</h2>
-      <p class="hint">貼上單一 trip 的 JSON，或整個 <code class="inline">{ guildId: { trips: {...} } }</code> 檔案（會自動偵測並列出可選擇的行程）。</p>
-      <input type="file" id="fileInput" accept="application/json" onchange="handleFileImport(event)">
-      <textarea id="jsonInput" rows="10" placeholder="貼上 JSON 內容..." style="margin-top:10px;"></textarea>
-      <div class="btn-row">
-        <button class="btn btn-primary" onclick="importJson()">載入這份 JSON</button>
-        <button class="btn btn-danger" onclick="if(confirm('確定要清空目前所有記帳內容，重新開始一個新行程嗎？'))newTrip();">清空並開新行程</button>
-      </div>
-      <div class="msg" id="importMsg"></div>
-    </div>
-  </div>
-
-  <footer>拆帳本 · 資料只存在此頁面記憶體中，請記得使用「下載 trip.json」保存 · Mousebot Splitbill Schema</footer>
-</div>
+<nav class="bottom-nav" id="bottomNav">
+  <button class="nav-btn active" data-tab="overview" onclick="showMainTab('overview')"><span class="ic">📊</span>總覽</button>
+  <button class="nav-btn" data-tab="expenses" onclick="showMainTab('expenses')"><span class="ic">🧾</span>支出</button>
+  <button class="nav-btn" data-tab="deposits" onclick="showMainTab('deposits')"><span class="ic">💸</span>轉帳</button>
+  <button class="nav-btn" data-tab="settings" onclick="showMainTab('settings')"><span class="ic">⚙️</span>設定</button>
+</nav>
 
 <script>
 'use strict';
@@ -573,6 +741,7 @@ function fmtMoney(amount, currency){
   if (ZERO_DECIMAL_CURRENCIES.has((currency||'').toUpperCase())) return Math.round(amount).toLocaleString('en-US');
   return amount.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function defaultTrip(){
   return {
@@ -700,6 +869,123 @@ function simplifyDebts(net){
   return tx;
 }
 
+/* =====================================================================
+   Toast 系統 — 取代所有原本分散在各分頁的 msg 區塊。
+   固定顯示在畫面底部（桌面在右下），不管使用者在哪個分頁操作都看得到。
+===================================================================== */
+function toast(message, type, opts){
+  type = type || 'info';
+  opts = opts || {};
+  const stack = document.getElementById('toastStack');
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  const icon = type === 'success' ? '✅' : (type === 'error' ? '⚠️' : 'ℹ️');
+  el.innerHTML = `<span class="ic">${icon}</span><span class="msg-text"></span>`;
+  el.querySelector('.msg-text').textContent = message;
+  if (opts.undo){
+    const btn = document.createElement('button');
+    btn.className = 'undo-btn';
+    btn.type = 'button';
+    btn.textContent = '復原';
+    btn.onclick = ()=>{ opts.undo(); dismissToast(el); };
+    el.appendChild(btn);
+  }
+  stack.appendChild(el);
+  const duration = opts.duration || (type === 'error' ? 6000 : (opts.undo ? 6000 : 3200));
+  el._t = setTimeout(()=>dismissToast(el), duration);
+  return el;
+}
+function dismissToast(el){
+  if (!el || !el.parentNode) return;
+  clearTimeout(el._t);
+  el.classList.add('closing');
+  setTimeout(()=>el.remove(), 180);
+}
+// 復原式刪除：資料立即移除，但跳一個帶「復原」按鈕的 toast，
+// 幾秒內按下就還原，取代原本「刪除前跳原生確認框」的模式。
+function toastUndo(message, restoreFn){
+  toast(message, 'success', { undo: restoreFn });
+}
+
+/* =====================================================================
+   Modal 系統 — 取代原生 confirm() / prompt()，統一站內樣式與行動裝置體驗。
+===================================================================== */
+function closeModal(){
+  const root = document.getElementById('modalRoot');
+  root.innerHTML = '';
+}
+function confirmModal(message, opts){
+  opts = opts || {};
+  return new Promise(resolve=>{
+    const root = document.getElementById('modalRoot');
+    root.innerHTML = `
+      <div class="modal-overlay" id="modalOverlay">
+        <div class="modal-box" role="dialog" aria-modal="true">
+          ${opts.title ? `<div class="modal-title">${escapeHtml(opts.title)}</div>` : ''}
+          <div class="modal-body">${escapeHtml(message)}</div>
+          <div class="modal-actions">
+            <button class="btn btn-ghost" id="modalCancelBtn">${escapeHtml(opts.cancelText || '取消')}</button>
+            <button class="btn ${opts.danger ? 'btn-danger' : 'btn-primary'}" id="modalConfirmBtn" style="${opts.danger ? 'background:var(--debt);color:#fff;border:none;' : ''}">${escapeHtml(opts.confirmText || '確定')}</button>
+          </div>
+        </div>
+      </div>`;
+    const overlay = document.getElementById('modalOverlay');
+    const finish = (val)=>{ closeModal(); resolve(val); };
+    document.getElementById('modalCancelBtn').onclick = ()=>finish(false);
+    document.getElementById('modalConfirmBtn').onclick = ()=>finish(true);
+    overlay.addEventListener('click', (e)=>{ if (e.target === overlay) finish(false); });
+    document.getElementById('modalConfirmBtn').focus();
+  });
+}
+// 清單挑選 modal（取代原本 prompt() 手動打行程 ID 的做法）
+function pickModal(title, items){
+  // items: [{ value, title, sub }]
+  return new Promise(resolve=>{
+    const root = document.getElementById('modalRoot');
+    root.innerHTML = `
+      <div class="modal-overlay" id="modalOverlay">
+        <div class="modal-box" role="dialog" aria-modal="true">
+          <div class="modal-title">${escapeHtml(title)}</div>
+          <div class="modal-list" id="modalList"></div>
+          <div class="modal-actions">
+            <button class="btn btn-ghost" id="modalCancelBtn">取消</button>
+          </div>
+        </div>
+      </div>`;
+    const list = document.getElementById('modalList');
+    items.forEach(item=>{
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'modal-list-item';
+      btn.innerHTML = `<div class="mli-title"></div>${item.sub ? '<div class="mli-sub"></div>' : ''}`;
+      btn.querySelector('.mli-title').textContent = item.title;
+      if (item.sub) btn.querySelector('.mli-sub').textContent = item.sub;
+      btn.onclick = ()=>{ closeModal(); resolve(item.value); };
+      list.appendChild(btn);
+    });
+    const overlay = document.getElementById('modalOverlay');
+    document.getElementById('modalCancelBtn').onclick = ()=>{ closeModal(); resolve(null); };
+    overlay.addEventListener('click', (e)=>{ if (e.target === overlay){ closeModal(); resolve(null); } });
+  });
+}
+
+/* =====================================================================
+   Loading 狀態 — 包住任何非同步按鈕動作：停用按鈕、換成 spinner 文字，
+   結束後（不論成功失敗）自動還原，並防止使用者連點造成重複請求。
+===================================================================== */
+async function withLoading(btnEl, loadingText, fn){
+  if (btnEl.disabled) return; // 已經在跑，忽略重複點擊
+  const original = btnEl.innerHTML;
+  btnEl.disabled = true;
+  btnEl.innerHTML = `<span class="spinner"></span>${escapeHtml(loadingText)}`;
+  try{
+    await fn();
+  } finally {
+    btnEl.disabled = false;
+    btnEl.innerHTML = original;
+  }
+}
+
 /* ===================== state ===================== */
 let trip = defaultTrip();
 let editingExpenseId = null;
@@ -711,41 +997,49 @@ function currencyOptions(selected){
 }
 
 /* ===================== tabs ===================== */
-document.getElementById('tabs').addEventListener('click', (e)=>{
-  const btn = e.target.closest('.tab-btn');
-  if (!btn) return;
-  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
-  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
-  btn.classList.add('active');
-  document.getElementById('panel-'+btn.dataset.tab).classList.add('active');
+let currentSettingsSub = 'members';
+function showMainTab(tab){
+  document.querySelectorAll('#topNav .nav-btn, #bottomNav .nav-btn').forEach(b=>b.classList.toggle('active', b.dataset.tab===tab));
+  document.querySelectorAll('.panel[data-panel]').forEach(p=>p.classList.toggle('active', p.dataset.panel===tab));
+  if (tab === 'settings') showSettingsSub(currentSettingsSub);
   renderAll();
-});
-
-function showMsg(elId, text, ok){
-  const el = document.getElementById(elId);
-  el.textContent = text;
-  el.className = 'msg show ' + (ok?'ok':'err');
-  clearTimeout(el._t);
-  el._t = setTimeout(()=>{ el.className='msg'; }, 4000);
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+function showSettingsSub(sub){
+  currentSettingsSub = sub;
+  document.querySelectorAll('.settings-subnav .subtab-btn').forEach(b=>b.classList.toggle('active', b.dataset.subtab===sub));
+  document.querySelectorAll('.subpanel[data-subpanel]').forEach(p=>p.classList.toggle('active', p.dataset.subpanel===sub));
+  if (sub === 'io') syncAdvDetailsState();
+}
+// 已連線 Bot 時，把「本機檔案／下載貼上／匯入」這些備用方式預設收合，
+// 減少畫面雜訊；沒連線時預設展開，因為那時候本機方式就是主要路徑。
+function syncAdvDetailsState(){
+  const details = document.getElementById('advFileDetails');
+  if (!details) return;
+  const connected = !!document.getElementById('guildSelect').value;
+  if (!details.dataset.userToggled) details.open = !connected;
 }
 
 /* ===================== cover fields ===================== */
 document.getElementById('tripName').addEventListener('input', e=>{ trip.name = e.target.value; scheduleAutoSave(); });
 document.getElementById('baseCurrency').addEventListener('change', e=>{
   trip.baseCurrency = e.target.value;
-  if (!trip.rates[trip.baseCurrency]) trip.rates[trip.baseCurrency] = 1;
-  else trip.rates[trip.baseCurrency] = 1;
+  trip.rates[trip.baseCurrency] = 1;
   renderAll();
+});
+document.addEventListener('DOMContentLoaded', ()=>{
+  const details = document.getElementById('advFileDetails');
+  if (details) details.addEventListener('toggle', ()=>{ details.dataset.userToggled = '1'; });
 });
 
 /* ===================== members ===================== */
 function addMember(){
   const input = document.getElementById('newMemberName');
   const name = input.value.trim();
-  if (!name){ showMsg('memberMsg','請輸入成員名稱',false); return; }
+  if (!name){ toast('請輸入成員名稱', 'error'); return; }
   trip.members.push({ id: genId('mem'), name });
   input.value = '';
-  showMsg('memberMsg', `已新增成員「${name}」`, true);
+  toast(`已新增成員「${name}」`, 'success');
   renderAll();
 }
 function renameMember(id, value){
@@ -753,11 +1047,16 @@ function renameMember(id, value){
   if (m) m.name = value;
 }
 function removeMember(id){
+  const idx = trip.members.findIndex(x=>x.id===id);
+  if (idx === -1) return;
   const used = trip.expenses.some(e=>e.payers.some(p=>p.userId===id)||e.participants.some(s=>s.userId===id))
             || trip.deposits.some(d=>d.payerId===id||d.collectorId===id);
-  if (used && !confirm('此成員已出現在支出或轉帳紀錄中，刪除後這些紀錄裡的份額仍會保留 ID 但無法對應姓名。確定要刪除嗎？')) return;
-  trip.members = trip.members.filter(x=>x.id!==id);
+  const [removed] = trip.members.splice(idx,1);
   renderAll();
+  toastUndo(
+    used ? `已刪除成員「${removed.name}」（他仍出現在部分支出／轉帳紀錄中）` : `已刪除成員「${removed.name}」`,
+    ()=>{ trip.members.splice(idx,0,removed); renderAll(); }
+  );
 }
 
 /* ===================== rates ===================== */
@@ -766,11 +1065,11 @@ function addRate(){
   const valInput = document.getElementById('newRateValue');
   const code = codeInput.value.trim().toUpperCase();
   const val = parseFloat(valInput.value);
-  if (!code){ showMsg('rateMsg','請輸入幣別代碼',false); return; }
-  if (!(val>0)){ showMsg('rateMsg','匯率需為大於 0 的數字',false); return; }
+  if (!code){ toast('請輸入幣別代碼', 'error'); return; }
+  if (!(val>0)){ toast('匯率需為大於 0 的數字', 'error'); return; }
   trip.rates[code] = val;
   codeInput.value=''; valInput.value='';
-  showMsg('rateMsg', `已設定 ${code} = ${val}`, true);
+  toast(`已設定 ${code} = ${val}`, 'success');
   renderAll();
 }
 function updateRate(code, value){
@@ -779,40 +1078,80 @@ function updateRate(code, value){
   renderAll();
 }
 function removeRate(code){
-  if (code === trip.baseCurrency){ showMsg('rateMsg','不能刪除目前的基準幣別',false); return; }
+  if (code === trip.baseCurrency){ toast('不能刪除目前的基準幣別', 'error'); return; }
+  const usedValue = trip.rates[code];
   const used = trip.expenses.some(e=>e.currency===code) || trip.deposits.some(d=>d.currency===code);
-  if (used && !confirm(`已有支出／轉帳使用 ${code}，確定要刪除這個幣別的匯率設定嗎？`)) return;
   delete trip.rates[code];
   renderAll();
+  toastUndo(
+    used ? `已刪除 ${code} 匯率（有支出／轉帳正在使用這個幣別）` : `已刪除 ${code} 匯率`,
+    ()=>{ trip.rates[code] = usedValue; renderAll(); }
+  );
 }
 
 /* ===================== expense chips ===================== */
+// 分攤成員（participant）預設全員平均勾選；只要使用者還沒手動改過某人的金額，
+// 之後不管是勾選/取消勾選成員、或改動總金額，都會即時重新平均。
+let participantsDirty = false;
 function buildChips(containerId, prefix){
   const container = document.getElementById(containerId);
+  const defaultCheck = (prefix === 'participant' && !editingExpenseId);
   container.innerHTML = trip.members.map(m=>`
-    <label class="chip" data-id="${m.id}">
-      <input type="checkbox" onchange="onChipToggle('${prefix}','${m.id}',this.checked)">
+    <label class="chip${defaultCheck ? ' checked' : ''}" data-id="${m.id}">
+      <input type="checkbox" ${defaultCheck ? 'checked' : ''} onchange="onChipToggle('${prefix}','${m.id}',this.checked)">
+      <span class="checkmark">✓</span>
       ${escapeHtml(m.name)}
-      <input type="number" class="amt" step="0.01" placeholder="0" data-id="${m.id}" oninput="renderExpenseHint()">
+      <input type="number" class="amt" step="0.01" placeholder="0" data-id="${m.id}" oninput="${prefix==='participant' ? 'participantsDirty=true;' : ''}renderExpenseHint()">
     </label>`).join('') || '<p class="hint">尚未新增成員，請先到「成員」分頁新增。</p>';
 }
 function onChipToggle(prefix, id, checked){
-  const chip = document.querySelector(`#${prefix==='payer'?'payerChips':'participantChips'} .chip[data-id="${id}"]`);
+  const wrap = document.getElementById(prefix==='payer'?'payerChips':'participantChips');
+  const chip = wrap.querySelector(`.chip[data-id="${id}"]`);
   chip.classList.toggle('checked', checked);
   if (!checked){ chip.querySelector('.amt').value=''; }
+  if (prefix === 'payer'){
+    // 只勾選一位代墊付款人時，自動把總金額帶到他身上
+    const checkedChips = [...wrap.querySelectorAll('.chip.checked')];
+    if (checkedChips.length === 1){
+      const amount = parseFloat(document.getElementById('expAmount').value);
+      if (amount > 0) checkedChips[0].querySelector('.amt').value = amount;
+    }
+  }
   renderExpenseHint();
 }
 function equalFillChips(prefix){
   const wrap = document.getElementById(prefix==='payer'?'payerChips':'participantChips');
   const checked = [...wrap.querySelectorAll('.chip.checked')].map(c=>c.dataset.id);
   const amount = parseFloat(document.getElementById('expAmount').value);
-  if (!checked.length){ showMsg('expenseMsg', prefix==='payer'?'請先勾選代墊付款人':'請先勾選分攤成員', false); return; }
-  if (!(amount>0)){ showMsg('expenseMsg','請先輸入金額',false); return; }
+  if (!checked.length){ toast(prefix==='payer'?'請先勾選代墊付款人':'請先勾選分攤成員', 'error'); return; }
+  if (!(amount>0)){ toast('請先輸入金額', 'error'); return; }
+  if (prefix === 'participant') participantsDirty = false;
   const shares = equalSplit(amount, checked);
   shares.forEach(s=>{
     const input = wrap.querySelector(`.chip[data-id="${s.userId}"] .amt`);
     if (input) input.value = s.amount;
   });
+  renderExpenseHint();
+}
+function checkAllParticipants(){
+  const wrap = document.getElementById('participantChips');
+  const amount = parseFloat(document.getElementById('expAmount').value);
+  const allIds = trip.members.map(m=>m.id);
+  if (!allIds.length){ toast('尚未新增成員', 'error'); return; }
+  allIds.forEach(id=>{
+    const chip = wrap.querySelector(`.chip[data-id="${id}"]`);
+    if (!chip) return;
+    chip.querySelector('input[type=checkbox]').checked = true;
+    chip.classList.add('checked');
+  });
+  participantsDirty = false;
+  if (amount > 0){
+    const shares = equalSplit(amount, allIds);
+    shares.forEach(s=>{
+      const input = wrap.querySelector(`.chip[data-id="${s.userId}"] .amt`);
+      if (input) input.value = s.amount;
+    });
+  }
   renderExpenseHint();
 }
 function readChipValues(prefix){
@@ -830,15 +1169,35 @@ function renderExpenseHint(){
   document.getElementById('expBaseHint').innerHTML = base===null
     ? `幣別 ${currency} 尚無匯率，請先到「幣別匯率」分頁設定。`
     : `換算基準幣別（${trip.baseCurrency}）約為 <b>${fmtMoney(base, trip.baseCurrency)}</b>`;
+
+  // 若代墊付款人只勾選了一位，金額變動時自動同步到他身上
+  const payerWrap = document.getElementById('payerChips');
+  if (payerWrap){
+    const checkedPayers = [...payerWrap.querySelectorAll('.chip.checked')];
+    if (checkedPayers.length === 1 && amount > 0){
+      checkedPayers[0].querySelector('.amt').value = amount;
+    }
+  }
+  // 分攤成員：只要使用者還沒手動改過任何一格，金額變動或勾選狀態改變時即時重新平均
+  const participantWrap = document.getElementById('participantChips');
+  if (participantWrap && !participantsDirty){
+    const checkedParticipants = [...participantWrap.querySelectorAll('.chip.checked')].map(c=>c.dataset.id);
+    if (checkedParticipants.length && amount > 0){
+      const shares = equalSplit(amount, checkedParticipants);
+      shares.forEach(s=>{
+        const input = participantWrap.querySelector(`.chip[data-id="${s.userId}"] .amt`);
+        if (input) input.value = s.amount;
+      });
+    }
+  }
 }
 document.getElementById('expAmount').addEventListener('input', renderExpenseHint);
 document.getElementById('expCurrency').addEventListener('change', renderExpenseHint);
 
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-
 /* ===================== expense CRUD ===================== */
 function resetExpenseForm(){
   editingExpenseId = null;
+  participantsDirty = false;
   document.getElementById('expenseFormTitle').textContent = '新增一筆支出';
   document.getElementById('expDesc').value = '';
   document.getElementById('expAmount').value = '';
@@ -850,40 +1209,45 @@ function saveExpense(){
   const description = document.getElementById('expDesc').value.trim() || '（無說明）';
   const amount = parseFloat(document.getElementById('expAmount').value);
   const currency = document.getElementById('expCurrency').value;
-  if (!(amount>0)){ showMsg('expenseMsg','請輸入大於 0 的金額',false); return; }
+  if (!(amount>0)){ toast('請輸入大於 0 的金額', 'error'); return false; }
   const rate = trip.rates[currency];
-  if (!(rate>0)){ showMsg('expenseMsg',`幣別 ${currency} 尚無匯率設定`,false); return; }
+  if (!(rate>0)){ toast(`幣別 ${currency} 尚無匯率設定`, 'error'); return false; }
   const amountInBase = round2(amount*rate);
 
   const payers = readChipValues('payer').filter(p=>p.amount>0 || document.querySelector(`#payerChips .chip[data-id="${p.userId}"]`).classList.contains('checked'));
   const participants = readChipValues('participant');
 
-  if (!payers.length){ showMsg('expenseMsg','請至少勾選一位代墊付款人',false); return; }
-  if (!participants.length){ showMsg('expenseMsg','請至少勾選一位分攤成員',false); return; }
+  if (!payers.length){ toast('請至少勾選一位代墊付款人', 'error'); return false; }
+  if (!participants.length){ toast('請至少勾選一位分攤成員', 'error'); return false; }
 
   const payerSum = round2(payers.reduce((s,p)=>s+p.amount,0));
-  if (round2(Math.abs(payerSum-amount)) > 0.01){ showMsg('expenseMsg',`代墊金額總和 (${payerSum}) 與總金額 (${amount}) 不相符`,false); return; }
+  if (round2(Math.abs(payerSum-amount)) > 0.01){ toast(`代墊金額總和 (${payerSum}) 與總金額 (${amount}) 不相符`, 'error'); return false; }
   const partSum = round2(participants.reduce((s,p)=>s+p.amount,0));
-  if (round2(Math.abs(partSum-amount)) > 0.01){ showMsg('expenseMsg',`分攤金額總和 (${partSum}) 與總金額 (${amount}) 不相符`,false); return; }
+  if (round2(Math.abs(partSum-amount)) > 0.01){ toast(`分攤金額總和 (${partSum}) 與總金額 (${amount}) 不相符`, 'error'); return false; }
 
   if (editingExpenseId){
     const exp = trip.expenses.find(e=>e.id===editingExpenseId);
     Object.assign(exp, { description, amount, currency, amountInBase, payers, participants });
-    showMsg('expenseMsg','已更新支出',true);
+    toast('已更新支出', 'success');
   } else {
     trip.expenses.push({
       id: genId('exp'), description, amount, currency, amountInBase,
       payers, participants, createdAt: Date.now(), createdBy: 'web-ui'
     });
-    showMsg('expenseMsg','已新增支出',true);
+    toast('已新增支出', 'success');
   }
   resetExpenseForm();
   renderAll();
+  return true;
+}
+async function saveExpenseAndSync(){
+  if (saveExpense()) await saveTripToApi();
 }
 function editExpense(id){
   const exp = trip.expenses.find(e=>e.id===id);
   if (!exp) return;
   editingExpenseId = id;
+  participantsDirty = true; // 編輯既有支出時，尊重原本已經存好的分攤金額，不要自動覆蓋
   document.getElementById('expenseFormTitle').textContent = '編輯支出';
   document.getElementById('expDesc').value = exp.description;
   document.getElementById('expAmount').value = exp.amount;
@@ -899,14 +1263,16 @@ function editExpense(id){
     if (chip){ chip.querySelector('input[type=checkbox]').checked = true; chip.classList.add('checked'); chip.querySelector('.amt').value = s.amount; }
   });
   renderExpenseHint();
-  document.querySelector('.tab-btn[data-tab="expenses"]').click();
+  showMainTab('expenses');
   document.getElementById('panel-expenses').scrollIntoView({behavior:'smooth'});
 }
 function deleteExpense(id){
-  if (!confirm('確定要刪除這筆支出嗎？')) return;
-  trip.expenses = trip.expenses.filter(e=>e.id!==id);
+  const idx = trip.expenses.findIndex(e=>e.id===id);
+  if (idx === -1) return;
+  const [removed] = trip.expenses.splice(idx,1);
   if (editingExpenseId===id) resetExpenseForm();
   renderAll();
+  toastUndo(`已刪除「${removed.description}」`, ()=>{ trip.expenses.splice(idx,0,removed); renderAll(); });
 }
 
 /* ===================== deposit CRUD ===================== */
@@ -922,23 +1288,27 @@ function saveDeposit(){
   const amount = parseFloat(document.getElementById('depAmount').value);
   const currency = document.getElementById('depCurrency').value;
   const note = document.getElementById('depNote').value.trim();
-  if (!payerId || !collectorId){ showMsg('depositMsg','請選擇付款人與收款人',false); return; }
-  if (payerId === collectorId){ showMsg('depositMsg','付款人與收款人不能是同一人',false); return; }
-  if (!(amount>0)){ showMsg('depositMsg','請輸入大於 0 的金額',false); return; }
+  if (!payerId || !collectorId){ toast('請選擇付款人與收款人', 'error'); return false; }
+  if (payerId === collectorId){ toast('付款人與收款人不能是同一人', 'error'); return false; }
+  if (!(amount>0)){ toast('請輸入大於 0 的金額', 'error'); return false; }
   const rate = trip.rates[currency];
-  if (!(rate>0)){ showMsg('depositMsg',`幣別 ${currency} 尚無匯率設定`,false); return; }
+  if (!(rate>0)){ toast(`幣別 ${currency} 尚無匯率設定`, 'error'); return false; }
   const amountInBase = round2(amount*rate);
 
   if (editingDepositId){
     const dep = trip.deposits.find(d=>d.id===editingDepositId);
     Object.assign(dep, { payerId, collectorId, amount, currency, amountInBase, note });
-    showMsg('depositMsg','已更新轉帳紀錄',true);
+    toast('已更新轉帳紀錄', 'success');
   } else {
     trip.deposits.push({ id: genId('dep'), payerId, collectorId, amount, currency, amountInBase, note, createdAt: Date.now() });
-    showMsg('depositMsg','已新增轉帳紀錄',true);
+    toast('已新增轉帳紀錄', 'success');
   }
   resetDepositForm();
   renderAll();
+  return true;
+}
+async function saveDepositAndSync(){
+  if (saveDeposit()) await saveTripToApi();
 }
 function editDeposit(id){
   const dep = trip.deposits.find(d=>d.id===id);
@@ -951,21 +1321,24 @@ function editDeposit(id){
   document.getElementById('depCurrency').innerHTML = currencyOptions(dep.currency);
   document.getElementById('depAmount').value = dep.amount;
   document.getElementById('depNote').value = dep.note;
-  document.querySelector('.tab-btn[data-tab="deposits"]').click();
+  showMainTab('deposits');
   document.getElementById('panel-deposits').scrollIntoView({behavior:'smooth'});
 }
 function deleteDeposit(id){
-  if (!confirm('確定要刪除這筆轉帳紀錄嗎？')) return;
-  trip.deposits = trip.deposits.filter(d=>d.id!==id);
+  const idx = trip.deposits.findIndex(d=>d.id===id);
+  if (idx === -1) return;
+  const [removed] = trip.deposits.splice(idx,1);
   if (editingDepositId===id) resetDepositForm();
   renderAll();
+  toastUndo(`已刪除「${memberName(removed.payerId)} → ${memberName(removed.collectorId)}」的轉帳紀錄`, ()=>{ trip.deposits.splice(idx,0,removed); renderAll(); });
 }
 
 /* ===================== import / export ===================== */
-function resolveTripFromRaw(parsed){
-  // 偵測是否為整份 guild 檔案 { guildId: { trips: {...} } }，或單一 trip 物件
+// 偵測是否為整份 guild 檔案 { guildId: { trips: {...} } }，或單一 trip 物件。
+// 有多個行程時改用站內清單 modal 讓使用者用點的（取代原本 prompt() 手動打 ID）。
+async function resolveTripFromRaw(parsed){
   if (parsed && parsed.members && parsed.expenses !== undefined) {
-    return parsed; // 看起來就是單一 trip
+    return parsed;
   }
   if (parsed && typeof parsed === 'object') {
     let tripsBag = parsed.trips ? parsed : null;
@@ -978,10 +1351,12 @@ function resolveTripFromRaw(parsed){
       const ids = Object.keys(tripsBag.trips);
       if (ids.length === 1) return tripsBag.trips[ids[0]];
       if (ids.length > 1) {
-        const names = ids.map(id => `${id} (${tripsBag.trips[id].name||'未命名'})`).join('\n');
-        const pick = prompt(`偵測到多個行程，請輸入要匯入的行程 ID：\n${names}`, ids[0]);
-        if (pick && tripsBag.trips[pick]) return tripsBag.trips[pick];
-        return null;
+        const items = ids.map(id=>{
+          const t = tripsBag.trips[id];
+          return { value: id, title: t.name || '未命名行程', sub: `${(t.members||[]).length} 位成員・${(t.expenses||[]).length} 筆支出` };
+        });
+        const pick = await pickModal('偵測到多個行程，選一個要匯入的：', items);
+        return pick ? tripsBag.trips[pick] : null;
       }
     }
   }
@@ -997,8 +1372,8 @@ function downloadJson(){
 }
 function copyJson(){
   navigator.clipboard.writeText(JSON.stringify(trip, null, 2))
-    .then(()=>showMsg('ioMsg','已複製到剪貼簿',true))
-    .catch(()=>showMsg('ioMsg','複製失敗，請手動選取文字方塊內容',false));
+    .then(()=>toast('已複製到剪貼簿', 'success'))
+    .catch(()=>toast('複製失敗，請手動選取文字方塊內容', 'error'));
 }
 function handleFileImport(evt){
   const file = evt.target.files[0];
@@ -1007,26 +1382,30 @@ function handleFileImport(evt){
   reader.onload = ()=>{ document.getElementById('jsonInput').value = reader.result; };
   reader.readAsText(file);
 }
-function importJson(){
+async function importJson(){
   const raw = document.getElementById('jsonInput').value.trim();
-  if (!raw){ showMsg('importMsg','請貼上或選擇 JSON 檔案',false); return; }
+  if (!raw){ toast('請貼上或選擇 JSON 檔案', 'error'); return; }
   let parsed;
-  try { parsed = JSON.parse(raw); } catch(err){ showMsg('importMsg','JSON 格式錯誤：'+err.message,false); return; }
+  try { parsed = JSON.parse(raw); } catch(err){ toast('JSON 格式錯誤：'+err.message, 'error'); return; }
 
-  const candidateTrip = resolveTripFromRaw(parsed);
-  if (!candidateTrip){ showMsg('importMsg','找不到可辨識的 trip 資料結構',false); return; }
+  const candidateTrip = await resolveTripFromRaw(parsed);
+  if (!candidateTrip){ toast('找不到可辨識的 trip 資料結構', 'error'); return; }
 
   trip = repairTrip(candidateTrip);
   editingExpenseId = null; editingDepositId = null;
-  showMsg('importMsg', `已匯入行程「${trip.name}」（成員 ${trip.members.length} 人、支出 ${trip.expenses.length} 筆）`, true);
+  toast(`已匯入行程「${trip.name}」（成員 ${trip.members.length} 人、支出 ${trip.expenses.length} 筆）`, 'success');
   renderAll();
 }
-function newTrip(){
+async function confirmNewTrip(){
+  const ok = await confirmModal('確定要清空目前所有記帳內容，重新開始一個新行程嗎？此動作會清空成員、支出、轉帳等所有資料（但存檔前都可以按復原）。', { danger:true, confirmText:'清空並開新行程' });
+  if (!ok) return;
+  const snapshot = trip;
   trip = defaultTrip();
   editingExpenseId = null; editingDepositId = null;
   localFileHandle = null;
   updateLocalFileStatus();
   renderAll();
+  toastUndo('已清空行程，開始新的一個', ()=>{ trip = snapshot; renderAll(); });
 }
 
 /* ===================== 直接覆寫本機檔案 (File System Access API) ===================== */
@@ -1050,6 +1429,33 @@ function initFsApiUi(){
 function updateLocalFileStatus(){
   const el = document.getElementById('localFileStatus');
   el.textContent = localFileHandle ? `目前連結檔案：${localFileHandle.name}` : '尚未連結本機檔案';
+  const pillText = document.getElementById('fileStatusText');
+  const pill = document.getElementById('fileStatusPill');
+  if (localFileHandle){
+    pillText.textContent = (autoSaveEnabled ? '自動覆寫：' : '已連結：') + localFileHandle.name;
+    pill.classList.add('on'); pill.classList.remove('warn');
+  } else {
+    pillText.textContent = '未連結本機檔案';
+    pill.classList.remove('on','warn');
+  }
+}
+function updateBotStatusPill(connected, label){
+  const pillText = document.getElementById('botStatusText');
+  const pill = document.getElementById('botStatusPill');
+  if (connected){
+    pillText.textContent = label ? `已連線：${label}` : '已連線 Bot';
+    pill.classList.add('on'); pill.classList.remove('warn');
+  } else {
+    pillText.textContent = '未連線 Bot';
+    pill.classList.remove('on','warn');
+  }
+}
+function toggleApiKeyVisibility(){
+  const input = document.getElementById('apiKey');
+  const btn = document.getElementById('apiKeyToggleBtn');
+  const showing = input.type === 'text';
+  input.type = showing ? 'password' : 'text';
+  btn.textContent = showing ? '顯示' : '隱藏';
 }
 async function openLocalFile(){
   if (!supportsFileSystemAccess) return;
@@ -1062,18 +1468,18 @@ async function openLocalFile(){
     const file = await handle.getFile();
     const text = await file.text();
     let parsed;
-    try { parsed = JSON.parse(text); } catch(err){ showMsg('localFileMsg','這個檔案不是合法的 JSON：'+err.message,false); return; }
-    const candidate = resolveTripFromRaw(parsed);
-    if (!candidate){ showMsg('localFileMsg','這個檔案裡找不到可辨識的 trip 資料結構',false); return; }
+    try { parsed = JSON.parse(text); } catch(err){ toast('這個檔案不是合法的 JSON：'+err.message, 'error'); return; }
+    const candidate = await resolveTripFromRaw(parsed);
+    if (!candidate){ toast('這個檔案裡找不到可辨識的 trip 資料結構', 'error'); return; }
 
     trip = repairTrip(candidate);
     localFileHandle = handle;
     editingExpenseId = null; editingDepositId = null;
     updateLocalFileStatus();
-    showMsg('localFileMsg', `已連結並載入「${trip.name}」，之後按「儲存並覆寫檔案」會直接寫回這個檔案`, true);
+    toast(`已連結並載入「${trip.name}」，之後按「儲存並覆寫檔案」會直接寫回這個檔案`, 'success');
     renderAll();
   }catch(err){
-    handleFsError(err, 'localFileMsg');
+    handleFsError(err);
   }
 }
 async function saveToLocalFile(silent){
@@ -1089,24 +1495,25 @@ async function saveToLocalFile(silent){
     await writable.write(JSON.stringify(trip, null, 2));
     await writable.close();
     updateLocalFileStatus();
-    if (!silent) showMsg('localFileMsg', '已覆寫檔案：' + localFileHandle.name, true);
+    if (!silent) toast('已覆寫檔案：' + localFileHandle.name, 'success');
   }catch(err){
-    handleFsError(err, 'localFileMsg');
+    handleFsError(err);
   }
 }
-function handleFsError(err, msgElId){
+function handleFsError(err){
   if (err.name === 'AbortError') return; // 使用者自己取消選擇視窗
   if (err.name === 'SecurityError'){
-    showMsg(msgElId, '此功能需要安全連線（HTTPS 或 localhost），目前頁面是用 http 開啟。請改用下方下載／貼上，或幫這個網頁加上 HTTPS 反向代理後再試。', false);
+    toast('此功能需要安全連線（HTTPS 或 localhost），目前頁面是用 http 開啟。請改用下方下載／貼上，或幫這個網頁加上 HTTPS 反向代理後再試。', 'error');
     return;
   }
-  showMsg(msgElId, '操作失敗：' + err.message, false);
+  toast('操作失敗：' + err.message, 'error');
 }
 function onAutoSaveToggle(checked){
   autoSaveEnabled = checked;
   if (checked && !localFileHandle){
-    showMsg('localFileMsg','請先選擇並連結一個檔案，自動覆寫才會生效',false);
+    toast('請先選擇並連結一個檔案，自動覆寫才會生效', 'error');
   }
+  updateLocalFileStatus();
 }
 function scheduleAutoSave(){
   if (!autoSaveEnabled || !localFileHandle) return;
@@ -1120,6 +1527,13 @@ function renderDepositSelects(){
   document.getElementById('depPayer').innerHTML = '<option value="">請選擇</option>' + opts;
   document.getElementById('depCollector').innerHTML = '<option value="">請選擇</option>' + opts;
   document.getElementById('depCurrency').innerHTML = currencyOptions(trip.baseCurrency);
+}
+function emptyState(icon, text, ctaLabel, ctaOnclick){
+  return `<div class="empty-state">
+    <div class="ic">${icon}</div>
+    <p>${escapeHtml(text)}</p>
+    ${ctaLabel ? `<button class="btn btn-ghost btn-sm" onclick="${ctaOnclick}">${escapeHtml(ctaLabel)}</button>` : ''}
+  </div>`;
 }
 
 function renderAll(){
@@ -1136,14 +1550,14 @@ function renderAll(){
       <span class="dot"></span>
       <input type="text" value="${escapeHtml(m.name)}" onchange="renameMember('${m.id}', this.value)">
       <button class="btn btn-danger btn-sm" onclick="removeMember('${m.id}')">刪除</button>
-    </div>`).join('') || '<p class="empty">尚未新增任何成員</p>';
+    </div>`).join('') || emptyState('👥', '尚未新增任何成員', '新增第一位成員 →', "document.getElementById('newMemberName').focus()");
 
   // rates tab
   document.getElementById('rateTableBody').innerHTML = Object.entries(trip.rates).sort().map(([code,rate])=>`
     <tr>
-      <td><b>${code}</b>${code===trip.baseCurrency?' <span class="hint">（基準）</span>':''}</td>
-      <td><input type="number" step="0.0001" value="${rate}" ${code===trip.baseCurrency?'disabled':''} onchange="updateRate('${code}', this.value)"></td>
-      <td>${code===trip.baseCurrency?'':`<button class="btn btn-danger btn-sm" onclick="removeRate('${code}')">刪除</button>`}</td>
+      <td data-label="幣別"><b>${code}</b>${code===trip.baseCurrency?' <span class="hint">（基準）</span>':''}</td>
+      <td data-label="匯率"><input type="number" inputmode="decimal" step="0.0001" value="${rate}" ${code===trip.baseCurrency?'disabled':''} onchange="updateRate('${code}', this.value)"></td>
+      <td data-label="">${code===trip.baseCurrency?'':`<button class="btn btn-danger btn-sm" onclick="removeRate('${code}')">刪除</button>`}</td>
     </tr>`).join('');
 
   // expense form selects
@@ -1169,7 +1583,7 @@ function renderAll(){
         </div>
       </div>
       <div class="ledger-amt">${fmtMoney(e.amount, e.currency)} <span style="font-size:11px;color:var(--ink-soft);">${e.currency}</span></div>
-    </div>`).join('') || '<p class="empty">尚未有任何支出紀錄</p>';
+    </div>`).join('') || emptyState('🧾', '還沒有任何支出', '新增第一筆 →', "showMainTab('expenses'); document.getElementById('expDesc').focus();");
 
   // deposit form selects
   renderDepositSelects();
@@ -1193,7 +1607,7 @@ function renderAll(){
         </div>
       </div>
       <div class="ledger-amt">${fmtMoney(d.amount, d.currency)} <span style="font-size:11px;color:var(--ink-soft);">${d.currency}</span></div>
-    </div>`).join('') || '<p class="empty">尚未有任何轉帳／預收紀錄</p>';
+    </div>`).join('') || emptyState('💸', '還沒有任何轉帳／預收紀錄', '新增第一筆 →', "showMainTab('deposits'); document.getElementById('depPayer').focus();");
 
   // overview
   document.getElementById('kvMembers').textContent = trip.members.length;
@@ -1205,7 +1619,7 @@ function renderAll(){
   const net = calcNetBalances(trip);
   const balanceListEl = document.getElementById('balanceList');
   if (!trip.members.length){
-    balanceListEl.innerHTML = '<p class="empty">尚未新增成員</p>';
+    balanceListEl.innerHTML = emptyState('👥', '尚未新增成員，先到「設定 → 成員」加人吧', '前往新增成員 →', "showMainTab('settings'); showSettingsSub('members'); document.getElementById('newMemberName').focus();");
   } else {
     balanceListEl.innerHTML = trip.members.map(m=>{
       const v = net[m.id] || 0;
@@ -1219,9 +1633,9 @@ function renderAll(){
   }
 
   const allSettled = trip.members.length>0 && trip.members.every(m=>Math.abs(net[m.id]||0)<=0.01);
-  document.getElementById('stampBadge').textContent = allSettled ? '已結清' : '待結算';
-  document.getElementById('stampBadge').style.color = allSettled ? 'var(--credit)' : 'var(--brass)';
-  document.getElementById('stampBadge').style.borderColor = allSettled ? 'var(--credit)' : 'var(--brass)';
+  const stamp = document.getElementById('stampBadge');
+  stamp.textContent = allSettled ? '已結清' : '待結算';
+  stamp.classList.toggle('settled', allSettled);
 
   const tx = simplifyDebts(net);
   document.getElementById('settleList').innerHTML = tx.length ? tx.map(t=>`
@@ -1230,7 +1644,7 @@ function renderAll(){
       <span class="settle-arrow">應付給 →</span>
       <span>${escapeHtml(memberName(t.to))}</span>
       <span class="settle-amt">${fmtMoney(t.amount, trip.baseCurrency)}</span>
-    </div>`).join('') : '<p class="empty">目前沒有需要結算的款項</p>';
+    </div>`).join('') : '<p class="empty-state" style="padding:16px;">🎉 目前沒有需要結算的款項</p>';
 
   // json preview
   document.getElementById('jsonPreview').value = JSON.stringify(trip, null, 2);
@@ -1240,6 +1654,7 @@ function renderAll(){
 
 /* ===================== connect to bot API ===================== */
 let lastGuilds = [];
+let lastSyncedTripJSON = null; // 用來做簡單的樂觀鎖：跟伺服器目前的版本比對，偵測是否被別人改過
 function apiBaseUrl(){
   const v = document.getElementById('apiBase').value.trim();
   return v ? v.replace(/\/+$/,'') : ''; // 空字串 = 使用目前網址（同源）
@@ -1261,11 +1676,14 @@ async function refreshGuildList(){
     sel.innerHTML = guilds.length
       ? guilds.map(g=>`<option value="${g.guildId}">${g.guildId}${g.guildName?(' － '+escapeHtml(g.guildName)):''}</option>`).join('')
       : '<option value="">（伺服器上沒有任何資料）</option>';
-    sel.onchange = populateTripSelect;
+    sel.onchange = ()=>{ populateTripSelect(); syncAdvDetailsState(); };
     populateTripSelect();
-    showMsg('connectMsg', `連線成功，共找到 ${guilds.length} 個伺服器`, true);
+    syncAdvDetailsState();
+    toast(`連線成功，共找到 ${guilds.length} 個伺服器`, 'success');
+    updateBotStatusPill(true);
   }catch(err){
-    showMsg('connectMsg', '連線失敗：' + err.message + '（請確認網址、API Key，以及伺服器是否有開放該埠）', false);
+    toast('連線失敗：' + err.message + '（請確認網址、API Key，以及伺服器是否有開放該埠）', 'error');
+    updateBotStatusPill(false);
   }
 }
 function populateTripSelect(){
@@ -1280,7 +1698,7 @@ function populateTripSelect(){
 async function loadTripFromApi(){
   const guildId = document.getElementById('guildSelect').value;
   const tripId = document.getElementById('tripSelect').value;
-  if (!guildId || !tripId){ showMsg('connectMsg','請先選擇伺服器與行程',false); return; }
+  if (!guildId || !tripId){ toast('請先選擇伺服器與行程', 'error'); return; }
   try{
     const res = await fetch(`${apiBaseUrl()}/api/trip/${encodeURIComponent(guildId)}/${encodeURIComponent(tripId)}`, { headers: apiHeaders() });
     if (!res.ok){
@@ -1289,18 +1707,40 @@ async function loadTripFromApi(){
     }
     const data = await res.json();
     trip = repairTrip(data);
+    lastSyncedTripJSON = JSON.stringify(trip);
     editingExpenseId = null; editingDepositId = null;
-    showMsg('connectMsg', `已載入「${trip.name}」（成員 ${trip.members.length} 人、支出 ${trip.expenses.length} 筆）`, true);
+    toast(`已載入「${trip.name}」（成員 ${trip.members.length} 人、支出 ${trip.expenses.length} 筆）`, 'success');
+    updateBotStatusPill(true, trip.name);
+    syncAdvDetailsState();
     renderAll();
   }catch(err){
-    showMsg('connectMsg', '載入失敗：' + err.message, false);
+    toast('載入失敗：' + err.message, 'error');
   }
 }
 async function saveTripToApi(){
   const guildId = document.getElementById('guildSelect').value;
   const tripId = document.getElementById('tripSelect').value || trip.id;
-  if (!guildId){ showMsg('connectMsg','請先選擇要存回哪個伺服器',false); return; }
-  if (!confirm(`確定要把目前的行程資料覆蓋回 Bot 伺服器（${guildId} / ${tripId}）嗎？`)) return;
+  if (!guildId){
+    showMainTab('settings'); showSettingsSub('connect');
+    toast('請先在這裡完成連線（選擇伺服器與行程），之後就能在支出／轉帳頁直接按「儲存到 Bot」了', 'error');
+    return;
+  }
+  // 樂觀鎖檢查：儲存前先看看伺服器上的版本跟我們最後一次同步的是否一致，
+  // 避免無聲覆蓋掉別人（或自己在別的分頁）剛存的資料。
+  try{
+    const checkRes = await fetch(`${apiBaseUrl()}/api/trip/${encodeURIComponent(guildId)}/${encodeURIComponent(tripId)}`, { headers: apiHeaders() });
+    if (checkRes.ok){
+      const serverTrip = await checkRes.json();
+      if (lastSyncedTripJSON && JSON.stringify(serverTrip) !== lastSyncedTripJSON){
+        const proceed = await confirmModal('伺服器上的資料似乎已經被更新過（可能是別人剛存過，或你在別的分頁存過），確定要用你目前這份覆蓋掉嗎？', { danger:true, confirmText:'仍要覆蓋', title:'偵測到資料衝突' });
+        if (!proceed) return;
+      } else if (!lastSyncedTripJSON) {
+        const proceed = await confirmModal(`確定要把目前的行程資料儲存到 Bot 伺服器（${guildId} / ${tripId}）嗎？`, { confirmText:'儲存' });
+        if (!proceed) return;
+      }
+    }
+  }catch(e){ /* 檢查失敗就略過，不要因為這個擋住存檔 */ }
+
   try{
     const res = await fetch(`${apiBaseUrl()}/api/trip/${encodeURIComponent(guildId)}/${encodeURIComponent(tripId)}`, {
       method: 'PUT',
@@ -1311,9 +1751,11 @@ async function saveTripToApi(){
       const body = await res.json().catch(()=>({}));
       throw new Error(body.error || ('HTTP ' + res.status));
     }
-    showMsg('connectMsg', '已儲存回 Bot 伺服器', true);
+    lastSyncedTripJSON = JSON.stringify(trip);
+    toast('已儲存到 Bot 伺服器', 'success');
+    updateBotStatusPill(true, trip.name);
   }catch(err){
-    showMsg('connectMsg', '儲存失敗：' + err.message, false);
+    toast('儲存失敗：' + err.message, 'error');
   }
 }
 
@@ -1333,11 +1775,11 @@ function buildBookmarkUrl(){
 }
 function copyBookmarkUrl(){
   const apiKey = document.getElementById('apiKey').value.trim();
-  if (!apiKey){ showMsg('connectMsg','請先在上面填 API Key（並建議先按一次「連線並讀取伺服器清單」選好伺服器/行程），再產生書籤網址', false); return; }
+  if (!apiKey){ toast('請先在上面填 API Key（並建議先按一次「連線並讀取伺服器清單」選好伺服器/行程），再產生書籤網址', 'error'); return; }
   const url = buildBookmarkUrl();
   navigator.clipboard.writeText(url)
-    .then(()=>showMsg('connectMsg','已複製書籤網址！存成瀏覽器書籤，之後點它就會自動連線並載入行程。（網址裡含金鑰，請只存在自己的書籤，不要公開分享）', true))
-    .catch(()=>showMsg('connectMsg','複製失敗，這是網址（請手動複製）：' + url, false));
+    .then(()=>toast('已複製書籤網址！存成瀏覽器書籤，之後點它就會自動連線並載入行程。（網址裡含金鑰，請只存在自己的書籤，不要公開分享）', 'success'))
+    .catch(()=>toast('複製失敗，這是網址（請手動複製）：' + url, 'error'));
 }
 // 頁面載入時，若網址帶有 ?apiKey=...，自動帶入並連線、（若也帶 guild/trip）直接載入該行程
 async function applyUrlParams(){
@@ -1374,5 +1816,6 @@ renderAll();
   }).catch(()=>{});
 })();
 </script>
+
 </body>
 </html>
