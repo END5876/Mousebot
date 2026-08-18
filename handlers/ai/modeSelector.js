@@ -8,7 +8,7 @@ const logger = require('../../utils/logger');
 // ════════════════════════════════════════════════════════
 const MODES_FILE_PATH = path.resolve(__dirname, '../../data/userModes.json');
 
-const AVAILABLE_MODES = ['loss', 'mambaMentor', 'mygo', 'inmu', 'lover', 'developer', 'gugu', 'mesugaki', 'china'];
+const AVAILABLE_MODES = ['loss', 'mambaMentor', 'mygo', 'inmu', 'lover', 'developer', 'gugu', 'mesugaki'];
 
 // ════════════════════════════════════════════════════════
 //  JSON 持久化
@@ -98,7 +98,6 @@ function getModeName(mode) {
         developer:   '開發者模式',
         gugu:        '咕咕模式',
         mesugaki:    '磁小鬼模式',
-        china:       '中國模式',
     };
     return names[mode] ?? mode;
 }
