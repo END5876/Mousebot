@@ -1170,9 +1170,9 @@ function renderMemberDetails(net) {
       }
     }
     for (const d of trip.deposits) {
-      // 付款人：付出去（轉帳給收款人）→ 淨額增加（對付款人是收入）
+      // 付款人：付出去（轉帳給收款人）→ 應記錄為轉帳支出 (transferOut)
       if (ledger[d.payerId]) {
-        ledger[d.payerId].transferIn.push({
+        ledger[d.payerId].transferOut.push({
           counterpart: memberName(d.collectorId),
           amount: d.amount,
           currency: d.currency,
@@ -1181,9 +1181,9 @@ function renderMemberDetails(net) {
           createdAt: d.createdAt,
         });
       }
-      // 收款人：收到預付款 → 淨額減少（對收款人是負債）
+      // 收款人：收到預付款 → 應記錄為轉帳收入 (transferIn)
       if (ledger[d.collectorId]) {
-        ledger[d.collectorId].transferOut.push({
+        ledger[d.collectorId].transferIn.push({
           counterpart: memberName(d.payerId),
           amount: d.amount,
           currency: d.currency,
@@ -1238,9 +1238,8 @@ function renderMemberDetails(net) {
 
     const paidSection   = renderSection('代墊支出（＋增加淨額）', ld.paid, 'paid', '代墊', 1);
     const shareSection  = renderSection('分攤費用（－減少淨額）', ld.share, 'share', '分攤', -1);
-    const tInSection    = renderSection('預收款／轉帳收入（＋增加淨額）', ld.transferIn, 'transfer-in', '收款', 1);
-    const tOutSection   = renderSection('預付款／轉帳支出（－減少淨額）', ld.transferOut, 'transfer-out', '付款', -1);
-
+    const tInSection    = renderSection('預收款／轉帳收入（－減少淨額）', ld.transferIn, 'transfer-in', '收款', -1);
+    const tOutSection   = renderSection('預付款／轉帳支出（＋增加淨額）', ld.transferOut, 'transfer-out', '付款', 1);
     const totalPaid  = round2(ld.paid.reduce((s,x)=>s+x.amountInBase,0));
     const totalShare = round2(ld.share.reduce((s,x)=>s+x.amountInBase,0));
     const totalTIn   = round2(ld.transferIn.reduce((s,x)=>s+x.amountInBase,0));
@@ -1249,8 +1248,8 @@ function renderMemberDetails(net) {
     const summaryRows = [
       totalPaid  ? `<div class="detail-summary-row"><span class="label">代墊合計</span><span class="val pos">+${fmtMoney(totalPaid, trip.baseCurrency)} ${trip.baseCurrency}</span></div>` : '',
       totalShare ? `<div class="detail-summary-row"><span class="label">分攤合計</span><span class="val neg">−${fmtMoney(totalShare, trip.baseCurrency)} ${trip.baseCurrency}</span></div>` : '',
-      totalTIn   ? `<div class="detail-summary-row"><span class="label">收款合計</span><span class="val pos">+${fmtMoney(totalTIn, trip.baseCurrency)} ${trip.baseCurrency}</span></div>` : '',
-      totalTOut  ? `<div class="detail-summary-row"><span class="label">付款合計</span><span class="val neg">−${fmtMoney(totalTOut, trip.baseCurrency)} ${trip.baseCurrency}</span></div>` : '',
+      totalTIn   ? `<div class="detail-summary-row"><span class="label">收款合計</span><span class="val neg">−${fmtMoney(totalTIn, trip.baseCurrency)} ${trip.baseCurrency}</span></div>` : '',
+      totalTOut  ? `<div class="detail-summary-row"><span class="label">付款合計</span><span class="val pos">+${fmtMoney(totalTOut, trip.baseCurrency)} ${trip.baseCurrency}</span></div>` : '',
     ].filter(Boolean).join('');
 
     const bodyHtml = hasData
