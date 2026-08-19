@@ -150,9 +150,7 @@ const SANITIZE_SYSTEM_PROMPT = `你是一個文字處理工具，負責將帶有
 
 你的任務：
 1. 完整保留原文中所有的事實內容、承諾、資訊、答案與條件。
-2. 將語氣改為中性、平鋪直敘的陳述方式，像是在轉述一段對話紀錄。
-3. 只輸出淨化後的純文字內容，不要加任何前綴、說明或標點符號以外的格式。
-4. 不要改變原文的語言（繁體中文維持繁體中文）。`;
+2. 將語氣改為中性、平鋪直敘的陳述方式，像是在轉述一段對話紀錄。`;
 
 // 語氣淨化快取，避免對同一訊息重複呼叫 API
 const sanitizeCache = new Map();
@@ -297,25 +295,43 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
 
             const textContent = msg.cleanContent || msg.content;
 
+            // ════════════════════════════════════════════════════════
+            //  修正後的機器人訊息處理邏輯（取代原本的 if/else 區塊）
+            //  原始位置：fetchUserChannelHistory() 函式內，處理
+            //  msg.author.id === botId 的分支
+            // ════════════════════════════════════════════════════════
             if (msg.author.id === botId) {
-                // ── 第一步 & 第三步：查詢機器人訊息的原始對象，決定是否進行語氣淨化 ──
                 const cachedCtx = getBotMessageContext(msg.id);
 
                 if (cachedCtx && cachedCtx.userId !== userId) {
-                    // 這句話是機器人對「其他人」說的 → 進行語氣淨化並加上背景標註
+                    // 【狀態一】確認：機器人對「其他人」說的話
+                    // → 進行語氣淨化，並清楚標註對象
                     const targetUserName = cachedCtx.userName ?? '其他人';
                     if (textContent?.trim().length > 0) {
                         const sanitized = await sanitizeBotMessage(textContent.trim(), targetUserName);
                         parts.push({ text: `[背景參考 → 先前對 ${targetUserName} 說的話]\n${sanitized}` });
                     }
-                } else {
-                    // 這句話是機器人對「目前使用者」說的（或快取中查不到，保守處理不動）
+
+                } else if (cachedCtx && cachedCtx.userId === userId) {
+                    // 【狀態二】確認：機器人對「目前使用者」說的話
+                    // → 不需淨化語氣（本來就是對他說的），但仍加上明確標籤
+                    //   讓 AI 清楚知道「這段是我之前對眼前這個人說的話」
                     if (textContent?.trim().length > 0) {
-                        parts.push({ text: textContent.trim() });
+                        parts.push({ text: `[你先前對目前這位使用者說過的話]\n${textContent.trim()}` });
+                    }
+
+                } else {
+                    // 【狀態三】查無記錄（快取過期 / 資料遺失 / 快取建立前的舊訊息）
+                    // → 對象不明，無法確定是否為當前使用者
+                    // → 保守處理：視為「可能對其他人說」，一併進行語氣淨化
+                    //   並用「對象不明」標籤降低誤導風險，而非直接原文餵入
+                    if (textContent?.trim().length > 0) {
+                        const sanitized = await sanitizeBotMessage(textContent.trim(), '對象不明的使用者');
+                        parts.push({ text: `[背景參考 → 對象不明的先前發言，語氣已中性化]\n${sanitized}` });
                     }
                 }
             } else {
-                // ── 第四步：人類使用者的發言，原封不動，加上含回覆語氣的結構化標籤 ──
+                // 人類使用者的發言，原封不動，加上含回覆語氣的結構化標籤
                 if (textContent?.trim().length > 0) {
                     const label = getModeLabel(msg.author.id, msg.author.username, userId);
                     parts.push({ text: `${label}\n${textContent.trim()}` });
