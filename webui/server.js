@@ -31,6 +31,12 @@
  *                       （handlers/ai/aiCore.js）已經在用同一把金鑰，
  *                       不用額外申請。沒設定的話帳單辨識功能會回傳清楚的
  *                       錯誤訊息，但不影響其他功能。
+ *
+ * 即時匯率：非基準幣別的支出／轉帳，會先呼叫 /api/fx-rate 取得當下即時
+ * 匯率換算 amountInBase（amount 仍然存原始幣值），不需要另外申請金鑰
+ * ——用的是免費、不用金鑰的 open.er-api.com。伺服器端有做快取（同一個
+ * 來源幣別 6 小時內重複查詢不會再打外部 API），即時匯率抓不到時會自動
+ * 退回使用行程裡手動設定的匯率，不會擋住記帳。
  */
 
 const path = require('path');
@@ -43,6 +49,23 @@ const storage = require('../handlers/splitbill/utils/storage');
 // 跟專案既有 handlers/ai/aiCore.js 用同一顆模型，沿用已驗證可用的設定
 const RECEIPT_MODEL_NAME = 'gemini-3.1-flash-lite';
 const genAI = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY) : null;
+
+// ---- 即時匯率：免費、不用金鑰的 open.er-api.com，伺服器端記憶體快取 ----
+const FX_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 小時；這個 API 本身也是一天更新一次，不用查太頻繁
+const fxCache = new Map(); // baseCurrency -> { rates, fetchedAt, asOf }
+
+async function getFxRatesFor(base){
+  const cached = fxCache.get(base);
+  if (cached && (Date.now() - cached.fetchedAt) < FX_CACHE_TTL_MS) return cached;
+  const res = await fetch(`https://open.er-api.com/v6/latest/${encodeURIComponent(base)}`);
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data || data.result !== 'success') {
+    throw new Error((data && data['error-type']) || `匯率服務回應異常 (HTTP ${res.status})`);
+  }
+  const entry = { rates: data.rates, fetchedAt: Date.now(), asOf: data.time_last_update_utc || null };
+  fxCache.set(base, entry);
+  return entry;
+}
 
 const RECEIPT_PROMPT = `你是一個帳單／收據辨識助手。請仔細閱讀這張照片，只回傳一個 JSON 物件，不要有任何其他文字、不要用 markdown code block 包起來、不要加註解。
 
@@ -166,6 +189,24 @@ function startWebApi(options = {}) {
   // ---- POST /api/parse-receipt：上傳帳單照片，用 Gemini 的視覺能力辨識出品項、金額、
   // 服務費比例、幣別。跟專案既有 /ai 指令共用同一把 GEMINI_API_KEY。 ----
   // body: { image: '<純 base64，不含 data: 前綴>', mediaType: 'image/jpeg' }
+  // ---- GET /api/fx-rate?from=JPY&to=TWD：取得當下即時匯率（供非基準幣支出/轉帳換算 amountInBase 用）----
+  app.get('/api/fx-rate', async (req, res) => {
+    const from = String(req.query.from || '').trim().toUpperCase();
+    const to = String(req.query.to || '').trim().toUpperCase();
+    if (!from || !to) return res.status(400).json({ error: '缺少 from 或 to 參數' });
+    if (from === to) return res.json({ rate: 1, asOf: null, source: 'same-currency' });
+    try {
+      const { rates, asOf } = await getFxRatesFor(from);
+      const rate = rates[to];
+      if (typeof rate !== 'number') {
+        return res.status(404).json({ error: `即時匯率服務裡找不到 ${from} 兌 ${to} 的匯率` });
+      }
+      res.json({ rate, asOf, source: 'open.er-api.com' });
+    } catch (err) {
+      res.status(502).json({ error: '查詢即時匯率失敗：' + err.message });
+    }
+  });
+
   app.post('/api/parse-receipt', async (req, res) => {
     if (!genAI) {
       return res.status(500).json({ error: '伺服器尚未設定 GEMINI_API_KEY，無法使用帳單辨識功能' });
@@ -203,4 +244,4 @@ function startWebApi(options = {}) {
   });
 }
 
-module.exports = { startWebApi, extractJsonObject, sanitizeReceiptResponse };
+module.exports = { startWebApi, extractJsonObject, sanitizeReceiptResponse, getFxRatesFor };
