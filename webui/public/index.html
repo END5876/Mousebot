@@ -1238,8 +1238,8 @@ function renderMemberDetails(net) {
 
     const paidSection   = renderSection('代墊支出（＋增加淨額）', ld.paid, 'paid', '代墊', 1);
     const shareSection  = renderSection('分攤費用（－減少淨額）', ld.share, 'share', '分攤', -1);
-    const tInSection    = renderSection('預收款／轉帳收入（－減少淨額）', ld.transferIn, 'transfer-in', '收自', -1);
-    const tOutSection   = renderSection('預付款／轉帳支出（＋增加淨額）', ld.transferOut, 'transfer-out', '付給', 1);
+    const tInSection    = renderSection('預收款／轉帳收入）(＋增加淨額）', ld.transferIn, 'transfer-in', '收自', 1);
+    const tOutSection   = renderSection('預付款／轉帳支出（－減少淨額)', ld.transferOut, 'transfer-out', '付給', -1);
     const totalPaid  = round2(ld.paid.reduce((s,x)=>s+x.amountInBase,0));
     const totalShare = round2(ld.share.reduce((s,x)=>s+x.amountInBase,0));
     const totalTIn   = round2(ld.transferIn.reduce((s,x)=>s+x.amountInBase,0));
