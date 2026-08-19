@@ -575,8 +575,7 @@
       </div>
 
       <div class="btn-row">
-        <button class="btn btn-primary btn-block" id="btnSaveExpense" onclick="saveExpense()">儲存這筆支出</button>
-        <button class="btn btn-brass" id="btnSaveExpenseSync" onclick="withLoading(this,'同步中…',saveExpenseAndSync)">儲存並同步到 Bot</button>
+        <button class="btn btn-brass btn-block" id="btnSaveExpenseSync" onclick="withLoading(this,'同步中…',saveExpenseAndSync)">☁️ 儲存到 Bot</button>
         <button class="btn btn-ghost" onclick="resetExpenseForm()">清空表單</button>
       </div>
     </div>
@@ -613,13 +612,13 @@
           <select id="depCurrency"></select>
         </div>
       </div>
+      <p class="hint" id="depBaseHint"></p>
       <div class="field">
         <label>備註（選填）</label>
         <input type="text" id="depNote" placeholder="例如：提前收團費">
       </div>
       <div class="btn-row">
-        <button class="btn btn-primary btn-block" id="btnSaveDeposit" onclick="saveDeposit()">儲存這筆轉帳</button>
-        <button class="btn btn-brass" id="btnSaveDepositSync" onclick="withLoading(this,'同步中…',saveDepositAndSync)">儲存並同步到 Bot</button>
+        <button class="btn btn-brass btn-block" id="btnSaveDepositSync" onclick="withLoading(this,'同步中…',saveDepositAndSync)">☁️ 儲存到 Bot</button>
         <button class="btn btn-ghost" onclick="resetDepositForm()">清空表單</button>
       </div>
     </div>
@@ -1221,14 +1220,42 @@ function readChipValues(prefix){
     amount: parseFloat(c.querySelector('.amt').value) || 0
   }));
 }
+let expenseLiveRate = null; // { currency, rate, asOf } - 目前解析出的即時匯率
+async function refreshExpenseLiveRate(){
+  const currency = document.getElementById('expCurrency').value;
+  if (currency === trip.baseCurrency){ expenseLiveRate = null; renderExpenseHint(); return; }
+  const result = await fetchLiveRate(currency, trip.baseCurrency);
+  // 使用者可能在等待期間又切換了幣別，回來時要確認還是同一個才套用
+  if (document.getElementById('expCurrency').value !== currency) return;
+  if (result){
+    expenseLiveRate = { currency, rate: result.rate, asOf: result.asOf };
+    trip.rates[currency] = result.rate; // 順便更新手動匯率表，離線時也有個還算新的備援值
+  } else {
+    expenseLiveRate = null;
+  }
+  renderExpenseHint();
+}
 function renderExpenseHint(){
   const amount = parseFloat(document.getElementById('expAmount').value) || 0;
   const currency = document.getElementById('expCurrency').value;
-  const rate = trip.rates[currency];
-  const base = rate ? round2(amount*rate) : null;
-  document.getElementById('expBaseHint').innerHTML = base===null
-    ? `幣別 ${currency} 尚無匯率，請先到「幣別匯率」分頁設定。`
-    : `換算基準幣別（${trip.baseCurrency}）約為 <b>${fmtMoney(base, trip.baseCurrency)}</b>`;
+  let rate, hintHtml;
+  if (currency === trip.baseCurrency){
+    rate = 1;
+    hintHtml = '';
+  } else if (expenseLiveRate && expenseLiveRate.currency === currency){
+    rate = expenseLiveRate.rate;
+    const base = round2(amount*rate);
+    hintHtml = `即時匯率 1 ${currency} = ${rate} ${trip.baseCurrency}，換算約為 <b>${fmtMoney(base, trip.baseCurrency)}</b>`;
+  } else {
+    rate = trip.rates[currency];
+    if (rate){
+      const base = round2(amount*rate);
+      hintHtml = `⏳ 查詢即時匯率中…暫用手動設定的匯率換算約為 <b>${fmtMoney(base, trip.baseCurrency)}</b>`;
+    } else {
+      hintHtml = `幣別 ${currency} 尚無匯率，正在查詢即時匯率…若查不到請先到「幣別匯率」分頁手動設定。`;
+    }
+  }
+  document.getElementById('expBaseHint').innerHTML = hintHtml;
 
   // 若代墊付款人只勾選了一位，金額變動時自動同步到他身上
   const payerWrap = document.getElementById('payerChips');
@@ -1252,7 +1279,7 @@ function renderExpenseHint(){
   }
 }
 document.getElementById('expAmount').addEventListener('input', renderExpenseHint);
-document.getElementById('expCurrency').addEventListener('change', renderExpenseHint);
+document.getElementById('expCurrency').addEventListener('change', ()=>{ renderExpenseHint(); refreshExpenseLiveRate(); });
 
 /* =====================================================================
    帳單照片辨識 — 上傳照片 → 伺服器呼叫 Claude 辨識品項 → 逐項認領 →
@@ -1561,11 +1588,11 @@ function renderReceiptWorkArea(){
     </div>
     ${currencyHint}
     <div class="btn-row">
-      <button class="btn btn-primary btn-block" onclick="finalizeReceiptExpense()">✅ 建立這筆支出</button>
+      <button class="btn btn-brass btn-block" onclick="withLoading(this,'同步中…',finalizeReceiptExpense)">✅ 建立支出並存到 Bot</button>
     </div>`;
 }
 
-function finalizeReceiptExpense(){
+async function finalizeReceiptExpense(){
   // 手動新增後忘記填寫、金額還是 0 又沒填名稱的空白列，視為放棄該列，直接忽略不擋結算
   receiptState.items = receiptState.items.filter(i => i.name.trim() || i.price !== 0);
   const items = receiptState.items;
@@ -1578,8 +1605,12 @@ function finalizeReceiptExpense(){
   const currency = document.getElementById('receiptCurrency').value;
   const description = document.getElementById('receiptDesc').value.trim() || '帳單辨識支出';
   if (!payerId){ toast('請選擇誰墊付這筆帳單', 'error'); return; }
-  const rate = trip.rates[currency];
-  if (!(rate>0)){ toast(`幣別 ${currency} 尚無匯率設定`, 'error'); return; }
+  let rate = trip.rates[currency];
+  if (currency !== trip.baseCurrency){
+    const live = await fetchLiveRate(currency, trip.baseCurrency);
+    if (live){ rate = live.rate; trip.rates[currency] = live.rate; }
+  }
+  if (!(rate>0)){ toast(`幣別 ${currency} 尚無匯率設定，且目前無法取得即時匯率`, 'error'); return; }
 
   const grandTotal = round2(items.reduce((s,i)=>s+i.price,0));
   if (!(grandTotal>0)){ toast('總金額需要大於 0', 'error'); return; }
@@ -1600,6 +1631,7 @@ function finalizeReceiptExpense(){
   toast(`已建立支出「${description}」，共 ${fmtMoney(grandTotal, currency)} ${currency}`, 'success');
   receiptResetUpload();
   renderAll();
+  await saveTripToApi();
 }
 
 /* ===================== expense CRUD ===================== */
@@ -1612,14 +1644,20 @@ function resetExpenseForm(){
   buildChips('payerChips','payer');
   buildChips('participantChips','participant');
   renderExpenseHint();
+  refreshExpenseLiveRate();
+}
+function resolveExpenseRate(currency){
+  if (currency === trip.baseCurrency) return 1;
+  if (expenseLiveRate && expenseLiveRate.currency === currency) return expenseLiveRate.rate;
+  return trip.rates[currency];
 }
 function saveExpense(){
   const description = document.getElementById('expDesc').value.trim() || '（無說明）';
   const amount = parseFloat(document.getElementById('expAmount').value);
   const currency = document.getElementById('expCurrency').value;
   if (!(amount>0)){ toast('請輸入大於 0 的金額', 'error'); return false; }
-  const rate = trip.rates[currency];
-  if (!(rate>0)){ toast(`幣別 ${currency} 尚無匯率設定`, 'error'); return false; }
+  const rate = resolveExpenseRate(currency);
+  if (!(rate>0)){ toast(`幣別 ${currency} 尚無匯率設定，且目前無法取得即時匯率`, 'error'); return false; }
   const amountInBase = round2(amount*rate);
 
   const payers = readChipValues('payer').filter(p=>p.amount>0 || document.querySelector(`#payerChips .chip[data-id="${p.userId}"]`).classList.contains('checked'));
@@ -1671,6 +1709,7 @@ function editExpense(id){
     if (chip){ chip.querySelector('input[type=checkbox]').checked = true; chip.classList.add('checked'); chip.querySelector('.amt').value = s.amount; }
   });
   renderExpenseHint();
+  refreshExpenseLiveRate();
   showMainTab('expenses');
   document.getElementById('panel-expenses').scrollIntoView({behavior:'smooth'});
 }
@@ -1684,11 +1723,54 @@ function deleteExpense(id){
 }
 
 /* ===================== deposit CRUD ===================== */
+let depositLiveRate = null; // { currency, rate, asOf }
+async function refreshDepositLiveRate(){
+  const currency = document.getElementById('depCurrency').value;
+  if (currency === trip.baseCurrency){ depositLiveRate = null; renderDepositHint(); return; }
+  const result = await fetchLiveRate(currency, trip.baseCurrency);
+  if (document.getElementById('depCurrency').value !== currency) return;
+  if (result){
+    depositLiveRate = { currency, rate: result.rate, asOf: result.asOf };
+    trip.rates[currency] = result.rate;
+  } else {
+    depositLiveRate = null;
+  }
+  renderDepositHint();
+}
+function resolveDepositRate(currency){
+  if (currency === trip.baseCurrency) return 1;
+  if (depositLiveRate && depositLiveRate.currency === currency) return depositLiveRate.rate;
+  return trip.rates[currency];
+}
+function renderDepositHint(){
+  const amount = parseFloat(document.getElementById('depAmount').value) || 0;
+  const currency = document.getElementById('depCurrency').value;
+  const hintEl = document.getElementById('depBaseHint');
+  if (!hintEl) return;
+  if (currency === trip.baseCurrency){ hintEl.innerHTML = ''; return; }
+  if (depositLiveRate && depositLiveRate.currency === currency){
+    const base = round2(amount*depositLiveRate.rate);
+    hintEl.innerHTML = `即時匯率 1 ${currency} = ${depositLiveRate.rate} ${trip.baseCurrency}，換算約為 <b>${fmtMoney(base, trip.baseCurrency)}</b>`;
+  } else {
+    const rate = trip.rates[currency];
+    if (rate){
+      const base = round2(amount*rate);
+      hintEl.innerHTML = `⏳ 查詢即時匯率中…暫用手動設定的匯率換算約為 <b>${fmtMoney(base, trip.baseCurrency)}</b>`;
+    } else {
+      hintEl.innerHTML = `幣別 ${currency} 尚無匯率，正在查詢即時匯率…若查不到請先到「幣別匯率」分頁手動設定。`;
+    }
+  }
+}
+document.getElementById('depAmount').addEventListener('input', renderDepositHint);
+document.getElementById('depCurrency').addEventListener('change', ()=>{ renderDepositHint(); refreshDepositLiveRate(); });
+
 function resetDepositForm(){
   editingDepositId = null;
   document.getElementById('depositFormTitle').textContent = '新增一筆轉帳／預收款';
   document.getElementById('depAmount').value = '';
   document.getElementById('depNote').value = '';
+  renderDepositHint();
+  refreshDepositLiveRate();
 }
 function saveDeposit(){
   const payerId = document.getElementById('depPayer').value;
@@ -1699,8 +1781,8 @@ function saveDeposit(){
   if (!payerId || !collectorId){ toast('請選擇付款人與收款人', 'error'); return false; }
   if (payerId === collectorId){ toast('付款人與收款人不能是同一人', 'error'); return false; }
   if (!(amount>0)){ toast('請輸入大於 0 的金額', 'error'); return false; }
-  const rate = trip.rates[currency];
-  if (!(rate>0)){ toast(`幣別 ${currency} 尚無匯率設定`, 'error'); return false; }
+  const rate = resolveDepositRate(currency);
+  if (!(rate>0)){ toast(`幣別 ${currency} 尚無匯率設定，且目前無法取得即時匯率`, 'error'); return false; }
   const amountInBase = round2(amount*rate);
 
   if (editingDepositId){
@@ -1729,6 +1811,8 @@ function editDeposit(id){
   document.getElementById('depCurrency').innerHTML = currencyOptions(dep.currency);
   document.getElementById('depAmount').value = dep.amount;
   document.getElementById('depNote').value = dep.note;
+  renderDepositHint();
+  refreshDepositLiveRate();
   showMainTab('deposits');
   document.getElementById('panel-deposits').scrollIntoView({behavior:'smooth'});
 }
@@ -1932,9 +2016,14 @@ function scheduleAutoSave(){
 /* ===================== render ===================== */
 function renderDepositSelects(){
   const opts = trip.members.map(m=>`<option value="${m.id}">${escapeHtml(m.name)}</option>`).join('');
+  const prevPayer = document.getElementById('depPayer').value;
+  const prevCollector = document.getElementById('depCollector').value;
+  const prevCurrency = document.getElementById('depCurrency').value || trip.baseCurrency;
   document.getElementById('depPayer').innerHTML = '<option value="">請選擇</option>' + opts;
   document.getElementById('depCollector').innerHTML = '<option value="">請選擇</option>' + opts;
-  document.getElementById('depCurrency').innerHTML = currencyOptions(trip.baseCurrency);
+  document.getElementById('depCurrency').innerHTML = currencyOptions(prevCurrency);
+  if (prevPayer && trip.members.some(m=>m.id===prevPayer)) document.getElementById('depPayer').value = prevPayer;
+  if (prevCollector && trip.members.some(m=>m.id===prevCollector)) document.getElementById('depCollector').value = prevCollector;
 }
 function emptyState(icon, text, ctaLabel, ctaOnclick){
   return `<div class="empty-state">
@@ -2070,6 +2159,28 @@ function apiBaseUrl(){
 function apiHeaders(){
   const key = document.getElementById('apiKey').value.trim();
   return key ? { 'x-api-key': key } : {};
+}
+
+/* ===================== 即時匯率 ===================== */
+// 非基準幣的支出/轉帳，存檔時要用「當下」的即時匯率換算 amountInBase（amount 仍存原始幣值）。
+// 用短時間快取，避免同一張表單打字時每個 keystroke 都打一次外部匯率 API。
+let liveRateCache = {}; // `${from}_${to}` -> { rate, asOf, fetchedAt }
+const LIVE_RATE_CACHE_TTL = 10 * 60 * 1000; // 10 分鐘
+async function fetchLiveRate(from, to){
+  if (from === to) return { rate: 1, asOf: null };
+  const key = `${from}_${to}`;
+  const cached = liveRateCache[key];
+  if (cached && (Date.now() - cached.fetchedAt) < LIVE_RATE_CACHE_TTL) return cached;
+  try{
+    const res = await fetch(`${apiBaseUrl()}/api/fx-rate?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, { headers: apiHeaders() });
+    const body = await res.json().catch(()=>({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    const entry = { rate: body.rate, asOf: body.asOf, fetchedAt: Date.now() };
+    liveRateCache[key] = entry;
+    return entry;
+  }catch(err){
+    return null; // 由呼叫端自行退回使用手動設定的匯率，不擋住記帳
+  }
 }
 async function refreshGuildList(){
   try{
