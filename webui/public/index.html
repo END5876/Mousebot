@@ -1125,6 +1125,14 @@ function renderBalanceBarChart(net) {
 
 /* =====================================================================
    Overview: 每位成員多幣別逐筆明細
+   修正紀錄：
+   1. transferIn / transferOut 的 amtSign 原本與 summaryRows 矛盾，
+      導致「已轉帳結清」的人淨額不減反增，形同債務加倍計算。
+      現已對調為：transferIn = -1（減少淨額），transferOut = +1（增加淨額）。
+   2. 明細文字「收自／付給」原本耦合在 amtSign 判斷式中，
+      對調正負號後文字會跟著錯。現改用獨立參數 isIncoming 控制文字，
+      amtSign 只單純代表「對淨額的影響方向」。
+   3. 移除未被呼叫的死代碼 fmtOrigAndBase()。
 ===================================================================== */
 function renderMemberDetails(net) {
   const el = document.getElementById('memberDetailList');
@@ -1196,16 +1204,13 @@ function renderMemberDetails(net) {
     return ledger;
   }
 
-  function fmtOrigAndBase(amount, currency, amountInBase) {
-    const origStr = `${fmtMoney(amount, currency)} ${currency}`;
-    if (currency === trip.baseCurrency) return origStr;
-    return `${origStr}<br><span class="base">≈ ${fmtMoney(amountInBase, trip.baseCurrency)} ${trip.baseCurrency}</span>`;
-  }
-
-  function renderSection(title, items, tagClass, tagLabel, amtSign) {
+  // amtSign：僅代表「對淨額的影響方向」（+1 增加淨額 / -1 減少淨額）
+  // isIncoming：僅代表「文字顯示為收自 / 付給」，兩者互相獨立，不再耦合
+  function renderSection(title, items, tagClass, tagLabel, amtSign, isIncoming) {
     if (!items.length) return '';
     const rows = items.map(item => {
-      const desc = item.description || (item.counterpart ? `${amtSign > 0 ? '收自' : '付給'} ${escapeHtml(item.counterpart)}` : '');
+      const desc = item.description
+        || (item.counterpart ? `${isIncoming ? '收自' : '付給'} ${escapeHtml(item.counterpart)}` : '');
       const sub = item.note ? `備註：${escapeHtml(item.note)}` : '';
       return `<div class="detail-row">
         <div class="detail-row-left">
@@ -1236,10 +1241,13 @@ function renderMemberDetails(net) {
     const ld = ledger[m.id];
     const hasData = ld.paid.length || ld.share.length || ld.transferIn.length || ld.transferOut.length;
 
-    const paidSection   = renderSection('代墊支出（＋增加淨額）', ld.paid, 'paid', '代墊', 1);
-    const shareSection  = renderSection('分攤費用（－減少淨額）', ld.share, 'share', '分攤', -1);
-    const tInSection    = renderSection('預收款／轉帳收入）(＋增加淨額）', ld.transferIn, 'transfer-in', '收自', 1);
-    const tOutSection   = renderSection('預付款／轉帳支出（－減少淨額)', ld.transferOut, 'transfer-out', '付給', -1);
+    // ↓↓↓ 修正處：transferIn 改為 -1（收到預付款＝減少淨額，因為原本墊款義務已被抵銷）
+    //             transferOut 改為 +1（付出預付款＝增加淨額，等同預先幫忙代墊）
+    const paidSection   = renderSection('代墊支出（＋增加淨額）', ld.paid, 'paid', '代墊', 1, false);
+    const shareSection  = renderSection('分攤費用（－減少淨額）', ld.share, 'share', '分攤', -1, false);
+    const tInSection    = renderSection('預收款／轉帳收入（－減少淨額）', ld.transferIn, 'transfer-in', '收自', -1, true);
+    const tOutSection   = renderSection('預付款／轉帳支出（＋增加淨額）', ld.transferOut, 'transfer-out', '付給', 1, false);
+
     const totalPaid  = round2(ld.paid.reduce((s,x)=>s+x.amountInBase,0));
     const totalShare = round2(ld.share.reduce((s,x)=>s+x.amountInBase,0));
     const totalTIn   = round2(ld.transferIn.reduce((s,x)=>s+x.amountInBase,0));
