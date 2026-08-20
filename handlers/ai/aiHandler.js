@@ -394,12 +394,44 @@ function setupAICommands(client) {
         if (isMentioned) {
             // 將提及轉換為名字，並濾掉機器人自己
             const rawQuestion = replaceMentions(message, botId);
+            const isEmptyContent = !rawQuestion && !hasAttachment && !hasLikelyImageLink;
 
-            if (!rawQuestion && !hasAttachment && !hasLikelyImageLink) {
+            // ════════════════════════════════════════════════════
+            //  特殊情形拉出處理：使用者「回覆」了某則訊息，且只 @ 了機器人，
+            //  沒有輸入任何文字、沒有附件、也沒有圖片連結。
+            //  這種情況下使用者的真實意圖是「要機器人針對被引用的內容
+            //  做出反應」，絕不能落入下方「純打招呼」分支——否則
+            //  getGeminiResponse 的 message 參數會被傳 null，導致
+            //  buildMessagePartsWithReference 完全不會執行，被引用的
+            //  內容（文字或圖片）會整個消失，機器人只會回一句答非所問的
+            //  空泛話術（例如對著「使用者只 @ 你沒說話」做反應）。
+            // ════════════════════════════════════════════════════
+            if (isEmptyContent && hasReference) {
                 if (!process.env.GEMINI_API_KEY) return;
                 try {
                     const mode = getUserMode(userId, '');
-                    const greetPrompt = '使用者只 @ 了你，沒有說任何話。用 10 字以內回應。';
+                    const referPrompt = '使用者引用了一則訊息並 @ 了你，沒有輸入其他文字，請針對被引用的內容做出回應或吐槽。';
+                    const answer = await withTyping(message.channel, () =>
+                        getGeminiResponse(userId, referPrompt, [], channel, messageId, botId, message, mode)
+                    );
+                    const chunks = splitMessage(answer);
+                    for (const chunk of chunks) {
+                        const sentMsg = await message.channel.send(chunk);
+                        recordBotMessageContext(sentMsg.id, mode, userId, userName);
+                    }
+                    await speakWithTTS(message, answer, guildId);
+                } catch (error) {
+                    console.error('Refer-only mention reply error:', error.message);
+                }
+                return;
+            }
+
+            // 純打招呼：沒有引用、沒有文字、沒有附件、沒有圖片連結（原邏輯維持）
+            if (isEmptyContent) {
+                if (!process.env.GEMINI_API_KEY) return;
+                try {
+                    const mode = getUserMode(userId, '');
+                    const greetPrompt = '使用者只 @ 了你，沒有說任何話。';
                     const answer = await withTyping(message.channel, () =>
                         getGeminiResponse(userId, greetPrompt, [], channel, messageId, botId, null, mode)
                     );
