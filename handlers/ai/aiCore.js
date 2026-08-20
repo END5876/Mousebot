@@ -454,9 +454,12 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
     });
 
     // 將當下的提問也加上發言者標籤
+    // 標記「← 當前對話者」：這是「人格行為鎖定規則」判斷是否可對此人使用當前
+    // 人格互動行為的唯一依據，必須確保「這則最重要的訊息」本身就帶有這個標記，
+    // 不能只倚賴歷史紀錄裡的標籤或「最後一則訊息」這種間接推斷。
     if (question) {
         const authorName = message?.author?.username || '使用者';
-        parts.push({ text: `【發言者：${authorName}】\n${question}` });
+        parts.push({ text: `【發言者：${authorName} | ← 當前對話者，你現在正在回覆他】\n${question}` });
     }
     return parts;
 }
@@ -471,12 +474,14 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
         const history = channel ? await fetchUserChannelHistory(channel, userId, messageId, botId) : [];
         const chat    = model.startChat({ history, generationConfig: GENERATION_CONFIG });
 
-        // 如果沒有 message (例如斜線指令)，也要加上預設標籤
+        // 如果沒有 message (例如斜線指令、純 @ 問候)，也要加上「← 當前對話者」標記，
+        // 與 buildMessagePartsWithReference 的格式保持一致，確保人格鎖定規則
+        // 在這條路徑上同樣有依據可循。
         const messageParts = message
             ? await buildMessagePartsWithReference(message, prompt, imageParts, botId, mode, userId)
             : [
                 ...imageParts.map(part => toGeminiPart(part)).filter(Boolean),
-                { text: prompt ? `【發言者：使用者】\n${prompt}` : '' }
+                { text: prompt ? `【發言者：使用者 | ← 當前對話者，你現在正在回覆他】\n${prompt}` : '' }
             ];
 
         const result = await chat.sendMessage(messageParts);
@@ -516,12 +521,12 @@ async function getShortResponse(userId, promptText, imageParts = [], channel = n
             : `請用大約10~200字回應或吐槽訊息：「${promptText}」`;
         const chat = model.startChat({ history, generationConfig: { ...GENERATION_CONFIG, maxOutputTokens: 300 } });
 
-        // 短回覆標籤邏輯
+        // 短回覆標籤邏輯（同樣補上「← 當前對話者」標記，理由同 getGeminiResponse）
         const messageParts = message
             ? await buildMessagePartsWithReference(message, shortPrompt, imageParts, botId, mode, userId)
             : [
                 ...imageParts.map(part => toGeminiPart(part)).filter(Boolean),
-                { text: `【發言者：使用者】\n${shortPrompt}` }
+                { text: `【發言者：使用者 | ← 當前對話者，你現在正在回覆他】\n${shortPrompt}` }
             ];
 
         const result = await chat.sendMessage(messageParts);
