@@ -68,6 +68,11 @@ const GENERAL_TEXT_ADDON = `
 - 「回覆他時：...」標籤只規範你**主動回覆或直接回應那個人**時的語氣，不影響你對頻道內容的客觀理解與陳述。
 - 對話歷史中，帶有「[背景參考 → 先前對 ...」標註的訊息，是你過去對其他人說的話，僅供了解頻道脈絡，不要把那段話的語氣或稱謂帶入當前對話。
 
+### 人格行為鎖定規則（最高優先，任何人格模式都必須遵守）
+- 你當前使用的人格互動行為（無論是撒嬌、寵愛、毒舌調侃、嘲諷、吃醋或其他情緒化反應），只能施加在標示「← 當前對話者」的這個人身上。
+- 歷史或背景中出現的「其他人」發言（沒有「← 當前對話者」標示的內容），你只能客觀理解、引用其事實內容，絕對不能對他們發動任何屬於你當前人格的互動行為——例如不能虧他們、不能挑逗他們、不能安慰他們、不能對他們吃醋。那些人不是你現在的對話對象。
+- 即使當前訊息提到、@到、或引用了其他人，你回應時使用的語氣與互動行為，依然只鎖定在正在跟你對話的這個人身上；不要把原本設計給「當前對話者」的互動行為，套用在被提到的第三方身上。
+
 ### 回覆長度規則
 - 若為日常閒聊或一般對話，回覆字數請盡量控制在 30 字以內，保持自然、簡短的聊天節奏。
 - 若使用者詢問技術問題、需要詳細解說或撰寫程式碼時，則不受此字數限制，請給出完整的解答。
@@ -146,20 +151,25 @@ function getModel(mode, isVoice = false) {
 // ════════════════════════════════════════════════════════
 //  語氣淨化：對非目標使用者的機器人訊息進行中性化處理
 // ════════════════════════════════════════════════════════
+// 淨化只處理「文字本身」，不帶入目標對象資訊：
+// - 避免淨化模型在改寫過程中意外保留/暗示對象的指代資訊
+// - 讓同一句話不論原本講給誰聽，都能共用同一份淨化結果與快取
 const SANITIZE_SYSTEM_PROMPT = `你是一個文字處理工具，負責將帶有特定人格語氣的訊息進行「語氣淨化」。
 
 你的任務：
 1. 完整保留原文中所有的事實內容、承諾、資訊、答案與條件。
-2. 將語氣改為中性、平鋪直敘的陳述方式，像是在轉述一段對話紀錄。`;
+2. 將語氣改為中性、平鋪直敘的陳述方式，像是在轉述一段對話紀錄。
+3. 不要新增、推測或補充原文沒有的對象、稱謂、人稱代名詞。`;
 
 // 語氣淨化快取，避免對同一訊息重複呼叫 API
+// key 僅依賴文字內容本身（與目標對象無關），提高快取命中率
 const sanitizeCache = new Map();
 const SANITIZE_CACHE_MAX = 500;
 
-async function sanitizeBotMessage(text, targetUserName) {
+async function sanitizeBotMessage(text) {
     if (!text?.trim()) return text;
 
-    const cacheKey = `${targetUserName}::${text}`;
+    const cacheKey = text;
     if (sanitizeCache.has(cacheKey)) {
         return sanitizeCache.get(cacheKey);
     }
@@ -176,11 +186,12 @@ async function sanitizeBotMessage(text, targetUserName) {
             ]
         });
 
+        // prompt 只丟原文，不揭露這句話原本是講給誰聽的
         const result = await sanitizeModel.generateContent(
-            `請對以下訊息進行語氣淨化（這是機器人對「${targetUserName}」說的話）：\n\n${text}`
+            `請對以下訊息進行語氣淨化：\n\n${text}`
         );
         const sanitized = result.response.text().trim();
-        logTokenUsage(`sanitizeBotMessage / target:${targetUserName}`, result.response);
+        logTokenUsage(`sanitizeBotMessage`, result.response);
 
         // 寫入快取，超過上限時刪除最舊的一筆
         if (sanitizeCache.size >= SANITIZE_CACHE_MAX) {
@@ -219,21 +230,20 @@ function mergeConsecutiveRoles(history) {
 //  輔助：取得使用者的回覆語氣標籤（用於歷史紀錄標注）
 // ════════════════════════════════════════════════════════
 function getModeLabel(targetUserId, targetUserName, currentUserId) {
-    const mode = selectMode(targetUserId, '');
-    const modeModule = MODE_MAP[mode];
-    const desc = modeModule?.shortDescription ?? null;
-
+    // 「回覆他時：...」是給機器人「若要回覆這個人，該用什麼語氣」的指令，
+    // 只有當前對話者（機器人這次真的要回覆的對象）需要這項資訊。
+    // 對頻道裡其他人的發言，只標示「誰講的」以滿足「誰對誰說了什麼」的
+    // 事實釐清需求，不附帶其他人被指定的人設語氣描述——
+    // 避免機器人在回覆當前使用者時，被「其他人該用什麼語氣對待」這種
+    // 與本輪對話無關的指令性資訊污染語氣判斷。
     if (targetUserId === currentUserId) {
-        // 當前對話者：標示為主要對象，附上語氣描述（若有）
+        const mode = selectMode(targetUserId, '');
+        const desc = MODE_MAP[mode]?.shortDescription ?? null;
         return desc
             ? `【發言者：${targetUserName} | 回覆他時：${desc} | ← 當前對話者】`
             : `【發言者：${targetUserName} | ← 當前對話者】`;
-    } else {
-        // 其他人：標示語氣描述（若有），無則標示中立
-        return desc
-            ? `【發言者：${targetUserName} | 回覆他時：${desc}】`
-            : `【發言者：${targetUserName} | 回覆他時：中立禮貌】`;
     }
+    return `【發言者：${targetUserName}】`;
 }
 
 // ════════════════════════════════════════════════════════
@@ -305,11 +315,16 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
 
                 if (cachedCtx && cachedCtx.userId !== userId) {
                     // 【狀態一】確認：機器人對「其他人」說的話
-                    // → 進行語氣淨化，並清楚標註對象
+                    // → 只有該次發言使用的是「帶人設腔調」的模式才動語氣淨化手術；
+                    //   本來就中性的模式（如 developer）原文放行，避免無差別開刀
                     const targetUserName = cachedCtx.userName ?? '其他人';
                     if (textContent?.trim().length > 0) {
-                        const sanitized = await sanitizeBotMessage(textContent.trim(), targetUserName);
-                        parts.push({ text: `[背景參考 → 先前對 ${targetUserName} 說的話]\n${sanitized}` });
+                        // 對象標籤在此處組裝（來源：botMessageCache 的既有記錄），
+                        // 不再傳入 sanitizeBotMessage，避免淨化模型間接接觸/暗示對象資訊
+                        const content = cachedCtx.needsSanitize
+                            ? await sanitizeBotMessage(textContent.trim())
+                            : textContent.trim();
+                        parts.push({ text: `[背景參考 → 先前對 ${targetUserName} 說的話]\n${content}` });
                     }
 
                 } else if (cachedCtx && cachedCtx.userId === userId) {
@@ -326,7 +341,7 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
                     // → 保守處理：視為「可能對其他人說」，一併進行語氣淨化
                     //   並用「對象不明」標籤降低誤導風險，而非直接原文餵入
                     if (textContent?.trim().length > 0) {
-                        const sanitized = await sanitizeBotMessage(textContent.trim(), '對象不明的使用者');
+                        const sanitized = await sanitizeBotMessage(textContent.trim());
                         parts.push({ text: `[背景參考 → 對象不明的先前發言，語氣已中性化]\n${sanitized}` });
                     }
                 }
@@ -382,18 +397,27 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
         let refText      = '';
 
         if (isSelf) {
+            // 引用機器人自身過去的發言時，套用與 fetchUserChannelHistory 相同的
+            // 三態語氣淨化判斷：引用是使用者主動指向的內容，顯著性比被動出現在
+            // 歷史紀錄裡的訊息更高，若未淨化直接原文引用，機器人被舊人設帶偏的
+            // 風險反而更高；同時也避免同一則訊息在「歷史」與「引用」兩條路徑
+            // 出現淨化與未淨化的兩種矛盾版本。
             const cachedContext = getBotMessageContext(refMsg.id);
-            if (cachedContext) {
-                const { mode: refMode, userId: refTargetId, userName: refTargetName } = cachedContext;
-                if (refTargetId !== currentUserId) {
-                    refText = `> 引用你之前對別人（${refTargetName}）說的話：\n> 「${refContent}」\n\n`;
-                } else if (refMode !== currentMode) {
-                    refText = `> 引用你之前對他說的話：\n> 「${refContent}」\n\n`;
-                } else {
-                    refText = `> 引用你之前的發言：\n> 「${refContent}」\n\n`;
-                }
+            if (cachedContext && cachedContext.userId !== currentUserId) {
+                // 對「其他人」說過的話 → 依模式是否中性決定是否淨化，標明對象（誰對誰的事實照樣保留）
+                const content = cachedContext.needsSanitize
+                    ? await sanitizeBotMessage(refContent)
+                    : refContent;
+                refText = `> 引用你之前對別人（${cachedContext.userName}）說的話：\n> 「${content}」\n\n`;
+            } else if (cachedContext && cachedContext.userId === currentUserId) {
+                // 對「目前這位使用者」說過的話 → 原文保留（即使當時是別的人設模式）
+                refText = cachedContext.mode !== currentMode
+                    ? `> 引用你之前對他說的話：\n> 「${refContent}」\n\n`
+                    : `> 引用你之前的發言：\n> 「${refContent}」\n\n`;
             } else {
-                refText = `> 引用你之前的發言：\n> 「${refContent}」\n\n`;
+                // 查無記錄，對象不明 → 保守處理，比照歷史紀錄的「對象不明」分支淨化
+                const sanitized = await sanitizeBotMessage(refContent);
+                refText = `> 引用你先前的發言（對象不明，語氣已中性化）：\n> 「${sanitized}」\n\n`;
             }
         } else {
             // 引用別人發言時，使用括號將暱稱隔開
