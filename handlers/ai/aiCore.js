@@ -82,18 +82,43 @@ const GENERAL_TEXT_ADDON = `
 // ════════════════════════════════════════════════════════
 //  Token 用量 Debug
 // ════════════════════════════════════════════════════════
-function logTokenUsage(label, response) {
+// createTokenAccumulator：每次外部請求（getGeminiResponse 等）建立一個
+// 獨立的累加器物件，透過參數往下傳遞給所有子呼叫（歷史淨化、引用淨化、
+// 主要生成），藉此在多位使用者並發請求時，避免共用全域變數造成的
+// token 計數互相汙染。
+function createTokenAccumulator(label) {
+    return { label, prompt: 0, candidates: 0, total: 0, calls: 0 };
+}
+
+// logTokenUsage：印出單次 API 呼叫的 token 用量。
+// 若傳入 accumulator，會同時將這筆用量累加進去，供後續彙總使用。
+function logTokenUsage(label, response, accumulator = null) {
     const meta = response.usageMetadata;
     if (!meta) {
         console.log(`[Token] (${label}) ⚠️ 無法取得 usageMetadata`);
         return;
     }
-    const prompt     = meta.promptTokenCount     ?? '?';
-    const candidates = meta.candidatesTokenCount ?? '?';
-    const total      = meta.totalTokenCount      ?? '?';
+    const prompt     = meta.promptTokenCount     ?? 0;
+    const candidates = meta.candidatesTokenCount ?? 0;
+    const total      = meta.totalTokenCount      ?? 0;
     console.log(
         `[Token] (${label})\n` +
         `        輸入: ${prompt} | 輸出: ${candidates} | 總計: ${total}`
+    );
+    if (accumulator) {
+        accumulator.prompt     += prompt;
+        accumulator.candidates += candidates;
+        accumulator.total      += total;
+        accumulator.calls      += 1;
+    }
+}
+
+// logTokenSummary：印出單次外部請求（含所有子呼叫）的 token 總花費。
+function logTokenSummary(accumulator) {
+    console.log(
+        `[Token] ══════ (${accumulator.label}) 本次請求總花費 ══════\n` +
+        `        子呼叫數: ${accumulator.calls} | 輸入: ${accumulator.prompt} | ` +
+        `輸出: ${accumulator.candidates} | 總計: ${accumulator.total}`
     );
 }
 
@@ -166,11 +191,18 @@ const SANITIZE_SYSTEM_PROMPT = `你是一個文字處理工具，負責將帶有
 const sanitizeCache = new Map();
 const SANITIZE_CACHE_MAX = 500;
 
-async function sanitizeBotMessage(text) {
+// sanitizeBotMessage 新增兩個參數：
+// - contextLabel：純粹用於 log 辨識這次淨化「來自哪個歷史/引用訊息、
+//   原本是講給誰聽、現在是為了服務哪個使用者」，不參與快取 key 判斷，
+//   不影響原本「同一句話共用快取」的設計。
+// - accumulator：由呼叫端傳入的單次請求 token 累加器，命中快取時
+//   （無 API 花費）不會累加，只有真正呼叫 API 時才累加。
+async function sanitizeBotMessage(text, contextLabel = 'unknown', accumulator = null) {
     if (!text?.trim()) return text;
 
     const cacheKey = text;
     if (sanitizeCache.has(cacheKey)) {
+        console.log(`[Token] (sanitizeBotMessage / ${contextLabel}) 💾 快取命中，無 API 花費`);
         return sanitizeCache.get(cacheKey);
     }
 
@@ -191,7 +223,7 @@ async function sanitizeBotMessage(text) {
             `請對以下訊息進行語氣淨化：\n\n${text}`
         );
         const sanitized = result.response.text().trim();
-        logTokenUsage(`sanitizeBotMessage`, result.response);
+        logTokenUsage(`sanitizeBotMessage / ${contextLabel}`, result.response, accumulator);
 
         // 寫入快取，超過上限時刪除最舊的一筆
         if (sanitizeCache.size >= SANITIZE_CACHE_MAX) {
@@ -201,7 +233,7 @@ async function sanitizeBotMessage(text) {
         sanitizeCache.set(cacheKey, sanitized);
         return sanitized;
     } catch (err) {
-        console.warn('[Sanitize] 語氣淨化失敗，使用原文：', err.message);
+        console.warn(`[Sanitize] (${contextLabel}) 語氣淨化失敗，使用原文：`, err.message);
         return text;
     }
 }
@@ -249,7 +281,9 @@ function getModeLabel(targetUserId, targetUserName, currentUserId) {
 // ════════════════════════════════════════════════════════
 //  完整頻道時間軸歷史記錄（第二步：保留所有人的發言）
 // ════════════════════════════════════════════════════════
-async function fetchUserChannelHistory(channel, userId, currentMessageId, botId) {
+// 新增 accumulator 參數：往下傳給 sanitizeBotMessage，讓歷史紀錄中
+// 觸發的每一次語氣淨化 API 呼叫，都能被計入這次外部請求的 token 總花費。
+async function fetchUserChannelHistory(channel, userId, currentMessageId, botId, accumulator = null) {
     try {
         const channelId = channel.id;
         const now = Date.now();
@@ -321,8 +355,13 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
                     if (textContent?.trim().length > 0) {
                         // 對象標籤在此處組裝（來源：botMessageCache 的既有記錄），
                         // 不再傳入 sanitizeBotMessage，避免淨化模型間接接觸/暗示對象資訊
+                        // contextLabel 標明：這則歷史訊息 id、原本講給誰、現在為誰服務
                         const content = cachedCtx.needsSanitize
-                            ? await sanitizeBotMessage(textContent.trim())
+                            ? await sanitizeBotMessage(
+                                textContent.trim(),
+                                `history/msg:${msg.id}/origTo:${cachedCtx.userId}/for:${userId}`,
+                                accumulator
+                              )
                             : textContent.trim();
                         parts.push({ text: `[背景參考 → 先前對 ${targetUserName} 說的話]\n${content}` });
                     }
@@ -341,7 +380,11 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
                     // → 保守處理：視為「可能對其他人說」，一併進行語氣淨化
                     //   並用「對象不明」標籤降低誤導風險，而非直接原文餵入
                     if (textContent?.trim().length > 0) {
-                        const sanitized = await sanitizeBotMessage(textContent.trim());
+                        const sanitized = await sanitizeBotMessage(
+                            textContent.trim(),
+                            `history/msg:${msg.id}/origTo:unknown/for:${userId}`,
+                            accumulator
+                        );
                         parts.push({ text: `[背景參考 → 對象不明的先前發言，語氣已中性化]\n${sanitized}` });
                     }
                 }
@@ -386,7 +429,9 @@ async function fetchReferencedMessage(message) {
     } catch { return null; }
 }
 
-async function buildMessagePartsWithReference(message, question, imageParts, botId, currentMode, currentUserId) {
+// 新增 accumulator 參數：往下傳給 sanitizeBotMessage，讓「引用訊息」
+// 觸發的語氣淨化 API 呼叫，同樣被計入這次外部請求的 token 總花費。
+async function buildMessagePartsWithReference(message, question, imageParts, botId, currentMode, currentUserId, accumulator = null) {
     const parts = [];
     const refMsg = await fetchReferencedMessage(message);
 
@@ -406,7 +451,11 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
             if (cachedContext && cachedContext.userId !== currentUserId) {
                 // 對「其他人」說過的話 → 依模式是否中性決定是否淨化，標明對象（誰對誰的事實照樣保留）
                 const content = cachedContext.needsSanitize
-                    ? await sanitizeBotMessage(refContent)
+                    ? await sanitizeBotMessage(
+                        refContent,
+                        `reference/msg:${refMsg.id}/origTo:${cachedContext.userId}/for:${currentUserId}`,
+                        accumulator
+                      )
                     : refContent;
                 refText = `> 引用你之前對別人（${cachedContext.userName}）說的話：\n> 「${content}」\n\n`;
             } else if (cachedContext && cachedContext.userId === currentUserId) {
@@ -416,7 +465,11 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
                     : `> 引用你之前的發言：\n> 「${refContent}」\n\n`;
             } else {
                 // 查無記錄，對象不明 → 保守處理，比照歷史紀錄的「對象不明」分支淨化
-                const sanitized = await sanitizeBotMessage(refContent);
+                const sanitized = await sanitizeBotMessage(
+                    refContent,
+                    `reference/msg:${refMsg.id}/origTo:unknown/for:${currentUserId}`,
+                    accumulator
+                );
                 refText = `> 引用你先前的發言（對象不明，語氣已中性化）：\n> 「${sanitized}」\n\n`;
             }
         } else {
@@ -470,22 +523,33 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
 async function getGeminiResponse(userId, prompt, imageParts = [], channel = null, messageId = null, botId = null, message = null, mode = null) {
     try {
         if (!mode) mode = getUserMode(userId, prompt);
-        const model   = getModel(mode);
-        const history = channel ? await fetchUserChannelHistory(channel, userId, messageId, botId) : [];
-        const chat    = model.startChat({ history, generationConfig: GENERATION_CONFIG });
+        const model = getModel(mode);
+
+        // 為本次外部請求建立獨立的 token 累加器，並往下傳給
+        // fetchUserChannelHistory / buildMessagePartsWithReference，
+        // 使其中觸發的所有語氣淨化 API 呼叫都能被計入同一份總花費，
+        // 避免多位使用者並發請求時互相汙染彼此的 token 計數。
+        const requestLabel = `getGeminiResponse/user:${userId}/mode:${mode}/msg:${messageId ?? 'n/a'}`;
+        const tokenAcc = createTokenAccumulator(requestLabel);
+
+        const history = channel
+            ? await fetchUserChannelHistory(channel, userId, messageId, botId, tokenAcc)
+            : [];
+        const chat = model.startChat({ history, generationConfig: GENERATION_CONFIG });
 
         // 如果沒有 message (例如斜線指令、純 @ 問候)，也要加上「← 當前對話者」標記，
         // 與 buildMessagePartsWithReference 的格式保持一致，確保人格鎖定規則
         // 在這條路徑上同樣有依據可循。
         const messageParts = message
-            ? await buildMessagePartsWithReference(message, prompt, imageParts, botId, mode, userId)
+            ? await buildMessagePartsWithReference(message, prompt, imageParts, botId, mode, userId, tokenAcc)
             : [
                 ...imageParts.map(part => toGeminiPart(part)).filter(Boolean),
                 { text: prompt ? `【發言者：使用者 | ← 當前對話者，你現在正在回覆他】\n${prompt}` : '' }
             ];
 
         const result = await chat.sendMessage(messageParts);
-        logTokenUsage(`getGeminiResponse / user:${userId} / mode:${mode}`, result.response); 
+        logTokenUsage(requestLabel, result.response, tokenAcc);
+        logTokenSummary(tokenAcc);
         return result.response.text();
     } catch (error) {
         console.error(`Gemini Error (${MODEL_NAME}):`, error.message);
@@ -496,13 +560,20 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
 async function getGeminiResponseVoice(userId, prompt, channel = null, messageId = null, botId = null, mode = null) {
     try {
         if (!mode) mode = getUserMode(userId, prompt);
-        const model   = getModel(mode, true);
-        const history = channel ? await fetchUserChannelHistory(channel, userId, messageId, botId) : [];
-        const chat    = model.startChat({ history, generationConfig: { ...GENERATION_CONFIG, maxOutputTokens: 150 } });
+        const model = getModel(mode, true);
+
+        const requestLabel = `getGeminiResponseVoice/user:${userId}/mode:${mode}/msg:${messageId ?? 'n/a'}`;
+        const tokenAcc = createTokenAccumulator(requestLabel);
+
+        const history = channel
+            ? await fetchUserChannelHistory(channel, userId, messageId, botId, tokenAcc)
+            : [];
+        const chat = model.startChat({ history, generationConfig: { ...GENERATION_CONFIG, maxOutputTokens: 150 } });
 
         const result   = await chat.sendMessage([{ text: prompt }]);
         const response = result.response.text().trim();
-        logTokenUsage(`getGeminiResponseVoice / user:${userId} / mode:${mode}`, result.response); 
+        logTokenUsage(requestLabel, result.response, tokenAcc);
+        logTokenSummary(tokenAcc);
         console.log(`[Voice AI] ${userId}: "${prompt}" → "${response}"`);
         return response;
     } catch (error) {
@@ -514,8 +585,14 @@ async function getGeminiResponseVoice(userId, prompt, channel = null, messageId 
 async function getShortResponse(userId, promptText, imageParts = [], channel = null, messageId = null, botId = null, message = null, mode = null) {
     try {
         if (!mode) mode = getUserMode(userId, promptText);
-        const model   = getModel(mode);
-        const history = channel ? await fetchUserChannelHistory(channel, userId, messageId, botId) : [];
+        const model = getModel(mode);
+
+        const requestLabel = `getShortResponse/user:${userId}/mode:${mode}/msg:${messageId ?? 'n/a'}`;
+        const tokenAcc = createTokenAccumulator(requestLabel);
+
+        const history = channel
+            ? await fetchUserChannelHistory(channel, userId, messageId, botId, tokenAcc)
+            : [];
         const shortPrompt = imageParts.length > 0 && !promptText
             ? `請用大約10~200個字回應或吐槽這張圖片`
             : `請用大約10~200字回應或吐槽訊息：「${promptText}」`;
@@ -523,14 +600,15 @@ async function getShortResponse(userId, promptText, imageParts = [], channel = n
 
         // 短回覆標籤邏輯（同樣補上「← 當前對話者」標記，理由同 getGeminiResponse）
         const messageParts = message
-            ? await buildMessagePartsWithReference(message, shortPrompt, imageParts, botId, mode, userId)
+            ? await buildMessagePartsWithReference(message, shortPrompt, imageParts, botId, mode, userId, tokenAcc)
             : [
                 ...imageParts.map(part => toGeminiPart(part)).filter(Boolean),
                 { text: `【發言者：使用者 | ← 當前對話者，你現在正在回覆他】\n${shortPrompt}` }
             ];
 
         const result = await chat.sendMessage(messageParts);
-        logTokenUsage(`getShortResponse / user:${userId} / mode:${mode}`, result.response); 
+        logTokenUsage(requestLabel, result.response, tokenAcc);
+        logTokenSummary(tokenAcc);
         return result.response.text().trim();
     } catch (error) {
         console.error(`Short Response Error:`, error.message);
