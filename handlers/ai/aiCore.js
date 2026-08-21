@@ -431,7 +431,7 @@ async function fetchReferencedMessage(message) {
 
 // 新增 accumulator 參數：往下傳給 sanitizeBotMessage，讓「引用訊息」
 // 觸發的語氣淨化 API 呼叫，同樣被計入這次外部請求的 token 總花費。
-async function buildMessagePartsWithReference(message, question, imageParts, botId, currentMode, currentUserId, accumulator = null) {
+async function buildMessagePartsWithReference(message, question, imageParts, botId, currentMode, currentUserId, accumulator = null, isRandomTrigger = false) {
     const parts = [];
     const refMsg = await fetchReferencedMessage(message);
 
@@ -512,7 +512,13 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
     // 不能只倚賴歷史紀錄裡的標籤或「最後一則訊息」這種間接推斷。
     if (question) {
         const authorName = message?.author?.username || '使用者';
-        parts.push({ text: `【發言者：${authorName} | ← 當前對話者，你現在正在回覆他】\n${question}` });
+        // 隨機回覆時，這則訊息並不是對方主動發來問你的，而是你自己隨機看到、
+        // 主動選擇插話回應／吐槽的普通發言，主被動關係與「主動 @ 你提問」相反，
+        // 標籤措辭需對應調整，避免你誤以為對方特地跑來問你才回。
+        const label = isRandomTrigger
+            ? `【發言者：${authorName} | ← 當前對話者，注意：他這句話並不是在問你或對你說的，是你自己隨機看到後主動插話回應／吐槽】`
+            : `【發言者：${authorName} | ← 當前對話者，你現在正在回覆他】`;
+        parts.push({ text: `${label}\n${question}` });
     }
     return parts;
 }
@@ -599,11 +605,14 @@ async function getShortResponse(userId, promptText, imageParts = [], channel = n
         const chat = model.startChat({ history, generationConfig: { ...GENERATION_CONFIG, maxOutputTokens: 300 } });
 
         // 短回覆標籤邏輯（同樣補上「← 當前對話者」標記，理由同 getGeminiResponse）
+        // 注意：getShortResponse 專用於「隨機回覆」，訊息並非對方主動發來問你的，
+        // 因此標籤要傳入 isRandomTrigger = true，避免主被動關係標錯，
+        // 讓你誤以為對方是特地跑來問你才回應。
         const messageParts = message
-            ? await buildMessagePartsWithReference(message, shortPrompt, imageParts, botId, mode, userId, tokenAcc)
+            ? await buildMessagePartsWithReference(message, shortPrompt, imageParts, botId, mode, userId, tokenAcc, true)
             : [
                 ...imageParts.map(part => toGeminiPart(part)).filter(Boolean),
-                { text: `【發言者：使用者 | ← 當前對話者，你現在正在回覆他】\n${shortPrompt}` }
+                { text: `【發言者：使用者 | ← 當前對話者，注意：他這句話並不是在問你或對你說的，是你自己隨機看到後主動插話回應／吐槽】\n${shortPrompt}` }
             ];
 
         const result = await chat.sendMessage(messageParts);
