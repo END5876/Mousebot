@@ -17,14 +17,16 @@
  *
  *   const { startWebApi } = require('./webui/server');
  *   client.once('ready', () => {
- *     startWebApi({ port: process.env.SPLITBILL_WEB_PORT || 3000 });
+ *     startWebApi({ port: process.env.PORT || process.env.SPLITBILL_WEB_PORT || 3000 });
  *   });
  *
  * 需要先安裝 express： npm install express
  *
  * 環境變數：
  *   SPLITBILL_API_KEY   （建議設定）保護 API 的簡單金鑰，前端要填相同的值
- *   SPLITBILL_WEB_PORT  監聽的埠號，預設 3000
+ *   PORT                部分 PaaS（如 Zeabur）會自動注入這個變數指定監聽埠，
+ *                       優先權高於 SPLITBILL_WEB_PORT
+ *   SPLITBILL_WEB_PORT  監聽的埠號，沒有 PORT 時使用，預設 3000
  */
 
 const path = require('path');
@@ -34,7 +36,7 @@ const express = require('express');
 const storage = require('../handlers/splitbill/utils/storage');
 
 function startWebApi(options = {}) {
-  const port = options.port || process.env.SPLITBILL_WEB_PORT || 3000;
+  const port = options.port || process.env.PORT || process.env.SPLITBILL_WEB_PORT || 3000;
   const apiKey = options.apiKey || process.env.SPLITBILL_API_KEY || '';
 
   const app = express();
