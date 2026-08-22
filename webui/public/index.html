@@ -732,14 +732,14 @@
       </div>
 
       <div class="btn-row">
-        <button class="btn btn-brass btn-block" id="btnSaveExpenseSync" onclick="withLoading(this,'同步中…',saveExpenseAndSync)">☁️ 儲存到 Bot</button>
+        <button class="btn btn-brass btn-block" id="btnSaveExpenseSync" onclick="withLoading(this,'同步中…',saveExpenseAndSync)">儲存</button>
         <button class="btn btn-ghost" onclick="resetExpenseForm()">清空表單</button>
       </div>
     </div>
 
     <div class="card">
       <h2 class="section-title">支出明細 <span class="n" id="expenseCount"></span>
-        <button class="btn btn-brass btn-sm" style="margin-left:auto;" id="btnSyncExpenseList" onclick="withLoading(this,'同步中…',()=>saveTripToApi())">☁️ 儲存到 Bot</button>
+        <button class="btn btn-brass btn-sm" style="margin-left:auto;" id="btnSyncExpenseList" onclick="withLoading(this,'同步中…',()=>saveTripToApi())">儲存</button>
       </h2>
       <div id="expenseList"></div>
     </div>
@@ -775,14 +775,14 @@
         <input type="text" id="depNote" placeholder="例如：提前收團費">
       </div>
       <div class="btn-row">
-        <button class="btn btn-brass btn-block" id="btnSaveDepositSync" onclick="withLoading(this,'同步中…',saveDepositAndSync)">☁️ 儲存到 Bot</button>
+        <button class="btn btn-brass btn-block" id="btnSaveDepositSync" onclick="withLoading(this,'同步中…',saveDepositAndSync)">儲存</button>
         <button class="btn btn-ghost" onclick="resetDepositForm()">清空表單</button>
       </div>
     </div>
 
     <div class="card">
       <h2 class="section-title">轉帳明細 <span class="n" id="depositCount"></span>
-        <button class="btn btn-brass btn-sm" style="margin-left:auto;" id="btnSyncDepositList" onclick="withLoading(this,'同步中…',()=>saveTripToApi())">☁️ 儲存到 Bot</button>
+        <button class="btn btn-brass btn-sm" style="margin-left:auto;" id="btnSyncDepositList" onclick="withLoading(this,'同步中…',()=>saveTripToApi())">儲存</button>
       </h2>
       <div id="depositList"></div>
     </div>
