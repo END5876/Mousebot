@@ -715,6 +715,11 @@
           <select id="expCurrency"></select>
         </div>
       </div>
+      <div class="field" id="expBaseAmountField" hidden>
+        <label>換算後真實金額（<span id="expBaseCurrencyLabel"></span>，選填）</label>
+        <input type="number" inputmode="decimal" id="expAmountInBase" class="num" placeholder="留白則依匯率自動換算" step="0.01">
+        <p class="hint">若實際扣款或結帳金額與匯率換算不同，請直接填入此值；分帳將以此本位幣金額計算。</p>
+      </div>
       <p class="hint" id="expBaseHint"></p>
 
       <div class="field">
@@ -768,6 +773,11 @@
           <label>幣別</label>
           <select id="depCurrency"></select>
         </div>
+      </div>
+      <div class="field" id="depBaseAmountField" hidden>
+        <label>換算後真實金額（<span id="depBaseCurrencyLabel"></span>，選填）</label>
+        <input type="number" inputmode="decimal" id="depAmountInBase" class="num" placeholder="留白則依匯率自動換算" step="0.01">
+        <p class="hint">若實際轉帳金額與匯率換算不同，請直接填入此值；結算將以此本位幣金額計算。</p>
       </div>
       <p class="hint" id="depBaseHint"></p>
       <div class="field">
@@ -1603,10 +1613,19 @@ async function refreshExpenseLiveRate(){
 function renderExpenseHint(){
   const amount = parseFloat(document.getElementById('expAmount').value) || 0;
   const currency = document.getElementById('expCurrency').value;
+  const customInput = document.getElementById('expAmountInBase');
+  const customBase = parseFloat(customInput.value);
+  const isForeign = currency !== trip.baseCurrency;
+  document.getElementById('expBaseCurrencyLabel').textContent = trip.baseCurrency;
+  document.getElementById('expBaseAmountField').hidden = !isForeign;
   let rate, hintHtml;
-  if (currency === trip.baseCurrency){
-    rate = 1;
+  if (!isForeign){
+    customInput.value = '';
     hintHtml = '';
+  } else if (customInput.value.trim() !== ''){
+    hintHtml = Number.isFinite(customBase) && customBase > 0
+      ? `已採用手動指定的真實金額：<b>${fmtMoney(customBase, trip.baseCurrency)} ${trip.baseCurrency}</b>`
+      : `請輸入大於 0 的真實金額，或清空欄位以依匯率自動換算。`;
   } else if (expenseLiveRate && expenseLiveRate.currency === currency){
     rate = expenseLiveRate.rate;
     const base = round2(amount*rate);
@@ -1644,7 +1663,8 @@ function renderExpenseHint(){
   }
 }
 document.getElementById('expAmount').addEventListener('input', renderExpenseHint);
-document.getElementById('expCurrency').addEventListener('change', ()=>{ renderExpenseHint(); refreshExpenseLiveRate(); });
+document.getElementById('expAmountInBase').addEventListener('input', renderExpenseHint);
+document.getElementById('expCurrency').addEventListener('change', ()=>{ document.getElementById('expAmountInBase').value = ''; renderExpenseHint(); refreshExpenseLiveRate(); });
 
 /* =====================================================================
    帳單照片辨識 — 上傳照片 → 伺服器呼叫 Claude 辨識品項 → 逐項認領 →
@@ -2006,6 +2026,7 @@ function resetExpenseForm(){
   document.getElementById('expenseFormTitle').textContent = '新增一筆支出';
   document.getElementById('expDesc').value = '';
   document.getElementById('expAmount').value = '';
+  document.getElementById('expAmountInBase').value = '';
   buildChips('payerChips','payer');
   buildChips('participantChips','participant');
   renderExpenseHint();
@@ -2021,9 +2042,17 @@ function saveExpense(){
   const amount = parseFloat(document.getElementById('expAmount').value);
   const currency = document.getElementById('expCurrency').value;
   if (!(amount>0)){ toast('請輸入大於 0 的金額', 'error'); return false; }
-  const rate = resolveExpenseRate(currency);
-  if (!(rate>0)){ toast(`幣別 ${currency} 尚無匯率設定，且目前無法取得即時匯率`, 'error'); return false; }
-  const amountInBase = round2(amount*rate);
+  const customBaseRaw = document.getElementById('expAmountInBase').value.trim();
+  const customBase = parseFloat(customBaseRaw);
+  let amountInBase;
+  if (currency !== trip.baseCurrency && customBaseRaw !== ''){
+    if (!(customBase > 0)){ toast('換算後真實金額需為大於 0 的數字', 'error'); return false; }
+    amountInBase = round2(customBase);
+  } else {
+    const rate = resolveExpenseRate(currency);
+    if (!(rate>0)){ toast(`幣別 ${currency} 尚無匯率設定，且目前無法取得即時匯率`, 'error'); return false; }
+    amountInBase = round2(amount*rate);
+  }
 
   const payers = readChipValues('payer').filter(p=>p.amount>0 || document.querySelector(`#payerChips .chip[data-id="${p.userId}"]`).classList.contains('checked'));
   const participants = readChipValues('participant');
@@ -2063,6 +2092,7 @@ function editExpense(id){
   document.getElementById('expDesc').value = exp.description;
   document.getElementById('expAmount').value = exp.amount;
   document.getElementById('expCurrency').innerHTML = currencyOptions(exp.currency);
+  document.getElementById('expAmountInBase').value = exp.currency !== trip.baseCurrency ? exp.amountInBase : '';
   buildChips('payerChips','payer');
   buildChips('participantChips','participant');
   exp.payers.forEach(p=>{
@@ -2110,10 +2140,19 @@ function resolveDepositRate(currency){
 function renderDepositHint(){
   const amount = parseFloat(document.getElementById('depAmount').value) || 0;
   const currency = document.getElementById('depCurrency').value;
+  const customInput = document.getElementById('depAmountInBase');
+  const customBase = parseFloat(customInput.value);
   const hintEl = document.getElementById('depBaseHint');
   if (!hintEl) return;
-  if (currency === trip.baseCurrency){ hintEl.innerHTML = ''; return; }
-  if (depositLiveRate && depositLiveRate.currency === currency){
+  const isForeign = currency !== trip.baseCurrency;
+  document.getElementById('depBaseCurrencyLabel').textContent = trip.baseCurrency;
+  document.getElementById('depBaseAmountField').hidden = !isForeign;
+  if (!isForeign){ customInput.value = ''; hintEl.innerHTML = ''; return; }
+  if (customInput.value.trim() !== ''){
+    hintEl.innerHTML = Number.isFinite(customBase) && customBase > 0
+      ? `已採用手動指定的真實金額：<b>${fmtMoney(customBase, trip.baseCurrency)} ${trip.baseCurrency}</b>`
+      : `請輸入大於 0 的真實金額，或清空欄位以依匯率自動換算。`;
+  } else if (depositLiveRate && depositLiveRate.currency === currency){
     const base = round2(amount*depositLiveRate.rate);
     hintEl.innerHTML = `即時匯率 1 ${currency} = ${depositLiveRate.rate} ${trip.baseCurrency}，換算約為 <b>${fmtMoney(base, trip.baseCurrency)}</b>`;
   } else {
@@ -2127,12 +2166,14 @@ function renderDepositHint(){
   }
 }
 document.getElementById('depAmount').addEventListener('input', renderDepositHint);
-document.getElementById('depCurrency').addEventListener('change', ()=>{ renderDepositHint(); refreshDepositLiveRate(); });
+document.getElementById('depAmountInBase').addEventListener('input', renderDepositHint);
+document.getElementById('depCurrency').addEventListener('change', ()=>{ document.getElementById('depAmountInBase').value = ''; renderDepositHint(); refreshDepositLiveRate(); });
 
 function resetDepositForm(){
   editingDepositId = null;
   document.getElementById('depositFormTitle').textContent = '新增一筆轉帳／預收款';
   document.getElementById('depAmount').value = '';
+  document.getElementById('depAmountInBase').value = '';
   document.getElementById('depNote').value = '';
   renderDepositHint();
   refreshDepositLiveRate();
@@ -2146,9 +2187,17 @@ function saveDeposit(){
   if (!payerId || !collectorId){ toast('請選擇付款人與收款人', 'error'); return false; }
   if (payerId === collectorId){ toast('付款人與收款人不能是同一人', 'error'); return false; }
   if (!(amount>0)){ toast('請輸入大於 0 的金額', 'error'); return false; }
-  const rate = resolveDepositRate(currency);
-  if (!(rate>0)){ toast(`幣別 ${currency} 尚無匯率設定，且目前無法取得即時匯率`, 'error'); return false; }
-  const amountInBase = round2(amount*rate);
+  const customBaseRaw = document.getElementById('depAmountInBase').value.trim();
+  const customBase = parseFloat(customBaseRaw);
+  let amountInBase;
+  if (currency !== trip.baseCurrency && customBaseRaw !== ''){
+    if (!(customBase > 0)){ toast('換算後真實金額需為大於 0 的數字', 'error'); return false; }
+    amountInBase = round2(customBase);
+  } else {
+    const rate = resolveDepositRate(currency);
+    if (!(rate>0)){ toast(`幣別 ${currency} 尚無匯率設定，且目前無法取得即時匯率`, 'error'); return false; }
+    amountInBase = round2(amount*rate);
+  }
 
   if (editingDepositId){
     const dep = trip.deposits.find(d=>d.id===editingDepositId);
@@ -2175,6 +2224,7 @@ function editDeposit(id){
   document.getElementById('depCollector').value = dep.collectorId;
   document.getElementById('depCurrency').innerHTML = currencyOptions(dep.currency);
   document.getElementById('depAmount').value = dep.amount;
+  document.getElementById('depAmountInBase').value = dep.currency !== trip.baseCurrency ? dep.amountInBase : '';
   document.getElementById('depNote').value = dep.note;
   renderDepositHint();
   refreshDepositLiveRate();
