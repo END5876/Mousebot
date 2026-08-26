@@ -51,27 +51,18 @@ const VOICE_MODE_ADDON = `
 5. 【注意力】你的回覆必須以「最新那句話」為唯一核心。歷史紀錄只是背景，不是你要回答的東西。
 `;
 
-// 在全局規則中加入「格式區分」的強烈約束
+// 群組訊息使用短別名，避免長標籤重複消耗 token 並保留發話者邊界。
 const GENERAL_TEXT_ADDON = `
 
-## 注意力與回覆優先級規則
-
-### 核心原則：永遠以「當前訊息」為回覆目標
-- 你的回覆必須直接針對「最後一則訊息」，這是唯一需要回應的東西。
-- 歷史對話紀錄的權重極低，僅用於理解語境，不是你要回答的內容。
-- 如果歷史訊息的話題與當前訊息完全無關，直接忽略那些歷史訊息，不要把它們的內容帶進回覆。
-- 絕對不要「總結歷史對話」、「回顧之前說過的話」，除非當前訊息明確要求你這麼做。
-
-### 格式識別規則
-- 對話中會以「【發言者：暱稱 | 回覆他時：語氣描述】」來標示是誰說的話，以及你回覆那個人時應使用的語氣。絕對不要把暱稱或標籤當成對話內容來回答！
-- 絕對不要輸出「【發言者：...】」這樣的標籤，請直接給出回覆內容即可。
-- 「回覆他時：...」標籤只規範你**主動回覆或直接回應那個人**時的語氣，不影響你對頻道內容的客觀理解與陳述。
-- 對話歷史中，帶有「[背景參考 → 先前對 ...」標註的訊息，是你過去對其他人說的話，僅供了解頻道脈絡，不要把那段話的語氣或稱謂帶入當前對話。
+## 群組對話與回覆規則
+- PARTICIPANTS 會定義本輪的短別名（例如 u1=Alice）；每則歷史訊息以 [uN] 標示作者。
+- CURRENT 是本輪唯一的回覆對象。只能把 [uN] 的話歸於同一個 uN；歷史僅供理解事實、指涉與引用，不得回覆歷史作者，也不得將其主張歸給 CURRENT。
+- [bot>uN] 是你先前對 uN 的回覆；只有 [bot>目前 CURRENT 的別名] 可延續對目前對象的人格互動。標記為 bg 或 ? 的 bot 訊息只可作中性背景。
+- 不要輸出 PARTICIPANTS、CURRENT、[uN]、[bot>uN] 等控制標記，直接輸出回覆內容。
+- 不要總結或回顧歷史，除非 CURRENT 明確要求。
 
 ### 人格行為鎖定規則（最高優先，任何人格模式都必須遵守）
-- 你當前使用的人格互動行為，只能施加在標示「← 當前對話者」的這個人身上。
-- 歷史或背景中出現的「其他人」發言（沒有「← 當前對話者」標示的內容），你只能客觀理解、引用其事實內容，絕對不能對他們發動任何屬於你當前人格的互動行為——例如不能虧他們、不能挑逗他們、不能安慰他們、不能對他們吃醋。那些人不是你現在的對話對象。
-- 即使當前訊息提到、@到、或引用了其他人，你回應時使用的語氣與互動行為，依然只鎖定在正在跟你對話的這個人身上；不要把原本設計給「當前對話者」的互動行為，套用在被提到的第三方身上。
+- 你當前的人格互動行為只能施加在 CURRENT 身上；即使訊息提到、@到或引用其他人也一樣。
 
 ### 回覆長度規則
 - 若為日常閒聊或一般對話，回覆字數請盡量控制在 30 字以內，保持自然、簡短的聊天節奏。
@@ -239,51 +230,58 @@ async function sanitizeBotMessage(text, contextLabel = 'unknown', accumulator = 
 }
 
 // ════════════════════════════════════════════════════════
-//  歷史記錄
+//  群組歷史序列化
 // ════════════════════════════════════════════════════════
-function mergeConsecutiveRoles(history) {
-    if (!history || history.length === 0) return [];
-    const merged = [];
-    let current = { ...history[0] };
-    for (let i = 1; i < history.length; i++) {
-        const next = history[i];
-        if (next.role === current.role) {
-            current.parts = [...current.parts, ...next.parts];
-        } else {
-            merged.push(current);
-            current = { ...next };
-        }
-    }
-    merged.push(current);
-    return merged;
+// Gemini chat 只有 user/model role；群組成員的身分必須由內容保留。
+// 每個 Discord user ID 在單一請求內會得到穩定的短 alias（u1、u2…）。
+function buildParticipantMap(messages, currentUserId, currentUserName = '使用者') {
+    const participants = new Map();
+    const add = (id, name) => {
+        if (!id || participants.has(id)) return;
+        participants.set(id, { alias: `u${participants.size + 1}`, name: name || '使用者' });
+    };
+
+    messages?.forEach(msg => {
+        if (msg?.author && !msg.author.bot) add(msg.author.id, msg.author.username);
+    });
+    add(currentUserId, currentUserName);
+    return participants;
 }
 
-// ════════════════════════════════════════════════════════
-//  輔助：取得使用者的回覆語氣標籤（用於歷史紀錄標注）
-// ════════════════════════════════════════════════════════
-function getModeLabel(targetUserId, targetUserName, currentUserId) {
-    // 「回覆他時：...」是給機器人「若要回覆這個人，該用什麼語氣」的指令，
-    // 只有當前對話者（機器人這次真的要回覆的對象）需要這項資訊。
-    // 對頻道裡其他人的發言，只標示「誰講的」以滿足「誰對誰說了什麼」的
-    // 事實釐清需求，不附帶其他人被指定的人設語氣描述——
-    // 避免機器人在回覆當前使用者時，被「其他人該用什麼語氣對待」這種
-    // 與本輪對話無關的指令性資訊污染語氣判斷。
-    if (targetUserId === currentUserId) {
-        const mode = selectMode(targetUserId, '');
-        const desc = MODE_MAP[mode]?.shortDescription ?? null;
-        return desc
-            ? `【發言者：${targetUserName} | 回覆他時：${desc} | ← 當前對話者】`
-            : `【發言者：${targetUserName} | ← 當前對話者】`;
+function getParticipant(participants, userId, fallbackName = '使用者') {
+    if (!participants.has(userId)) {
+        participants.set(userId, { alias: `u${participants.size + 1}`, name: fallbackName });
     }
-    return `【發言者：${targetUserName}】`;
+    return participants.get(userId);
 }
 
-// ════════════════════════════════════════════════════════
-//  完整頻道時間軸歷史記錄（第二步：保留所有人的發言）
-// ════════════════════════════════════════════════════════
-// 新增 accumulator 參數：往下傳給 sanitizeBotMessage，讓歷史紀錄中
-// 觸發的每一次語氣淨化 API 呼叫，都能被計入這次外部請求的 token 總花費。
-async function fetchUserChannelHistory(channel, userId, currentMessageId, botId, accumulator = null) {
+function addBotReplyTargets(messages, participants, botId) {
+    messages?.forEach(msg => {
+        if (msg?.author?.id !== botId) return;
+        const context = getBotMessageContext(msg.id);
+        if (context?.userId) getParticipant(participants, context.userId, context.userName ?? '其他人');
+    });
+}
+
+function formatUserText(content) {
+    // 將原始 Discord 內容保持為單一資料字串，避免換行或控制字串偽造 CURRENT／[uN]。
+    return JSON.stringify(String(content ?? ''));
+}
+
+function formatParticipants(participants) {
+    const values = [...participants.values()]
+        .map(({ alias, name }) => `${alias}=${formatUserText(name)}`)
+        .join(', ');
+    return values ? `PARTICIPANTS: ${values}. BOT=mousebot.` : 'PARTICIPANTS: none. BOT=mousebot.';
+}
+
+function formatCurrentRequest(alias, content, isRandomTrigger = false) {
+    const randomNote = isRandomTrigger ? ' This was a random proactive reply.' : '';
+    return `CURRENT=${alias}\n[${alias}] ${formatUserText(content)}\nReply only to CURRENT (${alias}). History is context, not CURRENT's words.${randomNote}`;
+}
+
+// 完整頻道時間軸：保留既有時間與數量限制，但不再跨作者合併 user role。
+async function fetchUserChannelHistory(channel, userId, currentMessageId, botId, accumulator = null, currentUserName = '使用者') {
     try {
         const channelId = channel.id;
         const now = Date.now();
@@ -303,119 +301,75 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId,
         const currentTimestamp = currentMsg?.createdTimestamp ?? Date.now();
         const clearTime        = getMemoryClearTime(userId);
 
-        // ── 第二步：保留時間窗內所有人的完整發言，不再依使用者篩選 ──
         let relevantMessages = fetched
             .filter(msg => {
                 if (msg.id === currentMessageId) return false;
                 if ((currentTimestamp - msg.createdTimestamp) > HISTORY_TIME_LIMIT_MS) return false;
                 if (msg.createdTimestamp <= clearTime) return false;
-
                 const textContent = msg.cleanContent || msg.content;
-                if (!textContent?.trim().length && msg.attachments.size === 0) return false;
-
-                return true; // 保留所有人（使用者、機器人、其他人）的發言
+                return Boolean(textContent?.trim().length || msg.attachments.size > 0);
             })
             .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 
-        // 移除開頭連續的機器人訊息，確保歷史以使用者發言開頭
         while (relevantMessages.size > 0) {
             const first = relevantMessages.first();
-            if (first.author.id === botId) {
-                relevantMessages = relevantMessages.filter(m => m.id !== first.id);
-            } else break;
+            if (first.author.id === botId) relevantMessages = relevantMessages.filter(m => m.id !== first.id);
+            else break;
         }
 
         relevantMessages = relevantMessages.last(HISTORY_CONTEXT_LIMIT);
-
+        const participants = buildParticipantMap(relevantMessages, userId, currentUserName);
+        // bot>uN 也必須先存在於身份表，避免歷史標籤引用未定義的 alias。
+        addBotReplyTargets(relevantMessages, participants, botId);
         const history = [];
+
+        // Alias 表只送一次；後續每條人類訊息僅加 [uN]，降低 metadata token。
+        if (relevantMessages.size > 0) {
+            history.push({ role: 'user', parts: [{ text: formatParticipants(participants) }] });
+        }
+
         for (const msg of relevantMessages.values()) {
             const parts = [];
-
-            // 處理附件圖片
             if (msg.attachments.size > 0) {
                 const imgParts = await processAttachments(msg.attachments);
                 imgParts.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } }));
             }
 
             const textContent = msg.cleanContent || msg.content;
-
-            // ════════════════════════════════════════════════════════
-            //  修正後的機器人訊息處理邏輯（取代原本的 if/else 區塊）
-            //  原始位置：fetchUserChannelHistory() 函式內，處理
-            //  msg.author.id === botId 的分支
-            // ════════════════════════════════════════════════════════
             if (msg.author.id === botId) {
                 const cachedCtx = getBotMessageContext(msg.id);
-
-                if (cachedCtx && cachedCtx.userId !== userId) {
-                    // 【狀態一】確認：機器人對「其他人」說的話
-                    // → 只有該次發言使用的是「帶人設腔調」的模式才動語氣淨化手術；
-                    //   本來就中性的模式（如 developer）原文放行，避免無差別開刀
-                    const targetUserName = cachedCtx.userName ?? '其他人';
-                    if (textContent?.trim().length > 0) {
-                        // 對象標籤在此處組裝（來源：botMessageCache 的既有記錄），
-                        // 不再傳入 sanitizeBotMessage，避免淨化模型間接接觸/暗示對象資訊
-                        // contextLabel 標明：這則歷史訊息 id、原本講給誰、現在為誰服務
-                        const content = cachedCtx.needsSanitize
-                            ? await sanitizeBotMessage(
-                                textContent.trim(),
-                                `history/msg:${msg.id}/origTo:${cachedCtx.userId}/for:${userId}`,
-                                accumulator
-                              )
-                            : textContent.trim();
-                        parts.push({ text: `[背景參考 → 先前對 ${targetUserName} 說的話]\n${content}` });
-                    }
-
-                } else if (cachedCtx && cachedCtx.userId === userId) {
-                    // 【狀態二】確認：機器人對「目前使用者」說的話
-                    // → 不需淨化語氣（本來就是對他說的），但仍加上明確標籤
-                    //   讓 AI 清楚知道「這段是我之前對眼前這個人說的話」
-                    if (textContent?.trim().length > 0) {
-                        parts.push({ text: `[你先前對目前這位使用者說過的話]\n${textContent.trim()}` });
-                    }
-
-                } else {
-                    // 【狀態三】查無記錄（快取過期 / 資料遺失 / 快取建立前的舊訊息）
-                    // → 對象不明，無法確定是否為當前使用者
-                    // → 保守處理：視為「可能對其他人說」，一併進行語氣淨化
-                    //   並用「對象不明」標籤降低誤導風險，而非直接原文餵入
-                    if (textContent?.trim().length > 0) {
-                        const sanitized = await sanitizeBotMessage(
-                            textContent.trim(),
-                            `history/msg:${msg.id}/origTo:unknown/for:${userId}`,
-                            accumulator
-                        );
-                        parts.push({ text: `[背景參考 → 對象不明的先前發言，語氣已中性化]\n${sanitized}` });
-                    }
-                }
-            } else {
-                // 人類使用者的發言，原封不動，加上含回覆語氣的結構化標籤
                 if (textContent?.trim().length > 0) {
-                    const label = getModeLabel(msg.author.id, msg.author.username, userId);
-                    parts.push({ text: `${label}\n${textContent.trim()}` });
+                    if (cachedCtx && cachedCtx.userId !== userId) {
+                        const target = getParticipant(participants, cachedCtx.userId, cachedCtx.userName ?? '其他人');
+                        const content = cachedCtx.needsSanitize
+                            ? await sanitizeBotMessage(textContent.trim(), `history/msg:${msg.id}/origTo:${cachedCtx.userId}/for:${userId}`, accumulator)
+                            : textContent.trim();
+                        parts.push({ text: `[bot>${target.alias},bg] ${content}` });
+                    } else if (cachedCtx && cachedCtx.userId === userId) {
+                        const target = getParticipant(participants, userId, currentUserName);
+                        parts.push({ text: `[bot>${target.alias}] ${textContent.trim()}` });
+                    } else {
+                        const sanitized = await sanitizeBotMessage(textContent.trim(), `history/msg:${msg.id}/origTo:unknown/for:${userId}`, accumulator);
+                        parts.push({ text: `[bot>?,bg] ${sanitized}` });
+                    }
                 }
+            } else if (textContent?.trim().length > 0) {
+                const participant = getParticipant(participants, msg.author.id, msg.author.username);
+                parts.push({ text: `[${participant.alias}] ${formatUserText(textContent.trim())}` });
             }
 
-            if (parts.length === 0) parts.push({ text: '[使用者傳了一張無法讀取的圖片]' });
-
-            // 機器人訊息 → model role；其他人（包含目前使用者及其他人類）→ user role
+            if (parts.length === 0) parts.push({ text: '[image]' });
+            // 每一則 Discord 訊息保留一個 Content；絕不可因相同 role 跨作者合併。
             history.push({ role: msg.author.id === botId ? 'model' : 'user', parts });
         }
 
-        let finalHistory = mergeConsecutiveRoles(history);
-
-        const firstUserIndex = finalHistory.findIndex(msg => msg.role === 'user');
-        if (firstUserIndex > 0) {
-            finalHistory = finalHistory.slice(firstUserIndex);
-        } else if (firstUserIndex === -1) {
-            finalHistory = [];
-        }
-
-        console.log(`[History] 載入 ${finalHistory.length} 筆對話紀錄（完整頻道時間軸）`);
-        return finalHistory;
+        const firstUserIndex = history.findIndex(msg => msg.role === 'user');
+        const finalHistory = firstUserIndex === -1 ? [] : history.slice(firstUserIndex);
+        console.log(`[History] 載入 ${finalHistory.length} 筆對話紀錄（完整頻道時間軸；participants=${participants.size}）`);
+        return { history: finalHistory, participants };
     } catch (err) {
         console.error('[History] 抓取頻道歷史失敗：', err.message);
-        return [];
+        return { history: [], participants: buildParticipantMap([], userId, currentUserName) };
     }
 }
 
@@ -431,8 +385,10 @@ async function fetchReferencedMessage(message) {
 
 // 新增 accumulator 參數：往下傳給 sanitizeBotMessage，讓「引用訊息」
 // 觸發的語氣淨化 API 呼叫，同樣被計入這次外部請求的 token 總花費。
-async function buildMessagePartsWithReference(message, question, imageParts, botId, currentMode, currentUserId, accumulator = null, isRandomTrigger = false) {
+async function buildMessagePartsWithReference(message, question, imageParts, botId, currentMode, currentUserId, accumulator = null, isRandomTrigger = false, participants = null) {
     const parts = [];
+    const participantMap = participants ?? buildParticipantMap([], currentUserId, message?.author?.username || '使用者');
+    const currentParticipant = getParticipant(participantMap, currentUserId, message?.author?.username || '使用者');
     const refMsg = await fetchReferencedMessage(message);
 
     if (refMsg) {
@@ -457,12 +413,10 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
                         accumulator
                       )
                     : refContent;
-                refText = `> 引用你之前對別人（${cachedContext.userName}）說的話：\n> 「${content}」\n\n`;
+                refText = `[REPLY_TO bot>${getParticipant(participantMap, cachedContext.userId, cachedContext.userName ?? '其他人').alias},bg] ${content}`;
             } else if (cachedContext && cachedContext.userId === currentUserId) {
                 // 對「目前這位使用者」說過的話 → 原文保留（即使當時是別的人設模式）
-                refText = cachedContext.mode !== currentMode
-                    ? `> 引用你之前對他說的話：\n> 「${refContent}」\n\n`
-                    : `> 引用你之前的發言：\n> 「${refContent}」\n\n`;
+                refText = `[REPLY_TO bot>${currentParticipant.alias}] ${refContent}`;
             } else {
                 // 查無記錄，對象不明 → 保守處理，比照歷史紀錄的「對象不明」分支淨化
                 const sanitized = await sanitizeBotMessage(
@@ -470,11 +424,11 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
                     `reference/msg:${refMsg.id}/origTo:unknown/for:${currentUserId}`,
                     accumulator
                 );
-                refText = `> 引用你先前的發言（對象不明，語氣已中性化）：\n> 「${sanitized}」\n\n`;
+                refText = `[REPLY_TO bot>?,bg] ${sanitized}`;
             }
         } else {
             // 引用別人發言時，使用括號將暱稱隔開
-            refText = `> 引用【發言者：${refAuthor}】的發言：\n> 「${refContent}」\n\n`;
+            refText = `[REPLY_TO ${getParticipant(participantMap, refMsg.author.id, refAuthor).alias}] ${formatUserText(refContent)}`;
         }
 
         // 處理實體附件
@@ -506,20 +460,8 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
         if (geminiPart) parts.push(geminiPart);
     });
 
-    // 將當下的提問也加上發言者標籤
-    // 標記「← 當前對話者」：這是「人格行為鎖定規則」判斷是否可對此人使用當前
-    // 人格互動行為的唯一依據，必須確保「這則最重要的訊息」本身就帶有這個標記，
-    // 不能只倚賴歷史紀錄裡的標籤或「最後一則訊息」這種間接推斷。
-    if (question) {
-        const authorName = message?.author?.username || '使用者';
-        // 隨機回覆時，這則訊息並不是對方主動發來問你的，而是你自己隨機看到、
-        // 主動選擇插話回應／吐槽的普通發言，主被動關係與「主動 @ 你提問」相反，
-        // 標籤措辭需對應調整，避免你誤以為對方特地跑來問你才回。
-        const label = isRandomTrigger
-            ? `【發言者：${authorName} | ← 當前對話者，注意：他這句話並不是在問你或對你說的，是你自己隨機看到後主動插話回應／吐槽】`
-            : `【發言者：${authorName} | ← 當前對話者，你現在正在回覆他】`;
-        parts.push({ text: `${label}\n${question}` });
-    }
+    // CURRENT 固定為最後一個文字 part，將本輪對象與歷史背景物理分隔。
+    if (question) parts.push({ text: formatCurrentRequest(currentParticipant.alias, question, isRandomTrigger) });
     return parts;
 }
 
@@ -538,19 +480,18 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
         const requestLabel = `getGeminiResponse/user:${userId}/mode:${mode}/msg:${messageId ?? 'n/a'}`;
         const tokenAcc = createTokenAccumulator(requestLabel);
 
-        const history = channel
-            ? await fetchUserChannelHistory(channel, userId, messageId, botId, tokenAcc)
-            : [];
+        const historyContext = channel
+            ? await fetchUserChannelHistory(channel, userId, messageId, botId, tokenAcc, message?.author?.username || '使用者')
+            : { history: [], participants: buildParticipantMap([], userId, message?.author?.username || '使用者') };
+        const { history, participants } = historyContext;
         const chat = model.startChat({ history, generationConfig: GENERATION_CONFIG });
 
-        // 如果沒有 message (例如斜線指令、純 @ 問候)，也要加上「← 當前對話者」標記，
-        // 與 buildMessagePartsWithReference 的格式保持一致，確保人格鎖定規則
-        // 在這條路徑上同樣有依據可循。
+        // CURRENT 固定置於最後，讓 slash command 與純 @ 問候也具備相同邊界。
         const messageParts = message
-            ? await buildMessagePartsWithReference(message, prompt, imageParts, botId, mode, userId, tokenAcc)
+            ? await buildMessagePartsWithReference(message, prompt, imageParts, botId, mode, userId, tokenAcc, false, participants)
             : [
                 ...imageParts.map(part => toGeminiPart(part)).filter(Boolean),
-                { text: prompt ? `【發言者：使用者 | ← 當前對話者，你現在正在回覆他】\n${prompt}` : '' }
+                { text: formatCurrentRequest(getParticipant(participants, userId, '使用者').alias, prompt) }
             ];
 
         const result = await chat.sendMessage(messageParts);
@@ -571,12 +512,13 @@ async function getGeminiResponseVoice(userId, prompt, channel = null, messageId 
         const requestLabel = `getGeminiResponseVoice/user:${userId}/mode:${mode}/msg:${messageId ?? 'n/a'}`;
         const tokenAcc = createTokenAccumulator(requestLabel);
 
-        const history = channel
+        const historyContext = channel
             ? await fetchUserChannelHistory(channel, userId, messageId, botId, tokenAcc)
-            : [];
+            : { history: [], participants: buildParticipantMap([], userId) };
+        const { history, participants } = historyContext;
         const chat = model.startChat({ history, generationConfig: { ...GENERATION_CONFIG, maxOutputTokens: 150 } });
 
-        const result   = await chat.sendMessage([{ text: prompt }]);
+        const result   = await chat.sendMessage([{ text: formatCurrentRequest(getParticipant(participants, userId).alias, prompt) }]);
         const response = result.response.text().trim();
         logTokenUsage(requestLabel, result.response, tokenAcc);
         logTokenSummary(tokenAcc);
@@ -596,23 +538,21 @@ async function getShortResponse(userId, promptText, imageParts = [], channel = n
         const requestLabel = `getShortResponse/user:${userId}/mode:${mode}/msg:${messageId ?? 'n/a'}`;
         const tokenAcc = createTokenAccumulator(requestLabel);
 
-        const history = channel
-            ? await fetchUserChannelHistory(channel, userId, messageId, botId, tokenAcc)
-            : [];
+        const historyContext = channel
+            ? await fetchUserChannelHistory(channel, userId, messageId, botId, tokenAcc, message?.author?.username || '使用者')
+            : { history: [], participants: buildParticipantMap([], userId, message?.author?.username || '使用者') };
+        const { history, participants } = historyContext;
         const shortPrompt = imageParts.length > 0 && !promptText
             ? `請用大約10~200個字回應或吐槽這張圖片`
             : `請用大約10~200字回應或吐槽訊息：「${promptText}」`;
         const chat = model.startChat({ history, generationConfig: { ...GENERATION_CONFIG, maxOutputTokens: 300 } });
 
-        // 短回覆標籤邏輯（同樣補上「← 當前對話者」標記，理由同 getGeminiResponse）
-        // 注意：getShortResponse 專用於「隨機回覆」，訊息並非對方主動發來問你的，
-        // 因此標籤要傳入 isRandomTrigger = true，避免主被動關係標錯，
-        // 讓你誤以為對方是特地跑來問你才回應。
+        // 隨機回覆同樣以 CURRENT 置尾；標記僅說明機器人主動插話。
         const messageParts = message
-            ? await buildMessagePartsWithReference(message, shortPrompt, imageParts, botId, mode, userId, tokenAcc, true)
+            ? await buildMessagePartsWithReference(message, shortPrompt, imageParts, botId, mode, userId, tokenAcc, true, participants)
             : [
                 ...imageParts.map(part => toGeminiPart(part)).filter(Boolean),
-                { text: `【發言者：使用者 | ← 當前對話者，注意：他這句話並不是在問你或對你說的，是你自己隨機看到後主動插話回應／吐槽】\n${shortPrompt}` }
+                { text: formatCurrentRequest(getParticipant(participants, userId, '使用者').alias, shortPrompt, true) }
             ];
 
         const result = await chat.sendMessage(messageParts);
@@ -631,4 +571,10 @@ module.exports = {
     getGeminiResponse,
     getGeminiResponseVoice,
     getShortResponse,
+    buildParticipantMap,
+    getParticipant,
+    formatParticipants,
+    formatCurrentRequest,
+    formatUserText,
+    addBotReplyTargets,
 };
