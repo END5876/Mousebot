@@ -1044,25 +1044,25 @@ function convertToBase(amount, exp){
   const ratio = exp.amountInBase / exp.amount;
   return round2(amount * ratio);
 }
+function allocateExpenseBaseAmounts(entries, exp){
+  let allocated = 0;
+  return entries.map((entry, index)=>{
+    const amountInBase = index === entries.length - 1
+      ? round2(exp.amountInBase - allocated)
+      : convertToBase(entry.amount, exp);
+    allocated = round2(allocated + amountInBase);
+    return Object.assign({}, entry, { amountInBase });
+  });
+}
 function calcNetBalances(trip){
   const net = {};
   for (const m of trip.members) net[m.id] = 0;
   for (const exp of trip.expenses){
-    let payerBaseSum = 0;
-    for (let i=0;i<exp.payers.length;i++){
-      const p = exp.payers[i];
-      let baseAmount;
-      if (i === exp.payers.length-1) baseAmount = round2(exp.amountInBase - payerBaseSum);
-      else { baseAmount = convertToBase(p.amount, exp); payerBaseSum += baseAmount; }
-      if (net[p.userId] !== undefined) net[p.userId] = round2(net[p.userId] + baseAmount);
+    for (const p of allocateExpenseBaseAmounts(exp.payers, exp)){
+      if (net[p.userId] !== undefined) net[p.userId] = round2(net[p.userId] + p.amountInBase);
     }
-    let shareBaseSum = 0;
-    for (let i=0;i<exp.participants.length;i++){
-      const s = exp.participants[i];
-      let baseAmount;
-      if (i === exp.participants.length-1) baseAmount = round2(exp.amountInBase - shareBaseSum);
-      else { baseAmount = convertToBase(s.amount, exp); shareBaseSum += baseAmount; }
-      if (net[s.userId] !== undefined) net[s.userId] = round2(net[s.userId] - baseAmount);
+    for (const s of allocateExpenseBaseAmounts(exp.participants, exp)){
+      if (net[s.userId] !== undefined) net[s.userId] = round2(net[s.userId] - s.amountInBase);
     }
   }
   for (const d of trip.deposits){
@@ -1157,28 +1157,25 @@ function renderMemberDetails(net) {
       ledger[m.id] = { paid: [], share: [], transferIn: [], transferOut: [] };
     }
     for (const exp of trip.expenses) {
-      // 代墊
-      for (const p of exp.payers) {
+      // 代墊／分攤本位幣值均使用與淨額計算相同的尾差分配結果。
+      for (const p of allocateExpenseBaseAmounts(exp.payers, exp)) {
         if (ledger[p.userId]) {
-          const baseAmount = exp.amount > 0 ? round2(p.amount * exp.amountInBase / exp.amount) : 0;
           ledger[p.userId].paid.push({
             description: exp.description,
             amount: p.amount,
             currency: exp.currency,
-            amountInBase: baseAmount,
+            amountInBase: p.amountInBase,
             createdAt: exp.createdAt,
           });
         }
       }
-      // 分攤
-      for (const s of exp.participants) {
+      for (const s of allocateExpenseBaseAmounts(exp.participants, exp)) {
         if (ledger[s.userId]) {
-          const baseAmount = exp.amount > 0 ? round2(s.amount * exp.amountInBase / exp.amount) : 0;
           ledger[s.userId].share.push({
             description: exp.description,
             amount: s.amount,
             currency: exp.currency,
-            amountInBase: baseAmount,
+            amountInBase: s.amountInBase,
             createdAt: exp.createdAt,
           });
         }
