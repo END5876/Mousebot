@@ -958,13 +958,10 @@
    }
 ===================================================================== */
 
-const ZERO_DECIMAL_CURRENCIES = new Set(['BIF','CLP','DJF','GNF','ISK','JPY','KMF','KRW','MGA','PYG','RWF','UGX','VND','VUV','XAF','XOF','XPF']);
-
 function genId(prefix){ return prefix + '_' + Math.random().toString(16).slice(2,10); }
 function round2(n){ return Math.round((n + Number.EPSILON) * 100) / 100; }
 function fmtMoney(amount, currency){
   if (amount === null || amount === undefined || !Number.isFinite(amount)) return '-';
-  if (ZERO_DECIMAL_CURRENCIES.has((currency||'').toUpperCase())) return Math.round(amount).toLocaleString('en-US');
   return amount.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
