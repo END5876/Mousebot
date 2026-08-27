@@ -7,12 +7,8 @@ const sharp = require('sharp'); // 引入 sharp 進行圖片壓縮
 const MAX_IMAGE_SIZE_MB = 30;
 const TTS_MAX_LENGTH = 1000;
 const IMAGE_CACHE_TTL_MS = 10 * 60 * 1000;
-const MAX_MODE_CACHE_SIZE = 5000;
+const MAX_MODE_CACHE_SIZE = 1000;
 const HISTORY_CACHE_TTL_MS = 30 * 1000;
-// bot 訊息歸屬記錄的存活時間：需 >= aiCore.js 的 HISTORY_TIME_LIMIT_MS（5 分鐘），
-// 並保留緩衝，確保只要訊息還落在歷史抓取的時間窗口內，歸屬記錄一定查得到，
-// 避免「對象不明」誤判掉本應能辨識為「對目前使用者說」的情況。
-const BOT_CONTEXT_CACHE_TTL_MS = 10 * 60 * 1000;
 
 // ════════════════════════════════════════════════════════
 //  快取
@@ -46,36 +42,17 @@ function getMemoryClearTime(userId) {
 // ════════════════════════════════════════════════════════
 //  Bot 訊息上下文快取
 // ════════════════════════════════════════════════════════
-// 語氣本來就中性、不帶特定人格腔調的模式：這類模式產生的歷史發言，
-// 即使講給「其他人」聽，也不需要動語氣淨化手術，原文放行即可——
-// 手術範圍應精準對齊「真正可能帶著人設腔調、可能誤導機器人」的內容，
-// 而不是「只要目標不是當前使用者」就一律開刀。
-const NEUTRAL_MODES = new Set(['developer']);
-
 function recordBotMessageContext(messageId, mode, userId, userName) {
     if (!messageId || !mode) return;
-    // 主要淘汰依據是 BOT_CONTEXT_CACHE_TTL_MS 的定期清除（見下方 setInterval）；
-    // 這裡的數量上限只是防止極端灌訊息場景下記憶體無限增長的第二道防線。
     if (botMessageCache.size >= MAX_MODE_CACHE_SIZE) {
         const firstKey = botMessageCache.keys().next().value;
         botMessageCache.delete(firstKey);
     }
-    botMessageCache.set(messageId, {
-        mode, userId, userName,
-        recordedAt: Date.now(),
-        needsSanitize: !NEUTRAL_MODES.has(mode),
-    });
+    botMessageCache.set(messageId, { mode, userId, userName });
 }
 
 function getBotMessageContext(messageId) {
-    const ctx = botMessageCache.get(messageId);
-    if (!ctx) return null;
-    // 主動過期判斷：即使還沒被排程清除，讀取時也要確保沒有超過保留視窗
-    if (Date.now() - ctx.recordedAt >= BOT_CONTEXT_CACHE_TTL_MS) {
-        botMessageCache.delete(messageId);
-        return null;
-    }
-    return ctx;
+    return botMessageCache.get(messageId);
 }
 
 // ════════════════════════════════════════════════════════
@@ -416,15 +393,6 @@ setInterval(() => {
     }
     if (cleared > 0) console.log(`[History Cache] 已清除 ${cleared} 個過期頻道快取`);
 }, HISTORY_CACHE_TTL_MS);
-
-setInterval(() => {
-    const now = Date.now();
-    let cleared = 0;
-    for (const [messageId, ctx] of botMessageCache.entries()) {
-        if (now - ctx.recordedAt >= BOT_CONTEXT_CACHE_TTL_MS) { botMessageCache.delete(messageId); cleared++; }
-    }
-    if (cleared > 0) console.log(`[BotContext Cache] 已清除 ${cleared} 筆過期歸屬記錄`);
-}, BOT_CONTEXT_CACHE_TTL_MS);
 
 // ════════════════════════════════════════════════════════
 //  withTyping：持續顯示「正在輸入中」直到 asyncFn 結束
