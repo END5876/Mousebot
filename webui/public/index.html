@@ -211,10 +211,27 @@
     padding:9px 14px 9px 12px; font-size:13.5px; cursor:pointer;
     background:#fff; user-select:none; min-height:40px;
   }
-  .chip input[type=checkbox]{margin:0; accent-color:var(--brass-bg); width:17px; height:17px;}
-  .chip .checkmark{display:none; color:var(--brass); font-weight:900;}
+  /* 🔧 Bug fix：原生 checkbox 本身會畫出自己的勾勾（accent-color 讓瀏覽器原生繪製），
+     過去曾疊加一個 .checkmark 自訂勾勾造成「同時出現兩個勾勾」；.checkmark 已整個
+     移除（連同對應的 <span> 標籤，見 buildChips()），現在只剩原生 checkbox 一個
+     勾選指示。 */
+  /* 🔧 對齊修正（v2）：不同瀏覽器對「原生 checkbox」的內部繪製方式不一致
+     （尤其 Safari/WebKit 對 accent-color 樣式的 checkbox，繪製時的內部留白
+     跟 Chrome/Blink 不一樣），單純設定 checkbox 的 width/height 在某些瀏覽器
+     下仍可能讓它看起來偏上或偏下，跟旁邊的名字文字對不齊。
+     這裡改成用一個固定 17×17px、內部用 flex 置中的外層容器 .chip-checkbox
+     包住 checkbox，讓 checkbox 不論瀏覽器內部怎麼畫，都被強制置中在這個固定
+     大小的盒子正中央；.chip-label 的 line-height 也對齊同一個高度，兩者在
+     .chip 的 flex 列（align-items:center）中，中心點就會確實落在同一條水平線。 */
+  .chip-checkbox{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:17px; height:17px; flex-shrink:0;
+  }
+  .chip-checkbox input[type=checkbox]{
+    display:block; margin:0; accent-color:var(--brass-bg); width:17px; height:17px;
+  }
+  .chip-label{ line-height:17px; }
   .chip.checked{border-color:var(--brass-bg); background:#FBF4E4;}
-  .chip.checked .checkmark{display:inline;}
   .chip .amt{
     width:76px; border:none; border-bottom:1px solid var(--card-line);
     background:transparent; font-family:'IBM Plex Mono',monospace; font-size:13.5px;
@@ -406,6 +423,15 @@
   .settle-item:last-child{border-bottom:none;}
   .settle-arrow{color:var(--brass); font-family:'IBM Plex Mono',monospace;}
   .settle-amt{margin-left:auto; font-family:'IBM Plex Mono',monospace; font-weight:700;}
+
+  /* 🆕 可收合區塊（建議轉帳／彼此累計欠款）：收合時在標題列顯示合計金額的摘要文字，
+     展開時箭頭方向跟著換，內容（含幣別選單）收在 .section-body 裡用 display 切換。 */
+  .section-summary{
+    font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-soft);
+    white-space:nowrap;
+  }
+  .section-chevron{ font-size:11px; color:var(--ink-soft); flex-shrink:0; }
+  .section-body{ animation:fade .18s ease; }
 
   .kv-summary{display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:14px;}
   .kv-card{background:var(--card); border:1px solid var(--card-line); border-radius:10px; padding:12px 14px;}
@@ -661,7 +687,7 @@
       </div>
     </div>
 
-    <!-- 2. 建議轉帳表 -->
+    <!-- 2. 建議轉帳表：移除收合，幣別下拉與匯率提示併排 -->
     <div class="receipt" style="margin-bottom:14px;">
       <div class="receipt-head">
         <div>
@@ -669,7 +695,15 @@
           <div class="t2">GREEDY DEBT SIMPLIFICATION</div>
         </div>
       </div>
-      <div class="settle-list" id="settleList"></div>
+      <div class="section-body" id="transferBody">
+        <div class="settle-list" id="settleList"></div>
+        <!-- 縮小選單並與提示文字同一行 -->
+        <div style="padding: 0 18px 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <span style="font-size: 12.5px; color: var(--ink-soft); font-weight: 500;">換算顯示幣別</span>
+          <select id="transferCurrencySelect" onchange="onTransferCurrencyChange(this.value)" style="width: auto; padding: 4px 8px; font-size: 12.5px; height: 30px; border-radius: 6px;"></select>
+          <span id="transferRateNote" class="hint" style="margin: 0;"></span>
+        </div>
+      </div>
     </div>
 
     <!-- 3. 每位成員多幣別逐筆明細 -->
@@ -682,7 +716,26 @@
       </div>
       <div class="member-detail-list" id="memberDetailList"></div>
     </div>
-  </div>
+
+    <!-- 4. 彼此累計欠款總額：移除收合，幣別下拉與匯率提示併排 -->
+    <div class="receipt" style="margin-top:14px;">
+      <div class="receipt-head">
+        <div>
+          <div class="t1">彼此累計欠款總額</div>
+          <div class="t2">PAIRWISE RAW DEBT・僅同組兩人互抵，未跨人簡化</div>
+        </div>
+      </div>
+      <div class="section-body" id="pairwiseBody">
+        <div class="settle-list" id="pairwiseDebtList"></div>
+        <!-- 縮小選單並與提示文字同一行 -->
+        <div style="padding: 0 18px 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <span style="font-size: 12.5px; color: var(--ink-soft); font-weight: 500;">換算顯示幣別</span>
+          <select id="pairwiseCurrencySelect" onchange="onPairwiseCurrencyChange(this.value)" style="width: auto; padding: 4px 8px; font-size: 12.5px; height: 30px; border-radius: 6px;"></select>
+          <span id="pairwiseRateNote" class="hint" style="margin: 0;"></span>
+        </div>
+      </div>
+    </div>
+
 
   <!-- ================= EXPENSES ================= -->
   <div class="panel" id="panel-expenses" data-panel="expenses">
@@ -728,11 +781,12 @@
       </div>
 
       <div class="field">
-        <label>誰要分攤？（預設全員平均分攤，取消勾選可排除某人；手動改金額後就不會再自動平均）</label>
+        <label>誰要分攤？（請自行勾選；已勾選的人會即時平均分攤，手動改金額後就不會再自動平均）</label>
         <div class="chip-select" id="participantChips"></div>
         <div class="btn-row">
           <button class="btn btn-ghost btn-sm" onclick="equalFillChips('participant')">依已勾選人數重新平均</button>
           <button class="btn btn-ghost btn-sm" onclick="checkAllParticipants()">全部人平均分攤</button>
+          <button class="btn btn-ghost btn-sm" onclick="selfShareParticipants()">🙋 自行分擔（自己買自己付）</button>
         </div>
       </div>
 
@@ -1090,6 +1144,210 @@ function simplifyDebts(net){
     if (c.amount<=0.01) j++;
   }
   return tx;
+}
+
+/* =====================================================================
+   🆕 Overview: 彼此累計欠款總額（非最少筆數簡化版）
+   ---------------------------------------------------------------------
+   simplifyDebts() 是對「淨額」做貪心配對，目的是算出「最少轉帳筆數」，
+   過程中會把不同人之間本來沒有直接往來的債務跨人合併（例如 A欠B、B欠C，
+   可能被簡化成「A直接付給C」），對「最省事的還款方案」來說很好用，但不
+   等於「A、B、C 彼此之間實際各欠了多少」。
+
+   這裡改成忠實地重建「原始配對關係」：
+   1. 每筆支出：把每位分攤者的份額，依「各代墊人實際付款比例」拆分，
+      分別記到「這位分攤者欠這位代墊人多少」（多代墊人時，比例分配到每
+      個代墊人身上，而不是全部歸給第一個代墊人）。
+   2. 每筆訂金：收款人視為欠付款人（與 calcNetBalances 的方向一致），
+      直到之後有支出把這筆欠款「用掉」。
+   3. 最後只在「同一組兩人之間」互相抵銷（A欠B 100、B欠A 30 → 顯示 A欠B 70），
+      不會像 simplifyDebts() 那樣跨第三人合併。
+===================================================================== */
+function calcPairwiseDebts(trip){
+  const matrix = {}; // matrix[oweId][owedToId] = 金額（oweId 欠 owedToId 多少）
+  const addDebt = (oweId, owedToId, amount) => {
+    if (!oweId || !owedToId || oweId === owedToId) return;
+    if (!(amount > 0.001)) return;
+    if (!matrix[oweId]) matrix[oweId] = {};
+    matrix[oweId][owedToId] = round2((matrix[oweId][owedToId] || 0) + amount);
+  };
+
+  for (const exp of trip.expenses){
+    const payers = allocateExpenseBaseAmounts(exp.payers, exp);
+    const participants = allocateExpenseBaseAmounts(exp.participants, exp);
+    const totalPaidBase = round2(payers.reduce((s,p)=>s+p.amountInBase,0));
+    if (!(totalPaidBase > 0)) continue;
+    for (const s of participants){
+      if (!(s.amountInBase > 0)) continue;
+      for (const p of payers){
+        if (!(p.amountInBase > 0)) continue;
+        // 這位分攤者「應付給這位代墊人」的份額 = 分攤金額 × (此代墊人出的錢 / 總代墊金額)
+        const portion = round2(s.amountInBase * (p.amountInBase / totalPaidBase));
+        addDebt(s.userId, p.userId, portion);
+      }
+    }
+  }
+
+  for (const d of trip.deposits){
+    // 跟 calcNetBalances 方向一致：收款人（collector）欠付款人（payer）這筆錢，
+    // 之後若有花費由收款人代墊支出，會在上面的迴圈裡自然被抵銷掉。
+    addDebt(d.collectorId, d.payerId, d.amountInBase);
+  }
+
+  const ids = new Set();
+  for (const a of Object.keys(matrix)){
+    ids.add(a);
+    for (const b of Object.keys(matrix[a])) ids.add(b);
+  }
+  const idList = Array.from(ids);
+  const result = [];
+  for (let i = 0; i < idList.length; i++){
+    for (let j = i + 1; j < idList.length; j++){
+      const a = idList[i], b = idList[j];
+      const aOwesB = (matrix[a] && matrix[a][b]) || 0;
+      const bOwesA = (matrix[b] && matrix[b][a]) || 0;
+      const net = round2(aOwesB - bOwesA);
+      if (net > 0.01) result.push({ from: a, to: b, amount: net });
+      else if (net < -0.01) result.push({ from: b, to: a, amount: round2(-net) });
+    }
+  }
+  result.sort((x,y)=>y.amount-x.amount);
+  return result;
+}
+
+/* =====================================================================
+   🆕 Overview: 「建議轉帳」與「彼此累計欠款總額」共用的可收合＋幣別換算邏輯
+   ---------------------------------------------------------------------
+   兩個區塊行為一致：
+   - 收合時：標題列右側仍會顯示「共 N 筆・合計 X 幣別」的摘要，不用點開
+     也能一眼看到大概金額。
+   - 展開時：出現「換算成其他幣別顯示」下拉選單（預設＝行程基準幣別，
+     不需額外請求），選別的幣別時才即時向 /api/fx-rate 查匯率換算；
+     查不到即時匯率則退回行程裡手動設定的匯率，兩者都查不到就維持顯示
+     基準幣別並附上提示。
+   - 清單本身（simplifyDebts / calcPairwiseDebts 的計算結果）永遠是用
+     「基準幣別」算出來的金額，換算只發生在顯示這一層，不影響背後的
+     淨額計算邏輯。
+===================================================================== */
+let transferSectionOpen = false;
+let pairwiseSectionOpen = false;
+let transferDisplayCurrency = null;   // 目前選擇的顯示幣別；預設為 trip.baseCurrency
+let pairwiseDisplayCurrency = null;
+let lastTransferTx = [];              // 每次 renderAll() 都會依基準幣別重新計算一次
+let lastPairwiseDebts = [];
+
+function sumAmounts(list){
+  return round2(list.reduce((s, t) => s + t.amount, 0));
+}
+
+// 🔒 換了一整個行程（匯入 JSON／從 Bot 載入／清空重開）時，上一個行程選過的顯示幣別
+// 對新行程來說可能沒有意義（例如新行程根本沒設定那個幣別），這裡重置回「跟著新行程
+// 的基準幣別」，並收合兩個區塊，避免畫面殘留舊行程的展開狀態或幣別選擇造成混淆。
+function resetOverviewSectionCurrencyState(){
+  transferSectionOpen = false;
+  pairwiseSectionOpen = false;
+  transferDisplayCurrency = null;
+  pairwiseDisplayCurrency = null;
+}
+
+function toggleTransferSection(){
+  transferSectionOpen = !transferSectionOpen;
+  renderTransferSectionUI();
+}
+function togglePairwiseSection(){
+  pairwiseSectionOpen = !pairwiseSectionOpen;
+  renderPairwiseSectionUI();
+}
+function onTransferCurrencyChange(value){
+  transferDisplayCurrency = value;
+  renderTransferSectionUI();
+}
+function onPairwiseCurrencyChange(value){
+  pairwiseDisplayCurrency = value;
+  renderPairwiseSectionUI();
+}
+
+/**
+ * 把「基準幣別」的金額換算成目標幣別的匯率倍數：
+ *   converted = baseAmount * rate
+ * 優先用即時匯率（fetchLiveRate 內部本身有短時間快取），抓不到才退回
+ * 行程裡手動設定的匯率；兩者都沒有就回傳 null，由呼叫端自行決定怎麼顯示。
+ */
+async function resolveDisplayRate(targetCurrency){
+  if (targetCurrency === trip.baseCurrency) return 1;
+  const live = await fetchLiveRate(trip.baseCurrency, targetCurrency);
+  if (live && typeof live.rate === 'number' && live.rate > 0) return live.rate;
+  const fallbackRate = trip.rates[targetCurrency]; // 1 target = fallbackRate 基準幣
+  if (fallbackRate > 0) return 1 / fallbackRate;
+  return null;
+}
+
+async function renderTransferSectionUI(){
+  const listEl = document.getElementById('settleList');
+  const selectEl = document.getElementById('transferCurrencySelect');
+  const noteEl = document.getElementById('transferRateNote');
+  if (!listEl) return;
+
+  const wantedCurrency = transferDisplayCurrency || trip.baseCurrency;
+  if (selectEl) selectEl.innerHTML = currencyOptions(wantedCurrency);
+
+  let displayList = lastTransferTx;
+  let effectiveCurrency = trip.baseCurrency;
+  let rateNote = '';
+  if (wantedCurrency !== trip.baseCurrency){
+    const rate = await resolveDisplayRate(wantedCurrency);
+    if (rate){
+      displayList = lastTransferTx.map(t => ({ ...t, amount: round2(t.amount * rate) }));
+      effectiveCurrency = wantedCurrency;
+      rateNote = `依匯率 1 ${trip.baseCurrency} ≈ ${round2(rate)} ${wantedCurrency} 換算，僅供參考。`;
+    } else {
+      rateNote = `⚠️ 無法取得 ${wantedCurrency} 匯率，暫時仍以 ${trip.baseCurrency} 顯示。`;
+    }
+  }
+
+  if (noteEl) noteEl.textContent = rateNote;
+
+  listEl.innerHTML = (lastTransferTx.length ? displayList.map(t => `
+    <div class="settle-item">
+      <span>${escapeHtml(memberName(t.from))}</span>
+      <span class="settle-arrow">應付給 →</span>
+      <span>${escapeHtml(memberName(t.to))}</span>
+      <span class="settle-amt">${fmtMoney(t.amount, effectiveCurrency)} ${effectiveCurrency}</span>
+    </div>`).join('') : '<p class="empty-state" style="padding:16px;">🎉 目前沒有需要結算的款項</p>');
+}
+
+async function renderPairwiseSectionUI(){
+  const listEl = document.getElementById('pairwiseDebtList');
+  const selectEl = document.getElementById('pairwiseCurrencySelect');
+  const noteEl = document.getElementById('pairwiseRateNote');
+  if (!listEl) return;
+
+  const wantedCurrency = pairwiseDisplayCurrency || trip.baseCurrency;
+  if (selectEl) selectEl.innerHTML = currencyOptions(wantedCurrency);
+
+  let displayList = lastPairwiseDebts;
+  let effectiveCurrency = trip.baseCurrency;
+  let rateNote = '';
+  if (wantedCurrency !== trip.baseCurrency){
+    const rate = await resolveDisplayRate(wantedCurrency);
+    if (rate){
+      displayList = lastPairwiseDebts.map(t => ({ ...t, amount: round2(t.amount * rate) }));
+      effectiveCurrency = wantedCurrency;
+      rateNote = `依匯率 1 ${trip.baseCurrency} ≈ ${round2(rate)} ${wantedCurrency} 換算，僅供參考。`;
+    } else {
+      rateNote = `⚠️ 無法取得 ${wantedCurrency} 匯率，暫時仍以 ${trip.baseCurrency} 顯示。`;
+    }
+  }
+
+  if (noteEl) noteEl.textContent = rateNote;
+
+  listEl.innerHTML = (lastPairwiseDebts.length ? displayList.map(t => `
+    <div class="settle-item">
+      <span>${escapeHtml(memberName(t.from))}</span>
+      <span class="settle-arrow">欠</span>
+      <span>${escapeHtml(memberName(t.to))}</span>
+      <span class="settle-amt">${fmtMoney(t.amount, effectiveCurrency)} ${effectiveCurrency}</span>
+    </div>`).join('') : '<p class="empty-state" style="padding:16px;">🎉 目前彼此之間沒有任何累計欠款</p>');
 }
 
 /* =====================================================================
@@ -1518,17 +1776,17 @@ function removeRate(code){
 }
 
 /* ===================== expense chips ===================== */
-// 分攤成員（participant）預設全員平均勾選；只要使用者還沒手動改過某人的金額，
-// 之後不管是勾選/取消勾選成員、或改動總金額，都會即時重新平均。
+// 🔧 依需求調整：新增支出時「誰要分攤」不再預設全選所有成員，改成完全空白，
+// 由使用者自行勾選要分攤的人。取消勾選/勾選時仍會即時重新平均分攤金額
+// （只要使用者還沒手動改過某人的金額，見 renderExpenseHint() 裡的判斷）。
 let participantsDirty = false;
 function buildChips(containerId, prefix){
   const container = document.getElementById(containerId);
-  const defaultCheck = (prefix === 'participant' && !editingExpenseId);
+  const defaultCheck = false;
   container.innerHTML = trip.members.map(m=>`
     <label class="chip${defaultCheck ? ' checked' : ''}" data-id="${m.id}">
-      <input type="checkbox" ${defaultCheck ? 'checked' : ''} onchange="onChipToggle('${prefix}','${m.id}',this.checked)">
-      <span class="checkmark">✓</span>
-      ${escapeHtml(m.name)}
+      <span class="chip-checkbox"><input type="checkbox" ${defaultCheck ? 'checked' : ''} onchange="onChipToggle('${prefix}','${m.id}',this.checked)"></span>
+      <span class="chip-label">${escapeHtml(m.name)}</span>
       <input type="number" class="amt" step="0.01" placeholder="0" data-id="${m.id}" oninput="${prefix==='participant' ? 'participantsDirty=true;' : ''}renderExpenseHint()">
     </label>`).join('') || '<p class="hint">尚未新增成員，請先到「成員」分頁新增。</p>';
 }
@@ -1580,6 +1838,29 @@ function checkAllParticipants(){
       if (input) input.value = s.amount;
     });
   }
+  renderExpenseHint();
+}
+// 🆕「自行分擔」：自己買自己付錢，單純記一筆帳，不用分攤給任何其他人。
+// 直接把「分攤成員」複製成跟「代墊付款人」一模一樣的人跟金額（讀取當下
+// payerChips 已填好的值），讓這筆花費的淨額互相抵銷、不會產生任何欠款，
+// 但仍然完整記錄在支出清單裡，方便日後查帳。
+function selfShareParticipants(){
+  const payers = readChipValues('payer');
+  if (!payers.length){ toast('請先勾選代墊付款人並輸入金額，再使用「自行分擔」', 'error'); return; }
+  const wrap = document.getElementById('participantChips');
+  wrap.querySelectorAll('.chip').forEach(chip=>{
+    chip.querySelector('input[type=checkbox]').checked = false;
+    chip.classList.remove('checked');
+    chip.querySelector('.amt').value = '';
+  });
+  payers.forEach(p=>{
+    const chip = wrap.querySelector(`.chip[data-id="${p.userId}"]`);
+    if (!chip) return;
+    chip.querySelector('input[type=checkbox]').checked = true;
+    chip.classList.add('checked');
+    chip.querySelector('.amt').value = p.amount;
+  });
+  participantsDirty = true; // 已手動指定金額，之後改動金額/勾選不要被自動平均覆蓋
   renderExpenseHint();
 }
 function readChipValues(prefix){
@@ -2294,6 +2575,7 @@ async function importJson(){
 
   trip = repairTrip(candidateTrip);
   editingExpenseId = null; editingDepositId = null;
+  resetOverviewSectionCurrencyState();
   toast(`已匯入行程「${trip.name}」（成員 ${trip.members.length} 人、支出 ${trip.expenses.length} 筆）`, 'success');
   renderAll();
 }
@@ -2303,6 +2585,7 @@ async function confirmNewTrip(){
   const snapshot = trip;
   trip = defaultTrip();
   editingExpenseId = null; editingDepositId = null;
+  resetOverviewSectionCurrencyState();
   localFileHandle = null;
   updateLocalFileStatus();
   renderAll();
@@ -2376,6 +2659,7 @@ async function openLocalFile(){
     trip = repairTrip(candidate);
     localFileHandle = handle;
     editingExpenseId = null; editingDepositId = null;
+    resetOverviewSectionCurrencyState();
     updateLocalFileStatus();
     toast(`已連結並載入「${trip.name}」，之後按「儲存並覆寫檔案」會直接寫回這個檔案`, 'success');
     renderAll();
@@ -2532,18 +2816,18 @@ function renderAll(){
   stamp.textContent = allSettled ? '已結清' : '待結算';
   stamp.classList.toggle('settled', allSettled);
 
-  // --- 2. 建議轉帳 ---
-  const tx = simplifyDebts(net);
-  document.getElementById('settleList').innerHTML = tx.length ? tx.map(t=>`
-    <div class="settle-item">
-      <span>${escapeHtml(memberName(t.from))}</span>
-      <span class="settle-arrow">應付給 →</span>
-      <span>${escapeHtml(memberName(t.to))}</span>
-      <span class="settle-amt">${fmtMoney(t.amount, trip.baseCurrency)}</span>
-    </div>`).join('') : '<p class="empty-state" style="padding:16px;">🎉 目前沒有需要結算的款項</p>';
+  // --- 2. 建議轉帳（可收合＋可換算幣別；清單本身永遠先用基準幣別算好） ---
+  lastTransferTx = simplifyDebts(net);
+  if (!transferDisplayCurrency) transferDisplayCurrency = trip.baseCurrency;
+  renderTransferSectionUI();
 
   // --- 3. 每位成員多幣別逐筆明細 ---
   renderMemberDetails(net);
+
+  // --- 4. 彼此累計欠款總額（非最少筆數簡化版；同樣可收合＋可換算幣別） ---
+  lastPairwiseDebts = calcPairwiseDebts(trip);
+  if (!pairwiseDisplayCurrency) pairwiseDisplayCurrency = trip.baseCurrency;
+  renderPairwiseSectionUI();
 
   // json preview
   document.getElementById('jsonPreview').value = JSON.stringify(trip, null, 2);
@@ -2630,6 +2914,7 @@ async function loadTripFromApi(){
     trip = repairTrip(data);
     lastSyncedTripJSON = JSON.stringify(trip);
     editingExpenseId = null; editingDepositId = null;
+    resetOverviewSectionCurrencyState();
     toast(`已載入「${trip.name}」（成員 ${trip.members.length} 人、支出 ${trip.expenses.length} 筆）`, 'success');
     updateBotStatusPill(true, trip.name);
     syncAdvDetailsState();
