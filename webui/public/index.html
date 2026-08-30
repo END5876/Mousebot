@@ -7,6 +7,21 @@
 <title>拆帳本｜Mousebot Splitbill</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@500;700;900&family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" referrerpolicy="no-referrer-when-downgrade">
+<script>
+// 🆕 在套用樣式表之前、頁面第一次繪製前就先決定要用亮色還是暗色，避免使用者已經
+// 選過暗色模式時，畫面先閃一下亮色主題才切換過去（FOUC）。這段刻意寫成同步、
+// 極簡的行內腳本（不依賴外部檔案），確保瀏覽器一定會在套用樣式前執行完畢。
+(function(){
+  try{
+    var saved = localStorage.getItem('splitbill-theme');
+    var theme = saved || ((window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme', theme);
+  }catch(e){
+    // localStorage 或 matchMedia 不可用時（例如某些隱私模式），安靜地退回預設亮色，
+    // 不影響頁面繼續載入。
+  }
+})();
+</script>
 <style>
   :root{
     --ink:#1E2A33;
@@ -26,12 +41,72 @@
     --safe-b: env(safe-area-inset-bottom, 0px);
     --bottomnav-h: 62px;
     --focus-ring: 0 0 0 3px rgba(154,116,52,0.35);
+
+    /* 🆕 暗色模式支援：以下這組變數原本散落在各處寫死成 #fff／固定淺色 hex，
+       現在統一收斂成語意化變數，讓 :root[data-theme="dark"] 只要覆寫這裡
+       就能讓整個頁面（表單欄位、卡片、徽章、彈窗遮罩...）跟著換膚，不用
+       在每個元件各自判斷目前是什麼主題。 */
+    --surface:#fff;               /* 輸入框／卡片內的「白色」表面（chip、modal-list-item、member-tag...） */
+    --surface-hover:#F7F6F0;      /* 可互動列表項目的 hover 背景（member-detail-head） */
+    --chip-bg:#EDEAD9;            /* 徽章/標籤類背景（receipt-type-badge、code.inline、幣別標籤...） */
+    --chip-bg-hover:#E0DCC5;
+    --fee-bg:#FBF7EE;             /* 帳單辨識「雜費」項目列背景 */
+    --fee-badge-bg:#F0D9A0;
+    --fee-badge-bg-hover:#E8CC85;
+    --fee-badge-text:#5C4415;
+    --zero-bg:#EEE;               /* 淨額為 0（已結清）時的中性徽章背景 */
+    --brass-tint:#FBF4E4;         /* 勾選中／hover 時的暖色高亮底（chip、claim-chip、modal-list-item） */
+    --scrim:rgba(20,26,30,0.55);  /* Modal 遮罩層 */
+    --paper-stripe:rgba(156,122,52,0.035); /* 背景那道很淡的直紋線 */
+
+    /* 這兩個是「固定深色」用途：不管淺色/暗色模式，都要維持深底＋淺字的按鈕
+       （主要按鈕、作用中分頁、toast），所以刻意不放進 dark 覆寫區塊，兩個
+       主題共用同一組值，避免 --ink 為了適應暗色模式整個翻轉成淺色後，
+       這些「本來就設計成深色底」的元件反而失去對比度。 */
+    --emphasis:#1E2A33;
+    --debt-solid:#B94A3C;         /* 目前唯一用途：確認刪除 Modal 的紅色按鈕背景（白字疊在上面） */
+  }
+
+  /* 🆕 暗色模式調色盤。切換方式見頁尾主程式的 setTheme()／toggleTheme() 函式，
+     並在頁面最前面有一段行內小型腳本，提早依 localStorage／系統偏好設定
+     好 data-theme，避免第一次畫面出現「先亮後暗」的閃爍。 */
+  :root[data-theme="dark"]{
+    --ink:#ECEDE8;
+    --ink-soft:#9BA6A1;
+    --paper:#12181C;
+    --card:#1B2226;
+    --card-line:#323C41;
+    --brass:#D9B36C;
+    --brass-bg:#B0863C;
+    --brass-soft:#E8C77E;
+    --credit:#6FCB94;
+    --credit-bg:#173428;
+    --debt:#E38B8B;
+    --debt-bg:#3A2020;
+    --shadow: 0 1px 0 rgba(0,0,0,0.4), 0 10px 26px rgba(0,0,0,0.5);
+    --focus-ring: 0 0 0 3px rgba(217,179,108,0.4);
+
+    --surface:#20282D;
+    --surface-hover:#273136;
+    --chip-bg:#2A332F;
+    --chip-bg-hover:#333E39;
+    --fee-bg:#2B2417;
+    --fee-badge-bg:#4A3A1B;
+    --fee-badge-bg-hover:#5C4823;
+    --fee-badge-text:#E8C77E;
+    --zero-bg:#2A2F33;
+    --brass-tint:#3A2E15;
+    --scrim:rgba(0,0,0,0.65);
+    --paper-stripe:rgba(217,179,108,0.05);
+    /* --header-bg／--emphasis／--debt-solid 刻意不在這裡覆寫：
+       頁首跟主要按鈕本來就設計成固定深色，暗色模式下維持原樣反而更一致，
+       不需要額外規則。 */
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{margin:0;padding:0;}
   body{
     background:
-      repeating-linear-gradient(0deg, rgba(156,122,52,0.035) 0px, rgba(156,122,52,0.035) 1px, transparent 1px, transparent 34px),
+      repeating-linear-gradient(0deg, var(--paper-stripe) 0px, var(--paper-stripe) 1px, transparent 1px, transparent 34px),
       var(--paper);
     color:var(--ink);
     font-family:'Noto Sans TC', system-ui, sans-serif;
@@ -75,6 +150,16 @@
     font-family:'IBM Plex Mono',monospace; max-width:92px; flex-shrink:0;
   }
   .header-currency option{color:#1E2A33;}
+  /* 🆕 深色/淺色模式切換鈕：跟旁邊的幣別選單用一樣的視覺語言（半透明白底、淡邊框），
+     因為頁首本身固定深色，不隨主題切換，這裡沿用同一套 header 專用配色即可，
+     不需要另外引用 --surface 之類會隨主題翻轉的變數。 */
+  .theme-toggle-btn{
+    background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.22);
+    color:#F3EEDD; width:34px; height:34px; border-radius:8px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:16px; line-height:1; cursor:pointer; flex-shrink:0; padding:0;
+  }
+  .theme-toggle-btn:hover{background:rgba(255,255,255,0.16);}
   .status-pills{display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;}
   .pill{
     font-size:11px; padding:4px 10px; border-radius:20px;
@@ -136,7 +221,7 @@
     background:var(--card); border:1px solid var(--card-line); border-radius:20px;
     padding:8px 14px; cursor:pointer; color:var(--ink-soft);
   }
-  .subtab-btn.active{background:var(--ink); color:#F3EEDD; border-color:var(--ink);}
+  .subtab-btn.active{background:var(--emphasis); color:#F3EEDD; border-color:var(--emphasis);}
 
   h2.section-title{
     font-family:'Noto Serif TC',serif; font-weight:700; font-size:17px;
@@ -155,7 +240,7 @@
   .row{display:flex; gap:12px; flex-wrap:wrap;}
   .row > .field{flex:1; min-width:130px;}
   input[type=text], input[type=number], input[type=password], select, textarea{
-    width:100%; border:1px solid var(--card-line); background:#fff;
+    width:100%; border:1px solid var(--card-line); background:var(--surface);
     padding:11px 12px; border-radius:8px; font-size:15px;
     font-family:'Noto Sans TC',sans-serif; color:var(--ink);
   }
@@ -184,7 +269,7 @@
   }
   .btn:active{transform:scale(.97);}
   .btn:disabled{opacity:.55; cursor:not-allowed; transform:none;}
-  .btn-primary{background:var(--ink); color:#F3EEDD;}
+  .btn-primary{background:var(--emphasis); color:#F3EEDD;}
   .btn-primary:hover{background:#0F171C;}
   .btn-brass{background:var(--brass-bg); color:#fff;}
   .btn-brass:hover{background:var(--brass);}
@@ -201,7 +286,7 @@
     border:2px solid rgba(255,255,255,0.4); border-top-color:#fff;
     animation:spin .7s linear infinite; flex-shrink:0;
   }
-  .btn-ghost .spinner, .btn-danger .spinner{border-color:rgba(30,42,51,0.25); border-top-color:var(--ink);}
+  .btn-ghost .spinner, .btn-danger .spinner{border-color:var(--card-line); border-top-color:var(--ink);}
   @keyframes spin{to{transform:rotate(360deg);}}
 
   .chip-select{display:flex; flex-wrap:wrap; gap:8px;}
@@ -209,7 +294,7 @@
     display:flex; align-items:center; gap:8px;
     border:1.5px solid var(--card-line); border-radius:20px;
     padding:9px 14px 9px 12px; font-size:13.5px; cursor:pointer;
-    background:#fff; user-select:none; min-height:40px;
+    background:var(--surface); user-select:none; min-height:40px;
   }
   /* 🔧 Bug fix：原生 checkbox 本身會畫出自己的勾勾（accent-color 讓瀏覽器原生繪製），
      過去曾疊加一個 .checkmark 自訂勾勾造成「同時出現兩個勾勾」；.checkmark 已整個
@@ -231,7 +316,7 @@
     display:block; margin:0; accent-color:var(--brass-bg); width:17px; height:17px;
   }
   .chip-label{ line-height:17px; }
-  .chip.checked{border-color:var(--brass-bg); background:#FBF4E4;}
+  .chip.checked{border-color:var(--brass-bg); background:var(--brass-tint);}
   .chip .amt{
     width:76px; border:none; border-bottom:1px solid var(--card-line);
     background:transparent; font-family:'IBM Plex Mono',monospace; font-size:13.5px;
@@ -243,7 +328,7 @@
   .receipt-upload{
     display: block; /* 加入這行修正破圖問題 */
     border:2px dashed var(--card-line); border-radius:12px; padding:22px 16px;
-    text-align:center; cursor:pointer; background:#fff;
+    text-align:center; cursor:pointer; background:var(--surface);
   }
   .receipt-upload:hover{border-color:var(--brass-soft);}
   .receipt-upload .ic{font-size:28px; margin-bottom:6px;}
@@ -255,9 +340,9 @@
   }
 
   .receipt-item-row{
-    border:1.5px solid var(--card-line); border-radius:10px; padding:12px; margin-bottom:10px; background:#fff;
+    border:1.5px solid var(--card-line); border-radius:10px; padding:12px; margin-bottom:10px; background:var(--surface);
   }
-  .receipt-item-row.fee{background:#FBF7EE; border-color:var(--brass-soft);}
+  .receipt-item-row.fee{background:var(--fee-bg); border-color:var(--brass-soft);}
   .receipt-item-row.unclaimed{border-color:var(--debt);}
   .receipt-item-head{display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap;}
   .receipt-item-head input[type=text]{flex:1; min-width:100px; font-weight:700; font-size:14px; border:none; background:transparent; padding:2px;}
@@ -265,16 +350,16 @@
   .receipt-item-head .amt-input{width:90px; flex-shrink:0;}
   .receipt-type-badge{
     font-family:'IBM Plex Mono',monospace; font-size:10.5px; padding:3px 7px; border-radius:5px;
-    background:#EDEAD9; color:var(--ink-soft); flex-shrink:0;
+    background:var(--chip-bg); color:var(--ink-soft); flex-shrink:0;
     border:none; cursor:pointer;
   }
-  .receipt-type-badge:hover{background:#E0DCC5;}
-  .receipt-type-badge.fee{background:#F0D9A0; color:#5C4415;}
-  .receipt-type-badge.fee:hover{background:#E8CC85;}
+  .receipt-type-badge:hover{background:var(--chip-bg-hover);}
+  .receipt-type-badge.fee{background:var(--fee-badge-bg); color:var(--fee-badge-text);}
+  .receipt-type-badge.fee:hover{background:var(--fee-badge-bg-hover);}
   .receipt-claim-chips{display:flex; flex-wrap:wrap; gap:6px;}
   .claim-chip{
     font-size:12.5px; padding:6px 11px; border-radius:16px; cursor:pointer;
-    border:1.5px solid var(--card-line); background:#fff; color:var(--ink-soft);
+    border:1.5px solid var(--card-line); background:var(--surface); color:var(--ink-soft);
   }
   .claim-chip.on{border-color:var(--brass-bg); background:#FBF4E4; color:var(--ink); font-weight:700;}
   .claim-chip.shared{border-color:var(--credit); }
@@ -296,7 +381,7 @@
   .toast{
     pointer-events:auto;
     max-width:480px; width:100%;
-    background:var(--ink); color:#F3EEDD;
+    background:var(--emphasis); color:#F3EEDD;
     border-radius:10px; padding:12px 14px;
     display:flex; align-items:center; gap:10px;
     font-size:13.5px; line-height:1.5;
@@ -322,7 +407,7 @@
 
   /* ---------- Modal system ---------- */
   .modal-overlay{
-    position:fixed; inset:0; z-index:300; background:rgba(20,26,30,0.55);
+    position:fixed; inset:0; z-index:300; background:var(--scrim);
     display:flex; align-items:flex-end; justify-content:center;
     padding:0; animation:overlay-in .15s ease;
   }
@@ -340,7 +425,7 @@
   .modal-actions{display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;}
   .modal-list{display:flex; flex-direction:column; gap:8px; margin-bottom:6px;}
   .modal-list-item{
-    text-align:left; width:100%; background:#fff; border:1.5px solid var(--card-line);
+    text-align:left; width:100%; background:var(--surface); border:1.5px solid var(--card-line);
     border-radius:10px; padding:12px 14px; cursor:pointer; font-family:inherit; font-size:14px; color:var(--ink);
   }
   .modal-list-item:hover{border-color:var(--brass-bg); background:#FBF4E4;}
@@ -378,7 +463,7 @@
   .member-list{display:flex; flex-wrap:wrap; gap:10px;}
   .member-tag{
     display:flex; align-items:center; gap:8px;
-    background:#fff; border:1px solid var(--card-line); border-radius:10px;
+    background:var(--surface); border:1px solid var(--card-line); border-radius:10px;
     padding:8px 10px 8px 12px;
   }
   .member-tag .dot{width:9px; height:9px; border-radius:50%; background:var(--brass-soft); flex-shrink:0;}
@@ -406,7 +491,7 @@
   .balance-amt{font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:15.5px; padding:4px 10px; border-radius:6px; white-space:nowrap;}
   .balance-amt.pos{background:var(--credit-bg); color:var(--credit);}
   .balance-amt.neg{background:var(--debt-bg); color:var(--debt);}
-  .balance-amt.zero{background:#EEE; color:var(--ink-soft);}
+  .balance-amt.zero{background:var(--zero-bg); color:var(--ink-soft);}
 
   .stamp{
     font-family:'IBM Plex Mono',monospace; font-size:11px; font-weight:600;
@@ -452,7 +537,7 @@
   .rate-table input{width:100px;}
 
   .hint{font-size:12px; color:var(--ink-soft); margin-top:6px; line-height:1.6;}
-  code.inline{background:#EDEAD9; border-radius:4px; padding:1px 5px; font-family:'IBM Plex Mono',monospace; font-size:12px; word-break:break-all;}
+  code.inline{background:var(--chip-bg); border-radius:4px; padding:1px 5px; font-family:'IBM Plex Mono',monospace; font-size:12px; word-break:break-all;}
 
   details.adv{border:1px dashed var(--card-line); border-radius:10px; padding:2px 14px; margin-top:4px;}
   details.adv > summary{
@@ -528,7 +613,7 @@
     padding:14px 16px 16px;
   }
   .member-detail-card{
-    background:#fff; border:1px solid var(--card-line); border-radius:10px;
+    background:var(--surface); border:1px solid var(--card-line); border-radius:10px;
     overflow:hidden;
   }
   .member-detail-head{
@@ -539,9 +624,9 @@
   }
   .member-detail-card.open .member-detail-head{
     border-bottom-color:var(--card-line);
-    background:#F7F6F0;
+    background:var(--surface-hover);
   }
-  .member-detail-head:hover{ background:#F7F6F0; }
+  .member-detail-head:hover{ background:var(--surface-hover); }
   .member-detail-name{
     font-weight:700; font-size:14px; display:flex; align-items:center; gap:8px;
   }
@@ -554,7 +639,7 @@
   }
   .member-detail-net.pos{ background:var(--credit-bg); color:var(--credit); }
   .member-detail-net.neg{ background:var(--debt-bg); color:var(--debt); }
-  .member-detail-net.zero{ background:#EDEAD9; color:var(--ink-soft); }
+  .member-detail-net.zero{ background:var(--chip-bg); color:var(--ink-soft); }
   .member-detail-chevron{
     font-size:11px; color:var(--ink-soft); transition:transform .2s; flex-shrink:0;
   }
@@ -585,10 +670,10 @@
     display:inline-block; font-size:10px; font-family:'IBM Plex Mono',monospace;
     padding:1px 6px; border-radius:4px; margin-right:4px; vertical-align:middle;
   }
-  .detail-tag.paid{ background:#E4EFE7; color:var(--credit); }
-  .detail-tag.share{ background:#F5E6E2; color:var(--debt); }
-  .detail-tag.transfer-in{ background:#E4EFE7; color:var(--credit); }
-  .detail-tag.transfer-out{ background:#F5E6E2; color:var(--debt); }
+  .detail-tag.paid{ background:var(--credit-bg); color:var(--credit); }
+  .detail-tag.share{ background:var(--debt-bg); color:var(--debt); }
+  .detail-tag.transfer-in{ background:var(--credit-bg); color:var(--credit); }
+  .detail-tag.transfer-out{ background:var(--debt-bg); color:var(--debt); }
   .detail-summary-row{
     display:flex; justify-content:space-between; align-items:center;
     padding:9px 0 4px; font-size:12.5px;
@@ -601,7 +686,7 @@
   .detail-currency-group{ margin-top:8px; }
   .detail-currency-badge{
     display:inline-block; font-family:'IBM Plex Mono',monospace; font-size:10px;
-    background:#EDEAD9; color:var(--ink-soft); padding:2px 7px; border-radius:4px;
+    background:var(--chip-bg); color:var(--ink-soft); padding:2px 7px; border-radius:4px;
     margin-bottom:6px;
   }
 
@@ -644,6 +729,9 @@
       <span class="brand">拆帳本</span>
       <input type="text" id="tripName" placeholder="行程名稱，例如：沖繩三天兩夜">
       <select id="baseCurrency" class="header-currency"></select>
+      <button class="theme-toggle-btn" id="themeToggleBtn" onclick="toggleTheme()" type="button" aria-label="切換深色/淺色模式" title="切換深色/淺色模式">
+        <span id="themeToggleIcon">🌙</span>
+      </button>
     </div>
     <div class="status-pills">
       <button class="pill" id="botStatusPill" onclick="showMainTab('settings'); showSettingsSub('connect');" type="button">
@@ -1021,6 +1109,51 @@ function fmtMoney(amount, currency){
   return amount.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* =====================================================================
+   🆕 深色/淺色模式切換
+   ---------------------------------------------------------------------
+   實際的配色定義在樣式表裡的 :root 與 :root[data-theme="dark"]（見檔案
+   最前面），這裡只負責：切換根元素上的 data-theme 屬性、記住使用者的
+   選擇、同步頁首那顆切換鈕的圖示與文字。頁面最前面另外有一段行內小型
+   腳本，會在畫面第一次繪製前就先套用好 localStorage／系統偏好，避免
+   閃一下錯的主題（FOUC），這裡的 syncThemeToggleUI() 只是把圖示狀態接上。
+===================================================================== */
+function syncThemeToggleUI(theme){
+  const icon = document.getElementById('themeToggleIcon');
+  const btn = document.getElementById('themeToggleBtn');
+  const label = theme === 'dark' ? '切換為淺色模式' : '切換為深色模式';
+  if (icon) icon.textContent = theme === 'dark' ? '☀️' : '🌙';
+  if (btn){ btn.title = label; btn.setAttribute('aria-label', label); }
+}
+function setTheme(theme, persist){
+  document.documentElement.setAttribute('data-theme', theme);
+  syncThemeToggleUI(theme);
+  if (persist){
+    try{ localStorage.setItem('splitbill-theme', theme); }catch(e){}
+  }
+}
+function toggleTheme(){
+  const current = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+  setTheme(current === 'dark' ? 'light' : 'dark', true);
+}
+// 初始化圖示狀態：data-theme 已經在頁面最前面的行內小型腳本提早設定好了，這裡只需要
+// 同步一次圖示與 aria-label 文字，不重新寫入 localStorage——避免把「使用者根本還
+// 沒手動選過、目前只是跟隨系統偏好」這個狀態，錯誤地變成「已經手動選過」。
+syncThemeToggleUI(document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light');
+
+// 使用者還沒手動選過主題時（localStorage 裡沒存值），跟著作業系統的深色/淺色偏好
+// 即時連動；一旦使用者按過切換鈕，就以使用者的手動選擇為準，不再跟系統變動。
+if (window.matchMedia){
+  const darkModeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+  const handleSystemThemeChange = (e) => {
+    let saved = null;
+    try{ saved = localStorage.getItem('splitbill-theme'); }catch(err){}
+    if (!saved) setTheme(e.matches ? 'dark' : 'light', false);
+  };
+  if (darkModeQuery.addEventListener) darkModeQuery.addEventListener('change', handleSystemThemeChange);
+  else if (darkModeQuery.addListener) darkModeQuery.addListener(handleSystemThemeChange); // Safari 舊版相容
+}
 
 function defaultTrip(){
   return {
@@ -1597,7 +1730,7 @@ function confirmModal(message, opts){
           <div class="modal-body">${escapeHtml(message)}</div>
           <div class="modal-actions">
             <button class="btn btn-ghost" id="modalCancelBtn">${escapeHtml(opts.cancelText || '取消')}</button>
-            <button class="btn ${opts.danger ? 'btn-danger' : 'btn-primary'}" id="modalConfirmBtn" style="${opts.danger ? 'background:var(--debt);color:#fff;border:none;' : ''}">${escapeHtml(opts.confirmText || '確定')}</button>
+            <button class="btn ${opts.danger ? 'btn-danger' : 'btn-primary'}" id="modalConfirmBtn" style="${opts.danger ? 'background:var(--debt-solid);color:#fff;border:none;' : ''}">${escapeHtml(opts.confirmText || '確定')}</button>
           </div>
         </div>
       </div>`;
@@ -1966,7 +2099,7 @@ async function handleReceiptUpload(evt){
 
   const uploadZone = document.getElementById('receiptUploadZone');
   const original = uploadZone.innerHTML;
-  uploadZone.innerHTML = `<div class="receipt-upload" style="cursor:default;"><span class="spinner" style="border-color:rgba(30,42,51,0.25); border-top-color:var(--ink); margin:0 auto 8px; display:block;"></span>辨識中，請稍候…</div>`;
+  uploadZone.innerHTML = `<div class="receipt-upload" style="cursor:default;"><span class="spinner" style="border-color:var(--card-line); border-top-color:var(--ink); margin:0 auto 8px; display:block;"></span>辨識中，請稍候…</div>`;
 
   try{
     const dataUrl = await fileToResizedDataUrl(file);
