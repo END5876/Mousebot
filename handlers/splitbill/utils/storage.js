@@ -17,6 +17,12 @@ const DEFAULT_TRIP = () => ({
   members: [],        // [{ id, name }]
   expenses: [],  
   deposits: [],      // [{ id, collectorId, payerId, amount, currency, amountInBase, note, createdAt }]
+  // 🆕 [分享連結] 這個行程目前開放的分享連結清單。每筆連結都是一組獨立的隨機
+  // token，只認得「這一個行程」，不像 SPLITBILL_API_KEY 那樣擁有全部伺服器/
+  // 行程的讀寫權限——外洩一筆分享連結，最多只會曝險這一個行程，且權限受
+  // permission 限制、可設過期時間、可隨時單獨撤銷（直接從這個陣列移除）。
+  // 詳見 webui/server.js 的 /api/shared-trip/:token 系列端點。
+  shareLinks: [],    // [{ token, label, permission:'read'|'write', expiresAt:number|null, createdAt }]
   archived: false,
   createdAt: Date.now(),
 });
@@ -35,6 +41,17 @@ const DEFAULT_GUILD = () => ({
 
 function genId(prefix = 'id') {
   return `${prefix}_${crypto.randomBytes(4).toString('hex')}`;
+}
+
+/**
+ * 🆕 [分享連結] 產生分享連結用的 token。
+ * 刻意跟 genId() 分開：genId() 只需要「不重複」，用來當內部物件 ID；
+ * 這裡的 token 本身就是一組會被拿去當 API 憑證使用的「密碼」，安全性
+ * 要求高得多，因此用 24 bytes（192 bits）亂數、遠超過 genId() 的 4 bytes，
+ * 避免被暴力猜測或字典攻擊。
+ */
+function genShareToken() {
+  return crypto.randomBytes(24).toString('hex');
 }
 
 function ensureDataFile() {
@@ -66,6 +83,10 @@ function repairTrip(rawTrip) {
 
   trip.deposits = Array.isArray(trip.deposits) ? trip.deposits : [];
   trip.deposits = trip.deposits.map((d) => repairDeposit(d));
+
+  // 🆕 [分享連結]
+  trip.shareLinks = Array.isArray(trip.shareLinks) ? trip.shareLinks : [];
+  trip.shareLinks = trip.shareLinks.map((l) => repairShareLink(l)).filter(Boolean);
 
   if (typeof trip.archived !== 'boolean') trip.archived = false;
   if (typeof trip.createdAt !== 'number') trip.createdAt = Date.now();
@@ -105,6 +126,26 @@ function repairDeposit(rawDep) {
     amountInBase: typeof d.amountInBase === 'number' ? d.amountInBase : (typeof d.amount === 'number' ? d.amount : 0),
     note: d.note || '',
     createdAt: typeof d.createdAt === 'number' ? d.createdAt : Date.now(),
+  };
+}
+
+/**
+ * 🆕 [分享連結] 資料防呆：修復單筆分享連結紀錄。
+ * token 是這筆連結的核心憑證，若缺漏或損毀（理論上不該發生，但防呆原則
+ * 一律不憑空補一組新的隨機 token 給壞掉的紀錄——那等於憑空「復活」一筆
+ * 使用者從未真正建立、也從未真正分享出去過的有效連結，回傳 null 讓呼叫端
+ * 直接丟棄這筆壞資料，比較安全。
+ * @returns {object|null}
+ */
+function repairShareLink(rawLink) {
+  const l = rawLink || {};
+  if (!l.token || typeof l.token !== 'string') return null;
+  return {
+    token: l.token,
+    label: typeof l.label === 'string' ? l.label.slice(0, 50) : '',
+    permission: l.permission === 'write' ? 'write' : 'read',
+    expiresAt: typeof l.expiresAt === 'number' ? l.expiresAt : null,
+    createdAt: typeof l.createdAt === 'number' ? l.createdAt : Date.now(),
   };
 }
 
@@ -186,8 +227,40 @@ function persist() {
   saveAll();
 }
 
+/**
+ * 🆕 [分享連結] 判斷一筆分享連結是否已過期。expiresAt 為 null 代表永久有效。
+ */
+function isShareLinkExpired(link) {
+  if (!link) return true;
+  if (link.expiresAt === null || link.expiresAt === undefined) return false;
+  return Date.now() > link.expiresAt;
+}
+
+/**
+ * 🆕 [分享連結] 依 token 在「所有伺服器、所有行程」裡找出對應的行程與連結。
+ * 分享連結的網址只帶 token、不帶 guildId/tripId（見 webui/server.js 的
+ * /api/shared-trip/:token），所以伺服器收到請求時得靠這個函式反查是哪個
+ * guild 的哪個行程；也順便讓分享連結的持有者永遠無法從網址本身推測出
+ * 內部的 guildId/tripId，多一層資訊不外洩的保護。
+ * @returns {{ guild: object, trip: object, shareLink: object } | null}
+ */
+function findTripByShareToken(token) {
+  if (!token) return null;
+  const all = loadAll();
+  for (const guildId of Object.keys(all)) {
+    const guild = all[guildId];
+    for (const tripId of Object.keys(guild.trips)) {
+      const trip = guild.trips[tripId];
+      const shareLink = (trip.shareLinks || []).find((l) => l.token === token);
+      if (shareLink) return { guild, trip, shareLink };
+    }
+  }
+  return null;
+}
+
 module.exports = {
   genId,
+  genShareToken,
   getGuild,
   persist,
   loadAll,
@@ -195,4 +268,7 @@ module.exports = {
   repairTrip,
   repairExpense,
   repairDeposit,
+  repairShareLink,
+  isShareLinkExpired,
+  findTripByShareToken,
 };
