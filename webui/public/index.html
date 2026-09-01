@@ -185,6 +185,33 @@
   .share-error-screen .ic{font-size:44px; margin-bottom:14px;}
   .share-error-screen h1{font-family:'Noto Serif TC',serif; font-size:19px; margin:0 0 10px;}
   .share-error-screen p{color:var(--ink-soft); font-size:14px; line-height:1.7; margin:0;}
+
+  /* 無權限阻擋頁 */
+  #noAccessScreen{
+    display:none; position:fixed; inset:0; z-index:9999;
+    background:var(--bg); align-items:center; justify-content:center;
+  }
+  #noAccessScreen.visible{ display:flex; }
+  .no-access-card{
+    text-align:center; padding:48px 36px 44px; max-width:360px; width:90%;
+    background:var(--card); border:1px solid var(--card-line);
+    border-radius:4px;
+  }
+  .no-access-lock{
+    width:48px; height:48px; margin:0 auto 24px;
+    color:var(--brass);
+  }
+  .no-access-card h1{
+    font-family:'Noto Serif TC',serif; font-size:20px; font-weight:700;
+    color:var(--ink); margin:0 0 12px; letter-spacing:.01em;
+  }
+  .no-access-card p{
+    color:var(--ink-soft); font-size:14px; line-height:1.75; margin:0;
+  }
+  .no-access-divider{
+    width:32px; height:2px; background:var(--brass-soft);
+    margin:20px auto;
+  }
   .pill{
     font-size:11px; padding:4px 10px; border-radius:20px;
     display:inline-flex; align-items:center; gap:5px;
@@ -748,6 +775,7 @@
 <div id="modalRoot"></div>
 
 <div id="shareErrorScreen" class="share-error-screen" style="display:none;"></div>
+<div id="noAccessScreen" role="alert" aria-live="assertive"></div>
 <header class="app-header" id="appHeader">
   <div class="app-header-inner">
     <div class="header-row1">
@@ -3544,6 +3572,30 @@ function showShareError(message){
   el.style.display = 'block';
 }
 
+function showNoAccessScreen(){
+  const el = document.getElementById('noAccessScreen');
+  el.innerHTML = `
+    <div class="no-access-card">
+      <svg class="no-access-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+      </svg>
+      <h1>無權限存取</h1>
+      <div class="no-access-divider"></div>
+      <p>請向行程主人索取分享連結，<br>才能檢視此頁面。</p>
+    </div>
+  `;
+  el.classList.add('visible');
+  // 隱藏主介面所有元素
+  document.getElementById('appHeader').style.display = 'none';
+  const topNav = document.getElementById('topNav');
+  if (topNav) topNav.style.display = 'none';
+  const bottomNav = document.getElementById('bottomNav');
+  if (bottomNav) bottomNav.style.display = 'none';
+  const mainEl = document.querySelector('main.wrap');
+  if (mainEl) mainEl.style.display = 'none';
+}
+
 async function initShareMode(token){
   try{
     const res = await fetch(`${apiBaseUrl()}/api/shared-trip/${encodeURIComponent(token)}`);
@@ -3633,10 +3685,18 @@ if (__shareToken){
     // 明確點的那個連結，理應照著它的設定連線。）
     const restored = await restoreOwnerConnectionState();
     if (restored) return;
-    // 若此頁是由 webui/server.js 同源提供、且伺服器沒設金鑰，嘗試安靜地自動連線一次（不顯示錯誤）
-    fetch('/api/guilds').then(res=>{
-      if (res.ok) refreshGuildList();
-    }).catch(()=>{});
+    // 若此頁是由 webui/server.js 同源提供、且伺服器沒設金鑰，嘗試安靜地自動連線一次；
+    // 若連線失敗或伺服器要求驗證，顯示無權限阻擋頁。
+    try {
+      const res = await fetch('/api/guilds');
+      if (res.ok) {
+        refreshGuildList();
+      } else {
+        showNoAccessScreen();
+      }
+    } catch(e) {
+      showNoAccessScreen();
+    }
   })();
 }
 </script>
