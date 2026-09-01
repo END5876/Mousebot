@@ -161,6 +161,30 @@
   }
   .theme-toggle-btn:hover{background:rgba(255,255,255,0.16);}
   .status-pills{display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;}
+
+  /* 🆕 [分享連結] 分享連結模式下的畫面收斂：
+     - data-owner-only：只有擁有者（用真正的 SPLITBILL_API_KEY 連線）才看得到的東西，
+       例如「連線 Bot／檔案」等技術性設定、帳單掃描（伺服器端本來就只准擁有者用）。
+       分享連結的朋友完全看不到、也點不到這些，畫面單純很多，不會誤觸也不會困惑。
+     - data-write-only：分享連結為「唯讀」時，這些會被隱藏——新增/編輯/刪除/儲存
+       等寫入類按鈕與表單，唯讀訪客只能看不能改。
+     這裡只負責畫面收斂（UX），真正的存取控制永遠由伺服器端把關（見 webui/server.js
+     的 authorizeTripAccess()），就算有人繞過前端硬送 API 請求，伺服器一樣會擋下來。 */
+  body.share-mode [data-owner-only]{display:none !important;}
+  body.share-readonly [data-write-only]{display:none !important;}
+
+
+
+
+  /* 分享連結失效時的全頁錯誤畫面：刻意跟一般「尚未連線」畫面分開設計，
+     用字更口語、不提任何技術名詞（金鑰／伺服器／行程 ID...），
+     因為看到這個畫面的通常是不熟悉技術的朋友。 */
+  .share-error-screen{
+    max-width:420px; margin:18vh auto 0; text-align:center; padding:0 20px;
+  }
+  .share-error-screen .ic{font-size:44px; margin-bottom:14px;}
+  .share-error-screen h1{font-family:'Noto Serif TC',serif; font-size:19px; margin:0 0 10px;}
+  .share-error-screen p{color:var(--ink-soft); font-size:14px; line-height:1.7; margin:0;}
   .pill{
     font-size:11px; padding:4px 10px; border-radius:20px;
     display:inline-flex; align-items:center; gap:5px;
@@ -723,7 +747,8 @@
 <div id="toastStack" aria-live="polite"></div>
 <div id="modalRoot"></div>
 
-<header class="app-header">
+<div id="shareErrorScreen" class="share-error-screen" style="display:none;"></div>
+<header class="app-header" id="appHeader">
   <div class="app-header-inner">
     <div class="header-row1">
       <span class="brand">拆帳本</span>
@@ -733,7 +758,7 @@
         <span id="themeToggleIcon">🌙</span>
       </button>
     </div>
-    <div class="status-pills">
+    <div class="status-pills" data-owner-only>
       <button class="pill" id="botStatusPill" onclick="showMainTab('settings'); showSettingsSub('connect');" type="button">
         <span class="dot"></span><span id="botStatusText">未連線 Bot</span>
       </button>
@@ -748,7 +773,7 @@
   <button class="nav-btn active" data-tab="overview" onclick="showMainTab('overview')"><span class="ic">📊</span>總覽結算</button>
   <button class="nav-btn" data-tab="expenses" onclick="showMainTab('expenses')"><span class="ic">🧾</span>支出記帳</button>
   <button class="nav-btn" data-tab="deposits" onclick="showMainTab('deposits')"><span class="ic">💸</span>轉帳／預收</button>
-  <button class="nav-btn" data-tab="settings" onclick="showMainTab('settings')"><span class="ic">⚙️</span>設定</button>
+  <button class="nav-btn" data-tab="settings" onclick="showMainTab('settings')" data-owner-only><span class="ic">⚙️</span>設定</button>
 </nav>
 
 <main class="wrap">
@@ -829,7 +854,7 @@
 
   <!-- ================= EXPENSES ================= -->
   <div class="panel" id="panel-expenses" data-panel="expenses">
-    <div class="card" id="receiptScanCard">
+    <div class="card" id="receiptScanCard" data-write-only>
       <h2 class="section-title">📷 用帳單照片自動建立支出</h2>
       <p class="hint">上傳帳單照片，自動辨識品項與金額，逐項認領給每個人，服務費／訂金會自動歸入「共同分擔」，最後一鍵建立這筆支出。</p>
       <div id="receiptUploadZone">
@@ -842,7 +867,7 @@
       <div id="receiptWorkArea" style="display:none;"></div>
     </div>
 
-    <div class="card">
+    <div class="card" data-write-only>
       <h2 class="section-title" id="expenseFormTitle">新增一筆支出</h2>
       <div class="field">
         <label>項目說明</label>
@@ -888,7 +913,7 @@
 
     <div class="card">
       <h2 class="section-title">支出明細 <span class="n" id="expenseCount"></span>
-        <button class="btn btn-brass btn-sm" style="margin-left:auto;" id="btnSyncExpenseList" onclick="withLoading(this,'同步中…',()=>saveTripToApi())">儲存</button>
+        <button class="btn btn-brass btn-sm" style="margin-left:auto;" id="btnSyncExpenseList" onclick="withLoading(this,'同步中…',()=>saveTripToApi())" data-write-only>儲存</button>
       </h2>
       <div id="expenseList"></div>
     </div>
@@ -896,7 +921,7 @@
 
   <!-- ================= DEPOSITS ================= -->
   <div class="panel" id="panel-deposits" data-panel="deposits">
-    <div class="card">
+    <div class="card" data-write-only>
       <h2 class="section-title" id="depositFormTitle">新增一筆轉帳／預收款</h2>
       <div class="row">
         <div class="field">
@@ -936,17 +961,18 @@
 
     <div class="card">
       <h2 class="section-title">轉帳明細 <span class="n" id="depositCount"></span>
-        <button class="btn btn-brass btn-sm" style="margin-left:auto;" id="btnSyncDepositList" onclick="withLoading(this,'同步中…',()=>saveTripToApi())">儲存</button>
+        <button class="btn btn-brass btn-sm" style="margin-left:auto;" id="btnSyncDepositList" onclick="withLoading(this,'同步中…',()=>saveTripToApi())" data-write-only>儲存</button>
       </h2>
       <div id="depositList"></div>
     </div>
   </div>
 
   <!-- ================= SETTINGS (成員／匯率／連線 Bot／檔案) ================= -->
-  <div class="panel" id="panel-settings" data-panel="settings">
+  <div class="panel" id="panel-settings" data-panel="settings" data-owner-only>
     <div class="settings-subnav">
       <button class="subtab-btn active" data-subtab="members" onclick="showSettingsSub('members')">👥 成員</button>
       <button class="subtab-btn" data-subtab="rates" onclick="showSettingsSub('rates')">💱 匯率</button>
+      <button class="subtab-btn" data-subtab="share" onclick="showSettingsSub('share')">🔗 分享連結</button>
       <button class="subtab-btn" data-subtab="connect" onclick="showSettingsSub('connect')">🔌 連線 Bot</button>
       <button class="subtab-btn" data-subtab="io" onclick="showSettingsSub('io')">📁 檔案</button>
     </div>
@@ -984,6 +1010,52 @@
           <input type="text" id="newRateCurrency" placeholder="幣別代碼 (如 JPY)" style="max-width:140px; text-transform:uppercase;">
           <input type="number" inputmode="decimal" id="newRateValue" placeholder="匯率" step="0.0001" style="max-width:120px;">
           <button class="btn btn-primary" onclick="addRate()">＋ 新增幣別</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---- 🆕 [分享連結] 分享連結管理 ---- -->
+    <div class="subpanel" id="panel-share" data-subpanel="share">
+      <div class="card">
+        <h2 class="section-title">🔗 分享連結</h2>
+        <p class="hint">
+          建立一組專屬於「目前這個行程」的連結給朋友，他們點開就能直接看到這個行程，
+          完全不用設定金鑰或伺服器位址。就算連結外流，最多也只會曝露這一個行程，
+          而且可以隨時單獨撤銷，不會影響你自己或其他行程的存取權限。
+        </p>
+        <div id="shareLinkNoTripHint" style="display:none;">
+          <p class="hint">請先到「🔌 連線 Bot」分頁連線並選擇一個行程，才能為它建立分享連結。</p>
+        </div>
+        <div id="shareLinkManageArea" style="display:none;">
+          <div class="field">
+            <label>備註（選填，方便你自己認得這是給誰的連結，例如：小華）</label>
+            <input type="text" id="shareLinkLabel" placeholder="例如：小華">
+          </div>
+          <div class="row">
+            <div class="field">
+              <label>權限</label>
+              <select id="shareLinkPermission">
+                <option value="read">👀 唯讀（只能看，不能改）</option>
+                <option value="write">✏️ 可編輯（能新增/修改/刪除）</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>有效期限</label>
+              <select id="shareLinkExpiry">
+                <option value="0">永久有效</option>
+                <option value="1">1 天</option>
+                <option value="7" selected>7 天</option>
+                <option value="30">30 天</option>
+                <option value="90">90 天</option>
+              </select>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-brass" id="btnCreateShareLink" onclick="withLoading(this,'建立中…',createShareLink)">＋ 建立分享連結</button>
+          </div>
+
+          <h2 class="section-title" style="font-size:14.5px; margin-top:20px;">目前的分享連結 <span class="n" id="shareLinkCount"></span></h2>
+          <div id="shareLinkList"></div>
         </div>
       </div>
     </div>
@@ -1085,7 +1157,7 @@
   <button class="nav-btn active" data-tab="overview" onclick="showMainTab('overview')"><span class="ic">📊</span>總覽</button>
   <button class="nav-btn" data-tab="expenses" onclick="showMainTab('expenses')"><span class="ic">🧾</span>支出</button>
   <button class="nav-btn" data-tab="deposits" onclick="showMainTab('deposits')"><span class="ic">💸</span>轉帳</button>
-  <button class="nav-btn" data-tab="settings" onclick="showMainTab('settings')"><span class="ic">⚙️</span>設定</button>
+  <button class="nav-btn" data-tab="settings" onclick="showMainTab('settings')" data-owner-only><span class="ic">⚙️</span>設定</button>
 </nav>
 
 <script>
@@ -1177,8 +1249,12 @@ function repairTrip(raw){
   t.members = Array.isArray(t.members) ? t.members.map(m=>({id:m.id||genId('mem'), name:m.name||m.id||'未知成員'})) : [];
   t.expenses = Array.isArray(t.expenses) ? t.expenses.map(repairExpense) : [];
   t.deposits = Array.isArray(t.deposits) ? t.deposits.map(repairDeposit) : [];
+  // 🆕 保留 shareLinks 欄位（不在前端修改，只是原封不動傳回伺服器）
+  t.shareLinks = Array.isArray(raw&&raw.shareLinks) ? raw.shareLinks : [];
   if (typeof t.archived !== 'boolean') t.archived = false;
   if (typeof t.createdAt !== 'number') t.createdAt = Date.now();
+  // 🆕 保留 updatedAt 時間戳記，用於多人協作版本比對
+  if (typeof (raw&&raw.updatedAt) === 'number') t.updatedAt = raw.updatedAt;
   if (!t.id) t.id = genId('trip');
   if (!t.name) t.name = '未命名行程';
   return t;
@@ -1795,6 +1871,11 @@ async function withLoading(btnEl, loadingText, fn){
 let trip = defaultTrip();
 let editingExpenseId = null;
 let editingDepositId = null;
+// 🆕 [分享連結] null＝目前是擁有者模式（用真正的 SPLITBILL_API_KEY 操作）；
+// 有值時代表這個分頁是透過分享連結打開的：{ token, permission:'read'|'write' }。
+// 一旦進入分享模式就不會再切回擁有者模式（同一個分頁不混用兩種身分），
+// 相關 UI 收斂見 body.share-mode / body.share-readonly 這兩個 CSS class。
+let shareMode = null;
 
 function memberName(id){ const m = trip.members.find(x=>x.id===id); return m ? m.name : '（已刪除成員）'; }
 function currencyOptions(selected){
@@ -1815,6 +1896,7 @@ function showSettingsSub(sub){
   document.querySelectorAll('.settings-subnav .subtab-btn').forEach(b=>b.classList.toggle('active', b.dataset.subtab===sub));
   document.querySelectorAll('.subpanel[data-subpanel]').forEach(p=>p.classList.toggle('active', p.dataset.subpanel===sub));
   if (sub === 'io') syncAdvDetailsState();
+  if (sub === 'share') renderShareLinksPanel();
 }
 // 已連線 Bot 時，把「本機檔案／下載貼上／匯入」這些備用方式預設收合，
 // 減少畫面雜訊；沒連線時預設展開，因為那時候本機方式就是主要路徑。
@@ -2106,7 +2188,7 @@ async function handleReceiptUpload(evt){
     const base64 = dataUrl.split(',')[1];
     const res = await fetch(apiBaseUrl() + '/api/parse-receipt', {
       method: 'POST',
-      headers: Object.assign({ 'Content-Type': 'application/json' }, apiHeaders()),
+      headers: Object.assign({ 'Content-Type': 'application/json' }, apiHeadersAny()),
       body: JSON.stringify({ image: base64, mediaType: 'image/jpeg' })
     });
     const body = await res.json().catch(()=>({}));
@@ -2886,7 +2968,7 @@ function renderAll(){
           代墊：${e.payers.map(p=>`${escapeHtml(memberName(p.userId))} ${fmtMoney(p.amount,e.currency)}`).join('、')}<br>
           分攤：${e.participants.map(s=>`${escapeHtml(memberName(s.userId))} ${fmtMoney(s.amount,e.currency)}`).join('、')}
         </div>
-        <div class="ledger-actions">
+        <div class="ledger-actions" data-write-only>
           <button class="btn btn-ghost btn-sm" onclick="editExpense('${e.id}')">編輯</button>
           <button class="btn btn-danger btn-sm" onclick="deleteExpense('${e.id}')">刪除</button>
         </div>
@@ -2910,7 +2992,7 @@ function renderAll(){
       <div class="ledger-main">
         <div class="ledger-title">${escapeHtml(memberName(d.payerId))} → ${escapeHtml(memberName(d.collectorId))}</div>
         <div class="ledger-sub">${d.note ? escapeHtml(d.note) : '（無備註）'}</div>
-        <div class="ledger-actions">
+        <div class="ledger-actions" data-write-only>
           <button class="btn btn-ghost btn-sm" onclick="editDeposit('${d.id}')">編輯</button>
           <button class="btn btn-danger btn-sm" onclick="deleteDeposit('${d.id}')">刪除</button>
         </div>
@@ -2965,6 +3047,15 @@ function apiHeaders(){
   const key = document.getElementById('apiKey').value.trim();
   return key ? { 'x-api-key': key } : {};
 }
+// 🆕 [分享連結] 給「擁有者/分享連結都可能呼叫」的共用工具端點用（即時匯率、
+// 帳單辨識）：分享連結模式下用連結自己的 token 當憑證，否則沿用擁有者在
+// 「連線 Bot」分頁填的金鑰。分享連結持有者的畫面上根本沒有 apiKey 那個
+// 輸入框，apiHeaders() 在那個情境下只會拿到空字串，這是先前即時匯率對
+// 分享連結訪客一直失敗的根因——這裡統一改用這個函式來源正確的憑證。
+function apiHeadersAny(){
+  if (shareMode) return { 'x-api-key': shareMode.token };
+  return apiHeaders();
+}
 
 /* ===================== 即時匯率 ===================== */
 // 非基準幣的支出/轉帳，存檔時要用「當下」的即時匯率換算 amountInBase（amount 仍存原始幣值）。
@@ -2977,7 +3068,7 @@ async function fetchLiveRate(from, to){
   const cached = liveRateCache[key];
   if (cached && (Date.now() - cached.fetchedAt) < LIVE_RATE_CACHE_TTL) return cached;
   try{
-    const res = await fetch(`${apiBaseUrl()}/api/fx-rate?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, { headers: apiHeaders() });
+    const res = await fetch(`${apiBaseUrl()}/api/fx-rate?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, { headers: apiHeadersAny() });
     const body = await res.json().catch(()=>({}));
     if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
     const entry = { rate: body.rate, asOf: body.asOf, fetchedAt: Date.now() };
@@ -3019,6 +3110,66 @@ function populateTripSelect(){
     ? g.trips.map(t=>`<option value="${t.id}" ${t.id===g.defaultTripId?'selected':''}>${escapeHtml(t.name)}${t.archived?'（已封存）':''}</option>`).join('')
     : '<option value="">（此伺服器尚無行程）</option>';
 }
+// 🆕 記住擁有者上次連線成功的伺服器/行程（連同 API 位址與金鑰），下次重新
+// 整理頁面時可以自動接回去，不用每次都重新輸入金鑰、重新選一次伺服器與
+// 行程。存在 localStorage：這是「你自己這台裝置」記住「你自己的」連線
+// 設定，資料完全不會被送到任何地方，跟先前討論過的「把金鑰塞進可分享
+// 網址」是不同的風險等級（那個問題已經由分享連結機制解決了——分享連結
+// 走的是完全獨立的 token，不會用到這裡存的擁有者金鑰）。
+const OWNER_CONNECTION_STORAGE_KEY = 'splitbill-owner-connection';
+function saveOwnerConnectionState(){
+  try{
+    const guildId = document.getElementById('guildSelect').value;
+    const tripId = document.getElementById('tripSelect').value;
+    if (!guildId || !tripId) return;
+    localStorage.setItem(OWNER_CONNECTION_STORAGE_KEY, JSON.stringify({
+      apiBase: document.getElementById('apiBase').value.trim(),
+      apiKey: document.getElementById('apiKey').value.trim(),
+      guildId, tripId,
+    }));
+  }catch(e){}
+}
+function clearOwnerConnectionState(){
+  try{ localStorage.removeItem(OWNER_CONNECTION_STORAGE_KEY); }catch(e){}
+}
+// 頁面載入時嘗試自動接回上次的連線。刻意不重用 refreshGuildList()／
+// loadTripFromApi()，因為那兩個函式失敗時會跳 toast 提示錯誤——這裡是
+// 「安靜嘗試」，接不回去就悄悄退回一般的空白狀態，不用嚇到使用者（例如
+// 伺服器金鑰後來換過、或行程被刪除了）。成功的話效果等同手動選好伺服器/
+// 行程再按「載入」。
+async function restoreOwnerConnectionState(){
+  let saved = null;
+  try{ saved = JSON.parse(localStorage.getItem(OWNER_CONNECTION_STORAGE_KEY) || 'null'); }catch(e){}
+  if (!saved || !saved.guildId || !saved.tripId) return false;
+
+  document.getElementById('apiKey').value = saved.apiKey || '';
+  document.getElementById('apiBase').value = saved.apiBase || '';
+
+  try{
+    const res = await fetch(apiBaseUrl() + '/api/guilds', { headers: apiHeaders() });
+    if (!res.ok){ clearOwnerConnectionState(); return false; }
+    const guilds = await res.json();
+    lastGuilds = guilds;
+    if (!guilds.some(g => g.guildId === saved.guildId)){ clearOwnerConnectionState(); return false; }
+
+    const guildSel = document.getElementById('guildSelect');
+    guildSel.innerHTML = guilds.map(g=>`<option value="${g.guildId}">${g.guildId}${g.guildName?(' － '+escapeHtml(g.guildName)):''}</option>`).join('');
+    guildSel.onchange = ()=>{ populateTripSelect(); syncAdvDetailsState(); };
+    guildSel.value = saved.guildId;
+    populateTripSelect();
+
+    const tripSel = document.getElementById('tripSelect');
+    if (![...tripSel.options].some(o => o.value === saved.tripId)){ clearOwnerConnectionState(); return false; }
+    tripSel.value = saved.tripId;
+
+    await loadTripFromApi();
+    syncAdvDetailsState();
+    return true;
+  }catch(e){
+    return false;
+  }
+}
+
 async function loadTripFromApi(){
   const guildId = document.getElementById('guildSelect').value;
   const tripId = document.getElementById('tripSelect').value;
@@ -3037,12 +3188,19 @@ async function loadTripFromApi(){
     toast(`已載入「${trip.name}」（成員 ${trip.members.length} 人、支出 ${trip.expenses.length} 筆）`, 'success');
     updateBotStatusPill(true, trip.name);
     syncAdvDetailsState();
+    if (currentSettingsSub === 'share') renderShareLinksPanel();
+    saveOwnerConnectionState();
     renderAll();
   }catch(err){
     toast('載入失敗：' + err.message, 'error');
   }
 }
 async function saveTripToApi(){
+  // 🆕 [分享連結] 分享連結模式下走完全不同的儲存路徑（見 saveSharedTripToApi()）：
+  // 不需要 guildSelect/tripSelect、不需要 apiHeaders() 裡的金鑰，純粹用網址
+  // 路徑上的 token 當憑證，對分享連結的持有者來說完全不用碰到任何技術設定。
+  if (shareMode) return saveSharedTripToApi();
+
   const guildId = document.getElementById('guildSelect').value;
   const tripId = document.getElementById('tripSelect').value || trip.id;
   if (!guildId){
@@ -3050,18 +3208,41 @@ async function saveTripToApi(){
     toast('請先在這裡完成連線（選擇伺服器與行程），之後就能在支出／轉帳頁直接按「儲存到 Bot」了', 'error');
     return;
   }
-  // 樂觀鎖檢查：儲存前先看看伺服器上的版本跟我們最後一次同步的是否一致，
-  // 避免無聲覆蓋掉別人（或自己在別的分頁）剛存的資料。
+  // 版本比對：儲存前先看看伺服器上的版本跟我們最後一次同步的是否一致，
+  // 偵測到衝突時嘗試自動合併（把伺服器有但本地沒有的筆數加進來），
+  // 只有在無法自動合併時才詢問使用者。
   try{
     const checkRes = await fetch(`${apiBaseUrl()}/api/trip/${encodeURIComponent(guildId)}/${encodeURIComponent(tripId)}`, { headers: apiHeaders() });
     if (checkRes.ok){
       const serverTrip = await checkRes.json();
-      if (lastSyncedTripJSON && JSON.stringify(serverTrip) !== lastSyncedTripJSON){
-        const proceed = await confirmModal('伺服器上的資料似乎已經被更新過（可能是別人剛存過，或你在別的分頁存過），確定要用你目前這份覆蓋掉嗎？', { danger:true, confirmText:'仍要覆蓋', title:'偵測到資料衝突' });
-        if (!proceed) return;
-      } else if (!lastSyncedTripJSON) {
+      if (!lastSyncedTripJSON) {
+        // 首次儲存（從未載入過），直接確認
         const proceed = await confirmModal(`確定要把目前的行程資料儲存到 Bot 伺服器（${guildId} / ${tripId}）嗎？`, { confirmText:'儲存' });
         if (!proceed) return;
+      } else if (serverTrip.updatedAt && trip.updatedAt && serverTrip.updatedAt !== trip.updatedAt) {
+        // 伺服器版本比本地版本新，嘗試智慧合併
+        const merged = tryMergeTrips(trip, serverTrip);
+        if (merged) {
+          // 合併成功：靜默套用合併結果，不打擾使用者
+          trip = merged;
+          renderAll();
+          toast('已自動合併其他人的更新', 'info');
+        } else {
+          // 合併失敗（有衝突）：詢問使用者
+          const proceed = await confirmModal('伺服器上的資料已被其他人更新，且與你的變更有衝突，無法自動合併。確定要用你目前這份覆蓋掉嗎？', { danger:true, confirmText:'仍要覆蓋', title:'偵測到資料衝突' });
+          if (!proceed) return;
+        }
+      } else if (lastSyncedTripJSON && JSON.stringify(serverTrip) !== lastSyncedTripJSON && !serverTrip.updatedAt) {
+        // 舊版伺服器（沒有 updatedAt），退回原本的整包比對
+        const merged = tryMergeTrips(trip, serverTrip);
+        if (merged) {
+          trip = merged;
+          renderAll();
+          toast('已自動合併其他人的更新', 'info');
+        } else {
+          const proceed = await confirmModal('伺服器上的資料似乎已經被更新過（可能是別人剛存過，或你在別的分頁存過），確定要用你目前這份覆蓋掉嗎？', { danger:true, confirmText:'仍要覆蓋', title:'偵測到資料衝突' });
+          if (!proceed) return;
+        }
       }
     }
   }catch(e){ /* 檢查失敗就略過，不要因為這個擋住存檔 */ }
@@ -3076,11 +3257,313 @@ async function saveTripToApi(){
       const body = await res.json().catch(()=>({}));
       throw new Error(body.error || ('HTTP ' + res.status));
     }
+    const savedData = await res.json();
+    trip = repairTrip(savedData); // 用伺服器回傳的版本（含最新 updatedAt）更新本地
     lastSyncedTripJSON = JSON.stringify(trip);
     toast('已儲存到 Bot 伺服器', 'success');
     updateBotStatusPill(true, trip.name);
+    saveOwnerConnectionState();
+    renderAll();
   }catch(err){
     toast('儲存失敗：' + err.message, 'error');
+  }
+}
+
+// 🆕 [多人協作] 智慧合併：把「本地版本」與「伺服器版本」的 expenses/deposits/members
+// 以 id 為鍵進行合併。策略：
+// - 本地有、伺服器沒有的筆數（本地新增的）→ 保留
+// - 伺服器有、本地沒有的筆數（別人新增的）→ 加進來
+// - 兩邊都有同一個 id 的筆數 → 以本地版本為準（使用者正在編輯的優先）
+// - 如果同一筆 id 的內容不同（衝突），回傳 null 表示無法自動合併
+// 注意：members 的合併比較寬鬆，只要 id 一致就視為同一人（不管名稱是否被改過）
+function tryMergeTrips(localTrip, serverTrip){
+  try{
+    // 合併 expenses
+    const localExpMap = new Map(localTrip.expenses.map(e=>[e.id, e]));
+    const serverExpMap = new Map(serverTrip.expenses.map(e=>[e.id, e]));
+    const mergedExpenses = [];
+    // 先加入本地的所有 expenses（本地版本優先）
+    for (const [id, exp] of localExpMap) mergedExpenses.push(exp);
+    // 再加入伺服器有但本地沒有的（別人新增的）
+    for (const [id, exp] of serverExpMap){
+      if (!localExpMap.has(id)) mergedExpenses.push(exp);
+    }
+    // 按 createdAt 排序
+    mergedExpenses.sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+
+    // 合併 deposits
+    const localDepMap = new Map(localTrip.deposits.map(d=>[d.id, d]));
+    const serverDepMap = new Map(serverTrip.deposits.map(d=>[d.id, d]));
+    const mergedDeposits = [];
+    for (const [id, dep] of localDepMap) mergedDeposits.push(dep);
+    for (const [id, dep] of serverDepMap){
+      if (!localDepMap.has(id)) mergedDeposits.push(dep);
+    }
+    mergedDeposits.sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+
+    // 合併 members（伺服器有但本地沒有的成員也加進來，避免別人新增的成員消失）
+    const localMemMap = new Map(localTrip.members.map(m=>[m.id, m]));
+    const serverMemMap = new Map(serverTrip.members.map(m=>[m.id, m]));
+    const mergedMembers = [...localTrip.members];
+    for (const [id, mem] of serverMemMap){
+      if (!localMemMap.has(id)) mergedMembers.push(mem);
+    }
+
+    // 建立合併後的 trip（保留本地的基本設定，更新 expenses/deposits/members）
+    const merged = Object.assign({}, localTrip, {
+      expenses: mergedExpenses,
+      deposits: mergedDeposits,
+      members: mergedMembers,
+      // 保留伺服器的 shareLinks（不讓本地覆蓋）
+      shareLinks: serverTrip.shareLinks || localTrip.shareLinks || [],
+      // updatedAt 設為伺服器版本（合併後儲存時伺服器會再更新）
+      updatedAt: serverTrip.updatedAt,
+    });
+    return repairTrip(merged);
+  }catch(e){
+    return null; // 合併過程出錯，回傳 null 讓呼叫端改走衝突提示
+  }
+}
+
+// 🆕 [分享連結] 分享連結模式下的儲存：直接 PUT /api/shared-trip/:token，
+// 伺服器會依這個 token 反查對應的行程並驗證權限（唯讀連結送到這裡一樣會被
+// 伺服器擋下來，這裡先在前端擋一次純粹是為了不必要地打一次注定失敗的請求、
+// 給使用者更直接的提示）。
+async function saveSharedTripToApi(){
+  if (shareMode.permission !== 'write'){
+    toast('這個分享連結是唯讀的，無法儲存變更。', 'error');
+    return;
+  }
+  try{
+    const res = await fetch(`${apiBaseUrl()}/api/shared-trip/${encodeURIComponent(shareMode.token)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(trip)
+    });
+    if (!res.ok){
+      const body = await res.json().catch(()=>({}));
+      throw new Error(body.error || ('HTTP ' + res.status));
+    }
+    const data = await res.json();
+    trip = repairTrip(data.trip);
+    lastSyncedTripJSON = JSON.stringify(trip);
+    toast('已儲存', 'success');
+    renderAll();
+  }catch(err){
+    toast('儲存失敗：' + err.message, 'error');
+  }
+}
+
+/* ===================== 🆕 [分享連結] 擁有者專用：建立／列出／撤銷 ===================== */
+
+// 把一個分享 token 組成完整的、朋友可以直接點的網址。刻意放在 URL 的 hash
+// （# 之後）而不是一般的 query string（? 之後）：hash 完全不會被送到伺服器，
+// 不會出現在伺服器/代理的存取紀錄裡，也不會被 Referrer 帶到第三方（例如頁面
+// 內建的 Google Fonts、即時匯率 API）。頁面載入時讀取到 hash 裡的 token 後，
+// 也會立刻用 history.replaceState() 把網址列清乾淨（見 initShareMode()），
+// 進一步降低瀏覽器歷史紀錄殘留明碼憑證的風險。
+function buildShareUrl(token){
+  const url = new URL(apiBaseUrl() || location.href, location.href);
+  url.search = '';
+  url.hash = `share=${token}`;
+  return url.toString();
+}
+
+async function renderShareLinksPanel(){
+  const noTripHint = document.getElementById('shareLinkNoTripHint');
+  const manageArea = document.getElementById('shareLinkManageArea');
+  const guildId = document.getElementById('guildSelect').value;
+  const tripId = document.getElementById('tripSelect').value;
+
+  if (!guildId || !tripId){
+    noTripHint.style.display = '';
+    manageArea.style.display = 'none';
+    return;
+  }
+  noTripHint.style.display = 'none';
+  manageArea.style.display = '';
+
+  const listEl = document.getElementById('shareLinkList');
+  const countEl = document.getElementById('shareLinkCount');
+  try{
+    const res = await fetch(`${apiBaseUrl()}/api/trip/${encodeURIComponent(guildId)}/${encodeURIComponent(tripId)}/share-links`, { headers: apiHeaders() });
+    if (!res.ok){
+      const body = await res.json().catch(()=>({}));
+      throw new Error(body.error || ('HTTP ' + res.status));
+    }
+    const links = await res.json();
+    countEl.textContent = `(${links.length})`;
+    listEl.innerHTML = links.length ? links.slice().sort((a,b)=>b.createdAt-a.createdAt).map(l => {
+      const permLabel = l.permission === 'write' ? '✏️ 可編輯' : '👀 唯讀';
+      const expiryLabel = l.expiresAt ? `到期：${new Date(l.expiresAt).toLocaleDateString('zh-TW')}` : '永久有效';
+      const url = buildShareUrl(l.token);
+      return `<div class="ledger-row">
+        <div class="ledger-main">
+          <div class="ledger-title">${escapeHtml(l.label || '（未命名連結）')}</div>
+          <div class="ledger-sub">${permLabel}・${expiryLabel}</div>
+          <div class="ledger-actions">
+            <button class="btn btn-brass btn-sm" onclick="copyShareLinkUrl('${l.token}')">🔗 複製連結</button>
+            <button class="btn btn-danger btn-sm" onclick="revokeShareLink('${l.token}', '${escapeHtml(l.label || '此連結').replace(/'/g,"\\'")}')">撤銷</button>
+          </div>
+        </div>
+      </div>`;
+    }).join('') : emptyState('🔗', '還沒有任何分享連結', null, '');
+  }catch(err){
+    listEl.innerHTML = '';
+    countEl.textContent = '';
+    toast('讀取分享連結失敗：' + err.message, 'error');
+  }
+}
+
+async function createShareLink(){
+  const guildId = document.getElementById('guildSelect').value;
+  const tripId = document.getElementById('tripSelect').value;
+  if (!guildId || !tripId){ toast('請先連線並選擇一個行程。', 'error'); return; }
+
+  const label = document.getElementById('shareLinkLabel').value.trim();
+  const permission = document.getElementById('shareLinkPermission').value;
+  const expiresInDays = parseInt(document.getElementById('shareLinkExpiry').value, 10) || 0;
+
+  try{
+    const res = await fetch(`${apiBaseUrl()}/api/trip/${encodeURIComponent(guildId)}/${encodeURIComponent(tripId)}/share-links`, {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, apiHeaders()),
+      body: JSON.stringify({ label, permission, expiresInDays })
+    });
+    if (!res.ok){
+      const body = await res.json().catch(()=>({}));
+      throw new Error(body.error || ('HTTP ' + res.status));
+    }
+    const link = await res.json();
+    document.getElementById('shareLinkLabel').value = '';
+    await renderShareLinksPanel();
+    await confirmModal(
+      `已建立分享連結！點「確定」會把連結複製到剪貼簿，貼給朋友即可，請不要公開分享這組網址。`,
+      { confirmText: '複製連結並關閉', cancelText: '稍後再說' }
+    ) && await copyShareLinkUrl(link.token);
+  }catch(err){
+    toast('建立分享連結失敗：' + err.message, 'error');
+  }
+}
+
+async function copyShareLinkUrl(token){
+  const url = buildShareUrl(token);
+  try{
+    await navigator.clipboard.writeText(url);
+    toast('已複製分享連結，貼給朋友即可（請勿公開分享）', 'success');
+  }catch(e){
+    toast('複製失敗，這是連結網址（請手動複製）：' + url, 'error');
+  }
+}
+
+async function revokeShareLink(token, label){
+  const ok = await confirmModal(`確定要撤銷「${label}」這組分享連結嗎？撤銷後，任何拿著這個連結的人都會立刻無法再存取。`, { danger:true, confirmText:'確定撤銷' });
+  if (!ok) return;
+
+  const guildId = document.getElementById('guildSelect').value;
+  const tripId = document.getElementById('tripSelect').value;
+  try{
+    const res = await fetch(`${apiBaseUrl()}/api/trip/${encodeURIComponent(guildId)}/${encodeURIComponent(tripId)}/share-links/${encodeURIComponent(token)}`, {
+      method: 'DELETE',
+      headers: apiHeaders()
+    });
+    if (!res.ok){
+      const body = await res.json().catch(()=>({}));
+      throw new Error(body.error || ('HTTP ' + res.status));
+    }
+    toast('已撤銷分享連結', 'success');
+    renderShareLinksPanel();
+  }catch(err){
+    toast('撤銷失敗：' + err.message, 'error');
+  }
+}
+
+/* ===================== 🆕 [分享連結] 訪客端：偵測與載入分享模式 ===================== */
+
+// 用來把分享連結的 token 暫存在這個分頁的 sessionStorage 裡，讓「重新整理
+// 頁面」後可以繼續留在同一個行程，不用回頭跟建立連結的人再要一次網址。
+// 特意用 sessionStorage（分頁/瀏覽器關閉就清除）而不是 localStorage
+// （會一直留著直到手動清除）：分享連結是要交給別人用的憑證，關掉分頁後
+// 不留痕跡比較保守安全；重新整理頁面（同一個分頁）則完全不受影響。
+const SHARE_TOKEN_STORAGE_KEY = 'splitbill-share-token';
+
+// 從網址的 hash 讀出 #share=<token>，讀到後立刻清掉網址列（見函式內註解），
+// 並存進 sessionStorage 供重新整理頁面時取用。用 hash 而不是 query string
+// 的理由跟 buildShareUrl() 一致：hash 從來不會被送到伺服器，對外洩露面最小。
+function detectShareTokenFromUrl(){
+  const hash = location.hash || '';
+  const match = hash.match(/^#share=(.+)$/);
+  if (!match) return null;
+  const token = decodeURIComponent(match[1]);
+  // 讀到就立刻清掉網址列的 hash：避免這組憑證繼續留在網址列／瀏覽器歷史
+  // 紀錄／之後使用者複製網址分享出去時被夾帶。用 replaceState 而不是
+  // location.hash='' 是因為後者會留下一個多餘的瀏覽器歷史紀錄項目。
+  history.replaceState(null, '', location.pathname + location.search);
+  try{ sessionStorage.setItem(SHARE_TOKEN_STORAGE_KEY, token); }catch(e){}
+  return token;
+}
+// 重新整理頁面後，網址列的 hash 已經在上次載入時被清掉了，改從
+// sessionStorage 撈回上一次還在用的 token。
+function getPersistedShareToken(){
+  try{ return sessionStorage.getItem(SHARE_TOKEN_STORAGE_KEY); }catch(e){ return null; }
+}
+function clearPersistedShareToken(){
+  try{ sessionStorage.removeItem(SHARE_TOKEN_STORAGE_KEY); }catch(e){}
+}
+
+function applyShareModeUI(){
+  document.body.classList.add('share-mode');
+  if (shareMode.permission !== 'write') document.body.classList.add('share-readonly');
+
+
+
+  // 唯讀模式下，行程名稱／幣別這兩個「看似可編輯」的欄位改成唯讀展示，
+  // 避免朋友以為改了會生效（實際上就算改了，儲存也會被伺服器擋下來，
+  // 這裡純粹是不要讓介面看起來「可以改」造成誤會）。
+  if (shareMode.permission !== 'write'){
+    document.getElementById('tripName').readOnly = true;
+    document.getElementById('baseCurrency').disabled = true;
+  }
+}
+
+function showShareError(message){
+  // 連結本身已經失效／被撤銷／網址有誤，繼續留著 sessionStorage 裡的 token
+  // 只會讓下次重新整理頁面時又跑一次一樣的失敗流程，直接清掉。
+  clearPersistedShareToken();
+  document.getElementById('appHeader').style.display = 'none';
+  document.getElementById('topNav').style.display = 'none';
+  document.getElementById('bottomNav').style.display = 'none';
+  document.querySelector('main.wrap').style.display = 'none';
+  const el = document.getElementById('shareErrorScreen');
+  el.innerHTML = `
+    <div class="ic">😕</div>
+    <h1>這個連結打不開</h1>
+    <p>${escapeHtml(message)}</p>
+    <p style="margin-top:14px;">可以請建立這個連結的人再傳一組新的給你。</p>
+  `;
+  el.style.display = 'block';
+}
+
+async function initShareMode(token){
+  try{
+    const res = await fetch(`${apiBaseUrl()}/api/shared-trip/${encodeURIComponent(token)}`);
+    if (!res.ok){
+      const body = await res.json().catch(()=>({}));
+      const msg = res.status === 403
+        ? (body.error || '這個連結已經過期或被撤銷了。')
+        : '找不到這個分享連結，網址可能有誤。';
+      showShareError(msg);
+      return;
+    }
+    const data = await res.json();
+    trip = repairTrip(data.trip);
+    lastSyncedTripJSON = JSON.stringify(trip);
+    shareMode = { token, permission: data.permission === 'write' ? 'write' : 'read' };
+    applyShareModeUI();
+    editingExpenseId = null; editingDepositId = null;
+    renderAll();
+  }catch(err){
+    showShareError('連線時發生問題，請確認網路連線後重新整理頁面看看。');
   }
 }
 
@@ -3132,14 +3615,30 @@ async function applyUrlParams(){
 /* init */
 initFsApiUi();
 renderAll();
-(async function autoConnectOnLoad(){
-  const usedUrlParams = await applyUrlParams();
-  if (usedUrlParams) return;
-  // 若此頁是由 webui/server.js 同源提供、且伺服器沒設金鑰，嘗試安靜地自動連線一次（不顯示錯誤）
-  fetch('/api/guilds').then(res=>{
-    if (res.ok) refreshGuildList();
-  }).catch(()=>{});
-})();
+// 🆕 [分享連結] 分享連結模式優先於一般的擁有者自動連線流程——兩者互斥，
+// 一個分頁只會是「擁有者」或「分享連結訪客」其中一種身分。
+// 網址 hash 裡的 token（剛點連結進來）優先；如果沒有，改看這個分頁的
+// sessionStorage 裡有沒有「重新整理前」還在用的 token，讓訪客重新整理
+// 頁面後可以繼續留在同一個行程，不用回頭跟建立連結的人再要一次網址。
+const __shareToken = detectShareTokenFromUrl() || getPersistedShareToken();
+if (__shareToken){
+  initShareMode(__shareToken);
+} else {
+  (async function autoConnectOnLoad(){
+    const usedUrlParams = await applyUrlParams();
+    if (usedUrlParams) return;
+    // 🆕 擁有者這邊：網址沒帶明確的連線參數時，嘗試用上次連線成功時記住的
+    // 伺服器/行程自動接回去，不用每次重新整理都重新輸入金鑰、重新選一次
+    // 行程。（帶了明確網址參數的書籤網址優先權比較高，畢竟是使用者當下
+    // 明確點的那個連結，理應照著它的設定連線。）
+    const restored = await restoreOwnerConnectionState();
+    if (restored) return;
+    // 若此頁是由 webui/server.js 同源提供、且伺服器沒設金鑰，嘗試安靜地自動連線一次（不顯示錯誤）
+    fetch('/api/guilds').then(res=>{
+      if (res.ok) refreshGuildList();
+    }).catch(()=>{});
+  })();
+}
 </script>
 
 </body>
