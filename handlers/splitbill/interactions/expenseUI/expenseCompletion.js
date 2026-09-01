@@ -53,6 +53,7 @@ async function completeExpenseLogging(interaction, trip, state, participantIds, 
     };
 
     trip.expenses.push(newExpense);
+    storage.touchTrip(trip);
     storage.persist();
     cache.delete(interaction.guildId, interaction.user.id);
 
@@ -90,6 +91,7 @@ async function completeExpenseLogging(interaction, trip, state, participantIds, 
       };
 
       trip.expenses.push(newExpense);
+      storage.touchTrip(trip);
       storage.persist();
       cache.delete(interaction.guildId, interaction.user.id);
 
