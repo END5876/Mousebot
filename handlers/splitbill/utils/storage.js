@@ -228,6 +228,20 @@ function persist() {
 }
 
 /**
+ * 更新行程的 updatedAt 時間戳記。
+ * 任何 Bot 端對行程資料的寫入（新增花費、刪除花費、新增/移除成員、
+ * 新增訂金、新增幣別匯率等）都應在呼叫 persist() 前先呼叫此函式，
+ * 確保 webui 的樂觀鎖衝突偵測機制（saveTripToApi 比對 updatedAt）
+ * 能正確感知到 Bot 端的變更，避免 webui 存檔時無聲地覆蓋掉 Bot 的資料。
+ * @param {object} trip - 要更新的行程物件（直接修改，不回傳新物件）
+ */
+function touchTrip(trip) {
+  if (trip && typeof trip === 'object') {
+    trip.updatedAt = Date.now();
+  }
+}
+
+/**
  * 🆕 [分享連結] 判斷一筆分享連結是否已過期。expiresAt 為 null 代表永久有效。
  */
 function isShareLinkExpired(link) {
@@ -263,6 +277,7 @@ module.exports = {
   genShareToken,
   getGuild,
   persist,
+  touchTrip,
   loadAll,
   DEFAULT_TRIP,
   repairTrip,
