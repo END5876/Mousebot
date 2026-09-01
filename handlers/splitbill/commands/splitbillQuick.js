@@ -137,6 +137,7 @@ module.exports = {
       };
 
       trip.expenses.push(newExpense);
+      storage.touchTrip(trip);
       storage.persist();
 
       const payerText = payers.map(p => `${memberDisplay(trip, p.userId)}(${p.amount})`).join('、');

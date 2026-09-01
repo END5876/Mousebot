@@ -183,6 +183,7 @@ module.exports = {
       // 如果伺服器還沒有預設行程（例如這是第一個被建立的行程），順便設成預設值，
       // 讓之後「從未選過行程」的新使用者有個合理的起點，而不是直接報錯。
       if (!guild.defaultTripId) guild.defaultTripId = newTripId;
+      storage.touchTrip(newTrip);
       storage.persist();
 
       return showMainMenu(interaction, `🎉 成功創立新行程！\n**名稱**：${name}\n**本位幣別**：${baseCur}\n已自動帶入常用多國匯率，並切換為你的作用行程！`);
@@ -238,6 +239,7 @@ module.exports = {
       }
 
       trip.rates[currency] = rate;
+      storage.touchTrip(trip);
       storage.persist();
 
       return renderTripNav(interaction, `✅ 已新增幣別 \`${currency}\`！匯率：1 ${currency} = ${rate} ${trip.baseCurrency}（${rateSource}），現在記帳/收訂金時就能選用這個幣別了。`);

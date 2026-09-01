@@ -228,7 +228,18 @@ function startWebApi(options = {}) {
       // repairTrip() 會自動把它防呆修復好；但如果請求本身是「用分享連結」
       // 寫入的，就不检查它帶來的 shareLinks 內容是否被竄改——見下方安全性
       // 備註：分享連結持有者理論上不該能新增/竄改分享連結清單本身。
-      if (existing && !authorizeTripAccess(req, res, existing, true)) return;
+      // 🔒 [修正：existing 不存在時跳過權限驗證的漏洞]
+      // 原本只有 existing 為真時才呼叫 authorizeTripAccess，導致行程被刪除後
+      // 任何帶有非空 x-api-key 的請求都能在沒有任何驗證的情況下重新建立行程。
+      // 修正後：
+      //   - existing 存在 → 走原本的 authorizeTripAccess（支援擁有者金鑰與分享連結）
+      //   - existing 不存在（建立新行程）→ 一律要求 req.isOwner，
+      //     分享連結持有者無法建立新行程，避免孤兒行程或資料被復活。
+      if (existing) {
+        if (!authorizeTripAccess(req, res, existing, true)) return;
+      } else {
+        if (!requireOwner(req, res)) return;
+      }
       const incoming = req.body || {};
       // 🔒 [分享連結安全性] shareLinks 永遠沿用伺服器上原有的清單，完全忽略
       // 前端送上來的 shareLinks 內容。

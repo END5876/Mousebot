@@ -92,7 +92,10 @@ module.exports = {
           addedCount++;
         }
       }
-      if (addedCount > 0) storage.persist();
+      if (addedCount > 0) {
+        storage.touchTrip(trip);
+        storage.persist();
+      }
       return showMainMenu(interaction, `✅ 成功將 ${addedCount} 位成員新增至行程「${trip.name}」！`);
     }
 
@@ -126,6 +129,7 @@ module.exports = {
         e.participants.some(pt => targetUserIds.includes(pt.userId))
       );
 
+      storage.touchTrip(trip);
       storage.persist();
       
       // 將所有被移除的成員 ID 轉為 Discord 提及格式

@@ -63,6 +63,7 @@ async function handleModal(interaction, cache) {
         }
 
         trip.rates[currency] = rate;
+        storage.touchTrip(trip);
         storage.persist();
         rateNote = `（已新增為此行程幣別，匯率 1 ${currency} = ${rate} ${trip.baseCurrency}，${rateSource}）`;
       }
@@ -125,6 +126,7 @@ async function handleModal(interaction, cache) {
           totalAmount += amount;
         }
         
+        storage.touchTrip(trip);
         storage.persist();
         cache.delete(guildId, user.id);
 
