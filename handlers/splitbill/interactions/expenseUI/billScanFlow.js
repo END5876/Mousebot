@@ -149,7 +149,12 @@ async function startBillScan(interaction, trip, cache) {
           imageUrl: imageAttachment.url,
           batchId,
           index: i,
-          batchTotal
+          batchTotal,
+          // 🆕 語言辨識 + 翻譯：原文語言、繁中翻譯、是否判定為外語帳單，
+          // 供確認畫面同時顯示「原文／翻譯」使用。
+          language: result.language,
+          descriptionTranslated: result.descriptionTranslated,
+          isForeignLanguage: result.isForeignLanguage
         };
         cache.set(guildId, itemCacheUserId, { scanResult });
 
