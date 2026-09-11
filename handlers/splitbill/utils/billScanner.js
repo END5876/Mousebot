@@ -10,6 +10,14 @@ const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold, GoogleGenerativeAI
 
 const MODEL_NAME = 'gemini-3.1-flash-lite';
 
+// 🆕 語言辨識 + 翻譯的保險機制：即使 prompt 已經要求「原文若是中文就不用翻譯」，
+// AI 偶爾還是可能手滑照抄一份「翻譯」出來（尤其簡體/繁體中文之間最容易被誤判成
+// 需要轉換）。這裡在程式層面再擋一次——只要 AI 判斷的語言標籤裡含有「中文」或
+// "chinese"，一律視為不需要翻譯，不管 AI 實際有沒有填 descriptionTranslated。
+function isChineseLanguageLabel(lang) {
+  return /中文|chinese/i.test(lang || '');
+}
+
 // Gemini API 呼叫的逾時上限。外層 expenseUI.js 的 90 秒逾時只保護「等待使用者上傳圖片」
 // 這個階段；一旦圖片送出、進入「🔍 辨識中...」畫面後，若不對 API 呼叫本身加上逾時，
 // 一旦 Google 端網路異常延遲或掛住，使用者就會被卡在辨識畫面上無限期等待。
@@ -33,7 +41,18 @@ const RESPONSE_SCHEMA = {
   properties: {
     description: {
       type: 'string',
-      description: '這筆花費的簡短項目名稱（優先用店名，其次用品項摘要），20字以內'
+      description: '這筆花費的簡短項目名稱（優先用店名，其次用品項摘要），請用帳單「原文」的語言撰寫，20字以內'
+    },
+    // 🆕 語言辨識 + 翻譯：帳單常常是外語（日文、韓文、泰文...），description 保留原文，
+    // 這裡額外請 AI 提供繁體中文翻譯，讓確認畫面可以「原文＋翻譯」同時顯示，
+    // 使用者不用自己猜帳單原文的意思。
+    language: {
+      type: 'string',
+      description: '帳單上主要文字使用的語言，用簡短中文描述（例如：日文、韓文、泰文、英文、繁體中文、簡體中文），無法判斷則填「未知」'
+    },
+    descriptionTranslated: {
+      type: 'string',
+      description: '把 description 翻譯成繁體中文。若 description 本身已經是中文（繁體或簡體皆可），這裡請填空字串 ""'
     },
     amount: {
       type: 'number',
@@ -61,11 +80,13 @@ function buildPrompt(tripCurrencies, baseCurrency) {
 
   return `你是一個專門辨識收據/帳單圖片的助手，請仔細閱讀圖片中的帳單、發票或收據內容，並提取以下資訊：
 
-1. description：這筆消費的簡短摘要（優先使用店名，其次用品項類別，例如「王品牛排」、「7-11 飲料」、「計程車」），控制在 20 字以內，不要照抄整張收據的所有品項明細。
-2. amount：帳單「實際需要支付」的總金額（優先抓「合計」「總計」「應付金額」「Total」欄位的最終數字，若有折扣請使用折扣後金額），只輸出數字，不要包含貨幣符號或千分位逗號。
-3. currency：判斷這是什麼貨幣，輸出 ISO 4217 三字代碼。這趟行程目前使用的幣別有：${currencyList}（基準幣別為 ${baseCurrency}），如果圖片內容符合其中一種請優先使用；否則依據貨幣符號、文字語言或店家所在地合理判斷。
-4. date：帳單上的日期（若有），格式 YYYY-MM-DD；辨識不到就輸出空字串。
-5. confidence：你對整體辨識結果的信心程度（high/medium/low）。
+1. description：這筆消費的簡短摘要（優先使用店名，其次用品項類別，例如「王品牛排」、「7-11 飲料」、「計程車」），請用帳單「原文」的語言撰寫（帳單是日文就用日文寫，是韓文就用韓文寫，不要自己先翻譯），控制在 20 字以內，不要照抄整張收據的所有品項明細。
+2. language：判斷帳單上主要文字使用的語言，用簡短的「中文」描述（例如：日文、韓文、泰文、英文、繁體中文、簡體中文），完全看不出來就填「未知」。
+3. descriptionTranslated：把上面的 description 翻譯成繁體中文。如果 description 本身已經是中文（不論繁體或簡體），這裡請填空字串 ""，不要重複輸出原文。
+4. amount：帳單「實際需要支付」的總金額（優先抓「合計」「總計」「應付金額」「Total」欄位的最終數字，若有折扣請使用折扣後金額），只輸出數字，不要包含貨幣符號或千分位逗號。
+5. currency：判斷這是什麼貨幣，輸出 ISO 4217 三字代碼。這趟行程目前使用的幣別有：${currencyList}（基準幣別為 ${baseCurrency}），如果圖片內容符合其中一種請優先使用；否則依據貨幣符號、文字語言或店家所在地合理判斷。
+6. date：帳單上的日期（若有），格式 YYYY-MM-DD；辨識不到就輸出空字串。
+7. confidence：你對整體辨識結果的信心程度（high/medium/low）。
 
 請只根據圖片中「實際看得到」的內容作答，絕對不要編造數字。如果完全看不出金額，amount 請填 0。`;
 }
@@ -74,7 +95,7 @@ function buildPrompt(tripCurrencies, baseCurrency) {
  * @param {Array<{mimeType: string, data: string}>} imageParts base64 圖片資料（沿用 aiUtils.processAttachments 的輸出格式）
  * @param {string[]} tripCurrencies 該行程目前已設定的幣別清單，作為 AI 判斷幣別時的參考
  * @param {string} baseCurrency 行程基準幣別
- * @returns {Promise<{description: string, amount: number|null, currency: string, date: string, confidence: string}>}
+ * @returns {Promise<{description: string, amount: number|null, currency: string, date: string, confidence: string, language: string, descriptionTranslated: string, isForeignLanguage: boolean}>}
  */
 async function scanBillImage(imageParts, tripCurrencies = [], baseCurrency = 'TWD') {
   if (!imageParts || !imageParts.length) {
@@ -141,6 +162,17 @@ async function scanBillImage(imageParts, tripCurrencies = [], baseCurrency = 'TW
   const description = (parsed.description || '').toString().trim().slice(0, 90);
   const recognizedNothing = !description && !(Number.isFinite(amount) && amount > 0);
 
+  // 🆕 語言辨識 + 翻譯：description 是帳單原文語言，descriptionTranslated 是 AI 順便
+  // 翻好的繁體中文版本。AI 對「原文已經是中文」的情況會回傳空字串，這裡再多做一層保險
+  // ——若翻譯結果跟原文字串完全相同（AI 沒翻，直接照抄），或者 AI 標記的語言本身
+  // 就是中文（繁體/簡體皆算），一律視為不是外語，避免確認畫面出現「原文：晚餐／
+  // 翻譯：晚餐」這種沒有意義的重複顯示。
+  const language = (parsed.language || '').toString().trim().slice(0, 20);
+  const descriptionTranslatedRaw = (parsed.descriptionTranslated || '').toString().trim().slice(0, 90);
+  const isForeignLanguage = !isChineseLanguageLabel(language)
+    && !!descriptionTranslatedRaw
+    && descriptionTranslatedRaw !== description;
+
   // 過去這裡「兩項都辨識不到」時會直接 throw，把使用者導向純錯誤畫面（只能重掃或整個改手動輸入），
   // 之前辨識到的任何蛛絲馬跡（例如幣別、日期）就全部作廢，體驗上很挫折。
   // 現在改成：即使什麼都沒認出來，也還是回傳一個「空白預設值」的結果，讓使用者一樣走進
@@ -151,7 +183,10 @@ async function scanBillImage(imageParts, tripCurrencies = [], baseCurrency = 'TW
     amount: Number.isFinite(amount) && amount > 0 ? Math.round((amount + Number.EPSILON) * 100) / 100 : null,
     currency: (parsed.currency || '').toString().trim().toUpperCase(),
     date: (parsed.date || '').toString().trim(),
-    confidence: recognizedNothing ? 'low' : (parsed.confidence || 'medium')
+    confidence: recognizedNothing ? 'low' : (parsed.confidence || 'medium'),
+    language,
+    descriptionTranslated: isForeignLanguage ? descriptionTranslatedRaw : '',
+    isForeignLanguage
   };
 }
 

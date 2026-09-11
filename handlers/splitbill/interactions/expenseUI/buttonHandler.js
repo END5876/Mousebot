@@ -125,7 +125,12 @@ async function handleButton(interaction, cache) {
         return interaction.reply({ content: '⚠️ 辨識結果已逾期失效，請重新掃描一次。', flags: MessageFlags.Ephemeral });
       }
 
-      const { description, amount, currency } = state.scanResult;
+      const { description, amount, currency, descriptionTranslated, isForeignLanguage } = state.scanResult;
+      // 🆕 語言辨識 + 翻譯：外語帳單預帶「翻譯（原文）」進項目名稱欄位，讓最終存進帳目的
+      // 紀錄本身就是可讀的繁中文字；使用者仍可在送出前自行修改。中文帳單維持原樣不變。
+      const prefillDescription = isForeignLanguage && descriptionTranslated
+        ? `${descriptionTranslated}（${description}）`
+        : description;
 
       const modal = new ModalBuilder()
         .setCustomId(`exp_modal_add_${currency}::${trip.id}`)
@@ -136,7 +141,7 @@ async function handleButton(interaction, cache) {
         .setLabel('項目名稱 (例如：計程車、晚餐)')
         .setStyle(TextInputStyle.Short)
         .setRequired(true);
-      if (description) descInput.setValue(String(description).slice(0, 100));
+      if (prefillDescription) descInput.setValue(String(prefillDescription).slice(0, 100));
 
       const amountInput = new TextInputBuilder()
         .setCustomId('amount')

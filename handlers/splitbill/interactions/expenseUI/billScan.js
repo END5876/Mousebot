@@ -122,9 +122,11 @@ const SCAN_CONFIDENCE_META = {
  * 避免兩處各寫一份容易漏改、UI 不一致。
  *
  * @param {object} trip 行程物件（需要 trip.rates 取得可選幣別清單）
- * @param {{description: string, amount: number|null, currency: string, confidence?: string, date?: string, imageUrl?: string, batchId: string, index: number, batchTotal?: number}} scanResult
+ * @param {{description: string, amount: number|null, currency: string, confidence?: string, date?: string, imageUrl?: string, batchId: string, index: number, batchTotal?: number, language?: string, descriptionTranslated?: string, isForeignLanguage?: boolean}} scanResult
  *   目前的辨識結果（幣別可能已被使用者手動覆寫）。batchId/index 用來把這張圖對應到 stateCache
  *   裡專屬於它的儲存格，也會編進下面元件的 customId，讓多張圖各自的按鈕/選單不會互相干擾。
+ *   language/descriptionTranslated/isForeignLanguage 是 🆕 語言辨識＋翻譯的結果，帳單為外語時
+ *   isForeignLanguage 為 true，項目名稱欄位會同時顯示原文與繁中翻譯。
  * @param {object} [options]
  * @param {string} [options.currencyFieldNote] 附加在「💱 幣別」欄位值後面的短註記（例如「AI 判讀為 X，已自動對應至 Y」）
  * @param {string} [options.extraFooterNote] 附加在頁尾提示文字後面的額外提醒（例如「已手動更改幣別，記得確認匯率」）
@@ -137,6 +139,12 @@ function buildScanResultView(trip, scanResult, options = {}) {
   const meta = SCAN_CONFIDENCE_META[scanResult.confidence] || SCAN_CONFIDENCE_META.medium;
   const amountDisplay = formatMoneyDisplay(scanResult.amount, scanResult.currency);
 
+  // 🆕 語言辨識 + 翻譯：帳單若判定為外語，項目名稱欄位同時顯示「原文」與「繁中翻譯」，
+  // 讓使用者不用自己猜外語帳單在寫什麼；中文帳單則維持原樣單行顯示，不多此一舉。
+  const descriptionValue = scanResult.isForeignLanguage && scanResult.descriptionTranslated
+    ? `${scanResult.description}\n🌐 翻譯：${scanResult.descriptionTranslated}`
+    : scanResult.description;
+
   // 一次掃多張時，在標題標明「這是第幾張」，讓使用者在一串訊息裡不會搞混是在確認哪一張帳單。
   const titlePrefix = scanResult.batchTotal && scanResult.batchTotal > 1
     ? `✅ 第 ${scanResult.index + 1}／${scanResult.batchTotal} 張辨識完成！`
@@ -146,7 +154,7 @@ function buildScanResultView(trip, scanResult, options = {}) {
     .setColor(meta.color)
     .setTitle(`${titlePrefix}請確認以下內容`)
     .addFields(
-      { name: '📝 項目名稱', value: scanResult.description, inline: false },
+      { name: '📝 項目名稱', value: descriptionValue, inline: false },
       { name: '💰 金額', value: amountDisplay !== null ? amountDisplay : '⚠️ 無法辨識，請於表單中手動填寫', inline: true },
       { name: '💱 幣別', value: `${scanResult.currency}${currencyFieldNote}`, inline: true }
     )
