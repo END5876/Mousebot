@@ -412,7 +412,7 @@
     font-size:12.5px; padding:6px 11px; border-radius:16px; cursor:pointer;
     border:1.5px solid var(--card-line); background:var(--surface); color:var(--ink-soft);
   }
-  .claim-chip.on{border-color:var(--brass-bg); background:#FBF4E4; color:var(--ink); font-weight:700;}
+  .claim-chip.on{border-color:var(--brass-bg); background:var(--brass-tint); color:var(--ink); font-weight:700;}
   .claim-chip.shared{border-color:var(--credit); }
   .claim-chip.shared.on{background:var(--credit-bg); border-color:var(--credit); color:var(--credit);}
   .receipt-summary{
@@ -503,6 +503,12 @@
   .ledger-sub{font-size:12.5px; color:var(--ink-soft); margin-top:3px; line-height:1.65;}
   .ledger-amt{font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:15px; white-space:nowrap;}
   .ledger-actions{display:flex; gap:6px; margin-top:9px;}
+
+  /* 🆕 分享連結列表：沿用跟支出/轉帳明細一致的 .ledger-row 版面（而不是獨立卡片），
+     權限改用跟「換算幣別」小選單一致的 .convert-select 樣式（寬度固定縮小、inline
+     顯示在到期日期旁邊），維持整體介面語彙一致、也不會把一整排撐得過長。 */
+  .share-link-perm-select{ margin-right:6px; }  .share-link-footer{display:flex; gap:8px;}
+  .share-link-footer .btn{flex:1;}
 
   .empty-state{
     text-align:center; padding:30px 16px; color:var(--ink-soft);
@@ -2231,6 +2237,8 @@ async function handleReceiptUpload(evt){
       return {
         id: genId('ritem'),
         name: it.name,
+        // 🆕 語言辨識 + 翻譯：品項名稱的繁體中文翻譯（原文若本來就是中文則為空字串）。
+        nameTranslated: it.nameTranslated || '',
         basePrice: it.price,
         price: finalPrice,
         priceOverridden: false, // 使用者手動改過金額後會變 true，之後調整服務費比例就不會再覆蓋這筆
@@ -2248,13 +2256,19 @@ async function handleReceiptUpload(evt){
       items,
       serviceChargeRate: rate,
       detectedCurrency: body.currency || null,
+      // 🆕 語言辨識：帳單主要文字語言（例如「日文」），純粹用來在畫面上提示「已附上翻譯」。
+      detectedLanguage: body.language || '',
       attendeeIds: trip.members.map(m=>m.id), // 預設全員出席，可取消勾選
       description: '',
       payerId: null,
       currency: null,
     };
     const rateNote = rate > 0 ? `，已自動加上 ${Math.round(rate*10000)/100}% 服務費` : '';
-    toast(`辨識出 ${items.length} 個項目${rateNote}，請逐項認領`, 'success');
+    const hasTranslation = items.some(it => it.nameTranslated);
+    const langNote = hasTranslation && receiptState.detectedLanguage
+      ? `，偵測到帳單為${receiptState.detectedLanguage}，已附上繁中翻譯`
+      : '';
+    toast(`辨識出 ${items.length} 個項目${rateNote}${langNote}，請逐項認領`, 'success');
     renderReceiptWorkArea();
   }catch(err){
     toast('辨識失敗：' + err.message, 'error');
@@ -2297,7 +2311,7 @@ function receiptSetShared(itemId){
 function receiptUpdateField(itemId, field, value){
   const item = receiptState.items.find(i=>i.id===itemId);
   if (field === 'price'){ item.price = parseFloat(value) || 0; item.priceOverridden = true; } // 使用者接手了，不再自動套用服務費比例
-  else if (field === 'name') item.name = value;
+  else if (field === 'name'){ item.name = value; item.nameTranslated = ''; } // 名稱被手動改過，AI 原本的翻譯已經對不上，直接清空避免顯示過時翻譯
   renderReceiptWorkArea(); // 完整重繪，讓「已含服務費」提示能正確消失/更新
 }
 function receiptRemoveItem(itemId){
@@ -2309,6 +2323,7 @@ function receiptAddManualItem(){
   receiptState.items.push({
     id: genId('ritem'),
     name: '',
+    nameTranslated: '', // 手動新增的項目沒有 AI 翻譯可用
     basePrice: 0,
     price: 0,
     priceOverridden: true, // 手動輸入的金額不受服務費比例調整影響
@@ -2400,6 +2415,11 @@ function renderReceiptWorkArea(){
     const serviceChargeHint = showServiceHint
       ? `<p class="hint" style="margin-top:6px;">已含 ${Math.round(receiptState.serviceChargeRate*10000)/100}% 服務費（原價 ${fmtMoney(item.basePrice, receiptState.detectedCurrency||trip.baseCurrency)}）</p>`
       : '';
+    // 🆕 語言辨識 + 翻譯：品項名稱若有繁中翻譯（代表帳單原文不是中文），
+    // 在輸入框下方附上一行「原文＋翻譯」同時顯示，方便核對辨識是否正確。
+    const translationHint = item.nameTranslated
+      ? `<p class="hint" style="margin-top:6px;">🌐 翻譯：<b>${escapeHtml(item.nameTranslated)}</b></p>`
+      : '';
     return `
     <div class="receipt-item-row ${item.type==='fee'?'fee':''} ${unclaimed?'unclaimed':''}">
       <div class="receipt-item-head">
@@ -2408,6 +2428,7 @@ function renderReceiptWorkArea(){
         <input type="number" inputmode="decimal" class="num amt-input" value="${item.price}" step="0.01" onchange="receiptUpdateField('${item.id}','price',this.value)">
         <button type="button" class="btn btn-ghost btn-sm" onclick="receiptRemoveItem('${item.id}')" title="刪除這個項目">✕</button>
       </div>
+      ${translationHint}
       <div class="receipt-claim-chips">
         ${memberChipsHtml(item)}
         <button type="button" class="claim-chip shared ${isShared?'on':''}" onclick="receiptSetShared('${item.id}')">🤝 共同分擔</button>
@@ -2435,7 +2456,7 @@ function renderReceiptWorkArea(){
     <div class="receipt-preview-row">
       <img class="receipt-thumb" src="${receiptState.imageDataUrl}" alt="帳單照片預覽">
       <div style="flex:1;">
-        <p class="hint" style="margin-top:0;">共 ${receiptState.items.length} 個項目。點品項下方的人名認領（可多選＝一起分這項），訂金等雜費已自動歸入「共同分擔」。辨識錯了都可以直接改，或用下面「新增項目」補一筆。</p>
+        <p class="hint" style="margin-top:0;">共 ${receiptState.items.length} 個項目。點品項下方的人名認領（可多選＝一起分這項），訂金等雜費已自動歸入「共同分擔」。辨識錯了都可以直接改，或用下面「新增項目」補一筆。${receiptState.items.some(it => it.nameTranslated) ? `<br>🌐 偵測到帳單為<b>${escapeHtml(receiptState.detectedLanguage)}</b>，品項下方已附上繁體中文翻譯供核對。` : ''}</p>
         <button type="button" class="btn btn-ghost btn-sm" onclick="receiptResetUpload()">🔄 重新上傳照片</button>
       </div>
     </div>
@@ -3422,16 +3443,21 @@ async function renderShareLinksPanel(){
     const links = await res.json();
     countEl.textContent = `(${links.length})`;
     listEl.innerHTML = links.length ? links.slice().sort((a,b)=>b.createdAt-a.createdAt).map(l => {
-      const permLabel = l.permission === 'write' ? '✏️ 可編輯' : '👀 唯讀';
       const expiryLabel = l.expiresAt ? `到期：${new Date(l.expiresAt).toLocaleDateString('zh-TW')}` : '永久有效';
-      const url = buildShareUrl(l.token);
+      const safeLabel = escapeHtml(l.label || '此連結').replace(/'/g,"\\'");
       return `<div class="ledger-row">
         <div class="ledger-main">
           <div class="ledger-title">${escapeHtml(l.label || '（未命名連結）')}</div>
-          <div class="ledger-sub">${permLabel}・${expiryLabel}</div>
+          <div class="ledger-sub">
+            <select class="convert-select share-link-perm-select" onchange="updateShareLinkPermission('${l.token}', this.value)">
+              <option value="read" ${l.permission!=='write'?'selected':''}>👀 唯讀</option>
+              <option value="write" ${l.permission==='write'?'selected':''}>✏️ 可編輯</option>
+            </select>
+            ${expiryLabel}
+          </div>
           <div class="ledger-actions">
             <button class="btn btn-brass btn-sm" onclick="copyShareLinkUrl('${l.token}')">🔗 複製連結</button>
-            <button class="btn btn-danger btn-sm" onclick="revokeShareLink('${l.token}', '${escapeHtml(l.label || '此連結').replace(/'/g,"\\'")}')">撤銷</button>
+            <button class="btn btn-danger btn-sm" onclick="revokeShareLink('${l.token}', '${safeLabel}')">撤銷</button>
           </div>
         </div>
       </div>`;
@@ -3481,6 +3507,30 @@ async function copyShareLinkUrl(token){
     toast('已複製分享連結，貼給朋友即可（請勿公開分享）', 'success');
   }catch(e){
     toast('複製失敗，這是連結網址（請手動複製）：' + url, 'error');
+  }
+}
+
+// 🆕 隨時修改一筆既有分享連結的權限（唯讀／可編輯），不用撤銷重建、對方手上的連結網址
+// 完全不變，下一次對方開啟或儲存時就會立刻套用新權限。select 選單本身已經有目前的值，
+// 這裡只在使用者真的選了不同的選項時才送出請求，避免每次重新整理清單都白打一次 API。
+async function updateShareLinkPermission(token, permission){
+  const guildId = document.getElementById('guildSelect').value;
+  const tripId = document.getElementById('tripSelect').value;
+  try{
+    const res = await fetch(`${apiBaseUrl()}/api/trip/${encodeURIComponent(guildId)}/${encodeURIComponent(tripId)}/share-links/${encodeURIComponent(token)}`, {
+      method: 'PATCH',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, apiHeaders()),
+      body: JSON.stringify({ permission })
+    });
+    if (!res.ok){
+      const body = await res.json().catch(()=>({}));
+      throw new Error(body.error || ('HTTP ' + res.status));
+    }
+    toast(permission === 'write' ? '已改為可編輯' : '已改為唯讀', 'success');
+    renderShareLinksPanel();
+  }catch(err){
+    toast('修改權限失敗：' + err.message, 'error');
+    renderShareLinksPanel(); // 失敗時重新讀取清單，讓下拉選單的值還原成伺服器上實際的權限
   }
 }
 
