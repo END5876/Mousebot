@@ -3258,6 +3258,15 @@ async function restoreOwnerConnectionState(){
 let tripEventSource = null;
 let tripEventReconnectTimer = null;
 
+// 🆕 [即時同步] 這個分頁自己的識別碼，存檔時會附帶送給伺服器，SSE 推播回來
+// 時原封不動夾帶在裡面。用這個「明確標記」而不是比較 updatedAt 時間先後，
+// 是因為存檔的 PUT 回應跟 SSE 推播走的是兩條獨立連線，SSE 那筆事件常常會
+// 比自己 PUT 的 fetch() Promise 更早被處理完——那時候本地 trip.updatedAt
+// 都還沒更新成新版本，用時間戳記比較會誤判成「別人更新的」，導致操作者
+// 本人也會看到「偵測到其他人更新」的提示。每次重新整理頁面就會換一組新的
+// （不需要跨分頁/跨次重新整理持久化，純粹只是「這次連線是不是我發出去的」）。
+const CLIENT_INSTANCE_ID = genId('client');
+
 function disconnectTripEventStream(){
   clearTimeout(tripEventReconnectTimer);
   tripEventReconnectTimer = null;
@@ -3287,7 +3296,14 @@ async function connectTripEventStream(){
     tripEventSource = es;
 
     es.addEventListener('trip-updated', (evt) => {
-      try{ handleIncomingTripUpdate(JSON.parse(evt.data)); }catch(e){ /* 忽略解析失敗的單一事件 */ }
+      try{
+        const envelope = JSON.parse(evt.data);
+        // 🆕 [即時同步] 這筆推播就是「我自己剛存的」：writerId 完全比對，
+        // 不看時間戳記，避免 SSE 推播先於自己 PUT 回應抵達造成的誤判
+        // （見上面 CLIENT_INSTANCE_ID 宣告處的說明）。
+        if (envelope && envelope.writerId && envelope.writerId === CLIENT_INSTANCE_ID) return;
+        handleIncomingTripUpdate(envelope && envelope.trip ? envelope.trip : envelope);
+      }catch(e){ /* 忽略解析失敗的單一事件 */ }
     });
 
     // 🆕 [即時同步] 行程被刪除（例如在 Discord 面板按了「刪除此行程」）：
@@ -3454,7 +3470,7 @@ async function saveTripToApi(){
       // 🆕 [併發保護] 把本地目前認定的版本號一併送給伺服器；伺服器會在真正
       // 寫入前原子化比對這個版本號是否仍然等於它「當下」的版本，不一致就
       // 回傳 409，讓下面的重試邏輯接手，而不是悶不吭聲地整包覆蓋。
-      const payload = Object.assign({}, trip, { expectedUpdatedAt: trip.updatedAt || null });
+      const payload = Object.assign({}, trip, { expectedUpdatedAt: trip.updatedAt || null, writerId: CLIENT_INSTANCE_ID });
       const res = await fetch(`${apiBaseUrl()}/api/trip/${encodeURIComponent(guildId)}/${encodeURIComponent(tripId)}`, {
         method: 'PUT',
         headers: Object.assign({ 'Content-Type': 'application/json' }, apiHeaders()),
@@ -3577,7 +3593,7 @@ async function saveSharedTripToApi(){
 
   for (let attempt = 0; attempt < MAX_SAVE_RETRY; attempt++){
     try{
-      const payload = Object.assign({}, trip, { expectedUpdatedAt: trip.updatedAt || null });
+      const payload = Object.assign({}, trip, { expectedUpdatedAt: trip.updatedAt || null, writerId: CLIENT_INSTANCE_ID });
       const res = await fetch(`${apiBaseUrl()}/api/shared-trip/${encodeURIComponent(shareMode.token)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },

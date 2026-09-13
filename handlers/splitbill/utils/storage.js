@@ -248,7 +248,7 @@ function persist() {
  * 能正確感知到 Bot 端的變更，避免 webui 存檔時無聲地覆蓋掉 Bot 的資料。
  * @param {object} trip - 要更新的行程物件（直接修改，不回傳新物件）
  */
-function touchTrip(trip) {
+function touchTrip(trip, meta) {
   if (trip && typeof trip === 'object') {
     trip.updatedAt = Date.now();
     // 🆕 [即時同步] 廣播「這個行程剛剛被改過」，讓 webui 的 SSE 訂閱者可以
@@ -256,7 +256,14 @@ function touchTrip(trip) {
     // 讓廣播的當下永遠是「觸發事件」，實際要推播的資料由訂閱端（server.js）
     // 自行用 findTripById() 讀取當下最新版本，避免萬一同一輪事件循環內
     // trip 物件又被改了第二次，訂閱端拿到的還是舊的快照。
-    if (trip.id) tripEvents.emit('trip-updated', trip.id);
+    //
+    // meta（可選）：目前唯一用途是夾帶 writerId，讓寫入者本人的分頁可以
+    // 精準分辨「這筆推播就是我自己剛存的」而略過提示。不能靠比較
+    // trip.updatedAt 前後來判斷「是不是自己」——寫入者的 PUT 回應跟這裡
+    // 的 SSE 推播是兩條獨立的連線，SSE 那筆事件時常會比 PUT 的 fetch()
+    // Promise 更早被瀏覽器處理完，此時寫入者本地端的 trip.updatedAt 都還
+    // 沒來得及更新成新版本，用時間戳記比較會誤判成「別人更新的」。
+    if (trip.id) tripEvents.emit('trip-updated', trip.id, meta || {});
   }
 }
 
