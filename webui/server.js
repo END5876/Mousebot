@@ -139,14 +139,19 @@ function openTripSseStream(res, tripId) {
 // 訂閱 storage 層的變更事件：不管是 webui 存檔，還是 Discord 面板操作，
 // 只要呼叫過 storage.touchTrip()，這裡就會收到通知並廣播給該行程目前
 // 所有開著的 SSE 連線。
-storage.tripEvents.on('trip-updated', (tripId) => {
+storage.tripEvents.on('trip-updated', (tripId, meta) => {
   const subscribers = tripSubscribers.get(tripId);
   if (!subscribers || !subscribers.size) return; // 沒有人在看這個行程，省下組資料的成本
 
   const found = storage.findTripById(tripId);
   if (!found) return; // 理論上不會發生（剛觸發過 touchTrip 代表行程存在），防呆用
 
-  const payload = `event: trip-updated\ndata: ${JSON.stringify(found.trip)}\n\n`;
+  // 🆕 [即時同步] 用 envelope 包一層，除了行程本身還夾帶 writerId：
+  // 讓寫入者本人的分頁可以精準比對「這筆是不是我自己剛存的」，不用靠比較
+  // updatedAt 的時間先後（那個做法在 SSE 推播跟 PUT 回應是兩條獨立連線的
+  // 情況下會有競速問題，見 storage.js 的 touchTrip() 說明）。
+  const envelope = { trip: found.trip, writerId: (meta && meta.writerId) || null };
+  const payload = `event: trip-updated\ndata: ${JSON.stringify(envelope)}\n\n`;
   for (const res of subscribers) {
     res.write(payload);
   }
@@ -433,7 +438,12 @@ function startWebApi(options = {}) {
         }
       }
       const incoming = req.body || {};
+      // 🆕 [即時同步] 取出前端這次存檔附帶的 writerId（若有），等一下連同
+      // touchTrip() 一起送給 SSE 廣播，讓寫入者本人可以認出「這是我自己」。
+      // 限制長度只是基本防呆，這只是一個不透光的識別字串，不做任何權限用途。
+      const writerId = typeof incoming.writerId === 'string' ? incoming.writerId.slice(0, 64) : null;
       delete incoming.expectedUpdatedAt; // 只是拿來比對版本用的欄位，不屬於行程資料本身，避免被存進去
+      delete incoming.writerId; // 同上，不是行程資料欄位
       // 🔒 [分享連結安全性] shareLinks 永遠沿用伺服器上原有的清單，完全忽略
       // 前端送上來的 shareLinks 內容。
       // 理由一（非擁有者）：避免持有「可編輯」分享連結的人竄改分享清單。
@@ -452,7 +462,7 @@ function startWebApi(options = {}) {
       // 寫入路徑（「儲存到 Bot」按鈕），先前這裡繞過 touchTrip() 直接賦值，
       // 導致 webui 存檔完全不會推播給其他分頁，是「都要重整頁面才會更新」
       // 的根本原因。
-      storage.touchTrip(repaired);
+      storage.touchTrip(repaired, { writerId });
       storage.persist();
       res.json(repaired);
     } catch (err) {
@@ -639,15 +649,18 @@ function startWebApi(options = {}) {
       }
 
       const incoming = req.body || {};
+      const writerId = typeof incoming.writerId === 'string' ? incoming.writerId.slice(0, 64) : null;
       delete incoming.expectedUpdatedAt;
+      delete incoming.writerId;
       // 🔒 同上方 PUT /api/trip/... 的安全性備註：分享連結持有者送來的內容，
       // shareLinks 欄位一律忽略、沿用伺服器上原本的清單，避免被拿來竄改
       // 分享連結本身。
       incoming.shareLinks = found.trip.shareLinks;
       const repaired = storage.repairTrip({ ...incoming, id: found.trip.id });
       found.guild.trips[found.trip.id] = repaired;
-      // 🆕 [多人協作 / 即時同步] 同上，改用 touchTrip() 才會觸發 SSE 廣播。
-      storage.touchTrip(repaired);
+      // 🆕 [多人協作 / 即時同步] 同上，改用 touchTrip() 才會觸發 SSE 廣播，
+      // 並一併帶上 writerId 讓寫入者本人可以被正確辨識出來。
+      storage.touchTrip(repaired, { writerId });
       storage.persist();
       res.json({ trip: repaired, permission: found.shareLink.permission });
     } catch (err) {
