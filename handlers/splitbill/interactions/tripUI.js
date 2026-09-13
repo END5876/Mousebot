@@ -144,6 +144,11 @@ module.exports = {
       }
       delete guild.trips[trip.id];
       storage.persist();
+      // 🆕 [即時同步] 通知所有正在開著這個行程的 webui 分頁：行程已被刪除，
+      // 讓它們主動關閉連線、提醒使用者，而不是繼續對著一個已經不存在的
+      // 行程操作（例如按下「儲存回 Bot」會因為 tripId 找不到而被當成
+      // 建立新行程，見 webui/server.js 的 PUT /api/trip/:guildId/:tripId）。
+      storage.tripEvents.emit('trip-deleted', trip.id);
 
       return showMainMenu(interaction, `✅ 已徹底銷毀行程 \`${trip.name}\` 及其所有檔案。`);
     }

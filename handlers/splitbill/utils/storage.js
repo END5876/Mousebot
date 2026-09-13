@@ -3,6 +3,19 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { EventEmitter } = require('events');
+
+// ── [多人協作 / 即時同步] ──────────────────────────────────────────
+// 任何管道（webui 存檔、Discord 面板按鈕、快速指令…）只要呼叫 touchTrip()，
+// 就會在這裡發出一個 'trip-updated' 事件並帶上 tripId。webui/server.js 會
+// 訂閱這個事件，把最新的行程資料透過 SSE 推播給所有正在瀏覽該行程的分頁，
+// 不需要在每個寫入點各自補一段「通知前端」的程式碼——只要有 touchTrip()
+// 就會自動觸發，涵蓋 Discord 端與 webui 端所有既有的寫入路徑。
+// setMaxListeners(0)：同一個行程可能同時有多個分頁在監聽，訂閱數不受
+// Node 預設 10 個的上限限制（這裡的訂閱者是可控的伺服器內部連線，不是
+// 使用者可任意觸發的無界輸入，不會造成真正的記憶體洩漏風險）。
+const tripEvents = new EventEmitter();
+tripEvents.setMaxListeners(0);
 
 // ── 統一寫入專案根目錄的 data/ 資料夾（與其他模組的持久化資料同層）──
 const DATA_DIR = path.join(__dirname, '..', '..', '..', 'data');
@@ -238,6 +251,12 @@ function persist() {
 function touchTrip(trip) {
   if (trip && typeof trip === 'object') {
     trip.updatedAt = Date.now();
+    // 🆕 [即時同步] 廣播「這個行程剛剛被改過」，讓 webui 的 SSE 訂閱者可以
+    // 重新讀取並推播給前端。刻意只送 tripId、不在這裡夾帶完整行程物件，
+    // 讓廣播的當下永遠是「觸發事件」，實際要推播的資料由訂閱端（server.js）
+    // 自行用 findTripById() 讀取當下最新版本，避免萬一同一輪事件循環內
+    // trip 物件又被改了第二次，訂閱端拿到的還是舊的快照。
+    if (trip.id) tripEvents.emit('trip-updated', trip.id);
   }
 }
 
@@ -258,6 +277,22 @@ function isShareLinkExpired(link) {
  * 內部的 guildId/tripId，多一層資訊不外洩的保護。
  * @returns {{ guild: object, trip: object, shareLink: object } | null}
  */
+/**
+ * 🆕 [即時同步] 依 tripId 在「所有伺服器」裡找出對應的行程，供 SSE 廣播時
+ * 讀取最新版本使用。做法與 findTripByShareToken() 一致（tripId 本身在
+ * 目前的資料結構下是全域唯一的，不需要額外帶 guildId）。
+ * @returns {{ guild: object, trip: object } | null}
+ */
+function findTripById(tripId) {
+  if (!tripId) return null;
+  const all = loadAll();
+  for (const guildId of Object.keys(all)) {
+    const guild = all[guildId];
+    if (guild.trips[tripId]) return { guild, trip: guild.trips[tripId] };
+  }
+  return null;
+}
+
 function findTripByShareToken(token) {
   if (!token) return null;
   const all = loadAll();
@@ -286,4 +321,6 @@ module.exports = {
   repairShareLink,
   isShareLinkExpired,
   findTripByShareToken,
+  findTripById,
+  tripEvents,
 };
