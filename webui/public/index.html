@@ -947,7 +947,6 @@
 
     <div class="card">
       <h2 class="section-title">支出明細 <span class="n" id="expenseCount"></span>
-        <button class="btn btn-brass btn-sm" style="margin-left:auto;" id="btnSyncExpenseList" onclick="withLoading(this,'同步中…',()=>saveTripToApi())" data-write-only>儲存</button>
       </h2>
       <div id="expenseList"></div>
     </div>
@@ -2633,13 +2632,33 @@ function editExpense(id){
   showMainTab('expenses');
   document.getElementById('panel-expenses').scrollIntoView({behavior:'smooth'});
 }
-function deleteExpense(id){
-  const idx = trip.expenses.findIndex(e=>e.id===id);
+async function deleteExpense(id){
+  const idx = trip.expenses.findIndex(e => e.id === id);
   if (idx === -1) return;
-  const [removed] = trip.expenses.splice(idx,1);
-  if (editingExpenseId===id) resetExpenseForm();
+
+  const expense = trip.expenses[idx];
+  const confirmed = await confirmModal(
+    `確定要刪除支出「${expense.description || '未命名支出'}」嗎？確認後將立即儲存到 Bot。`,
+    {
+      title: '確認刪除支出',
+      confirmText: '確認刪除',
+      cancelText: '取消',
+      danger: true,
+    }
+  );
+
+  if (!confirmed) return;
+
+  trip.expenses.splice(idx, 1);
+
+  if (editingExpenseId === id) {
+    resetExpenseForm();
+  }
+
   renderAll();
-  toastUndo(`已刪除「${removed.description}」`, ()=>{ trip.expenses.splice(idx,0,removed); renderAll(); });
+
+  // 確認刪除後立即寫入伺服器；分享連結模式也會自動走對應的儲存 API。
+  await saveTripToApi();
 }
 
 /* ===================== deposit CRUD ===================== */
@@ -2838,6 +2857,7 @@ async function confirmNewTrip(){
   resetOverviewSectionCurrencyState();
   localFileHandle = null;
   updateLocalFileStatus();
+  disconnectTripEventStream(); // 🆕 [即時同步] 清空後不再是原本那個行程，停止接收舊行程的推播
   renderAll();
   toastUndo('已清空行程，開始新的一個', ()=>{ trip = snapshot; renderAll(); });
 }
@@ -3219,6 +3239,128 @@ async function restoreOwnerConnectionState(){
   }
 }
 
+/* =====================================================================
+   🆕 [即時同步] 多人協作：SSE（Server-Sent Events）即時推播
+   ---------------------------------------------------------------------
+   任何人（webui 存檔、或 Discord 面板操作）異動這個行程時，伺服器都會
+   把最新的行程資料推播到這裡。設計原則：
+   - 擁有者模式：先用一般帶 x-api-key header 的請求換一張短效、一次性的
+     票券（EventSource 無法自訂 header，不能直接帶金鑰去開連線），
+     再用票券開 SSE。連線中斷時（含票券只能用一次、網路波動）一律自己
+     重新換票、重新連線，不依賴瀏覽器對同一個網址的內建自動重連
+     （那樣會直接被拒絕，因為票券已經用掉了）。
+   - 分享連結模式：沿用既有設計，token 本身就是路徑上的憑證，不需換票。
+   - 收到推播時：若使用者目前沒有正在編輯中的表單/認領流程，直接套用
+     並重繪；若有，先嘗試用既有的 tryMergeTrips() 自動合併，合併不了
+     （極少發生）才用 toast 提醒使用者手動處理，不會無聲蓋掉正在輸入的
+     內容。
+===================================================================== */
+let tripEventSource = null;
+let tripEventReconnectTimer = null;
+
+function disconnectTripEventStream(){
+  clearTimeout(tripEventReconnectTimer);
+  tripEventReconnectTimer = null;
+  if (tripEventSource){
+    tripEventSource.close();
+    tripEventSource = null;
+  }
+}
+
+async function connectTripEventStream(){
+  disconnectTripEventStream();
+  try{
+    let url;
+    if (shareMode){
+      url = `${apiBaseUrl()}/api/shared-trip/${encodeURIComponent(shareMode.token)}/events`;
+    } else {
+      const guildId = document.getElementById('guildSelect').value;
+      const tripId = document.getElementById('tripSelect').value || trip.id;
+      if (!guildId || !tripId) return; // 尚未連線到任何行程，之後 loadTripFromApi() 成功時會再呼叫一次
+      const ticketRes = await fetch(apiBaseUrl() + '/api/sse-ticket', { method: 'POST', headers: apiHeaders() });
+      if (!ticketRes.ok) return; // 換票失敗（例如金鑰失效）就安靜放棄，不影響其他既有功能
+      const { ticket } = await ticketRes.json();
+      url = `${apiBaseUrl()}/api/trip/${encodeURIComponent(guildId)}/${encodeURIComponent(tripId)}/events?ticket=${encodeURIComponent(ticket)}`;
+    }
+
+    const es = new EventSource(url);
+    tripEventSource = es;
+
+    es.addEventListener('trip-updated', (evt) => {
+      try{ handleIncomingTripUpdate(JSON.parse(evt.data)); }catch(e){ /* 忽略解析失敗的單一事件 */ }
+    });
+
+    // 🆕 [即時同步] 行程被刪除（例如在 Discord 面板按了「刪除此行程」）：
+    // 伺服器送完這個事件後會直接關閉連線，這裡主動斷線＋提醒使用者，
+    // 不要再嘗試自動重連（trip 已經不存在，重連只會一直拿到 404）。
+    es.addEventListener('trip-deleted', () => {
+      handleIncomingTripDeleted();
+    });
+
+    es.onerror = () => {
+      // 連線中斷：關閉舊連線，稍等一下用「新換的票券」重新連線，
+      // 不讓瀏覽器用同一個（已失效的一次性票券）網址自動重試。
+      es.close();
+      if (tripEventSource === es) tripEventSource = null;
+      clearTimeout(tripEventReconnectTimer);
+      tripEventReconnectTimer = setTimeout(connectTripEventStream, 3000);
+    };
+  }catch(e){
+    // 即時同步屬於錦上添花的功能，換票或建立連線失敗都不應該擋住其他既有功能運作
+  }
+}
+
+function handleIncomingTripUpdate(rawPushedTrip){
+  const pushedTrip = repairTrip(rawPushedTrip);
+
+  // Echo 抑制：如果推播來的版本並沒有比我們現在手上的新，代表這通常是
+  // 我們自己剛存檔造成的那次廣播，或是一則過期的訊息，直接忽略即可。
+  if (trip.updatedAt && pushedTrip.updatedAt && pushedTrip.updatedAt <= trip.updatedAt) return;
+
+  const isEditing = !!(
+    editingExpenseId || editingDepositId ||
+    (receiptState && Array.isArray(receiptState.items) && receiptState.items.length)
+  );
+
+  if (!isEditing){
+    trip = pushedTrip;
+    lastSyncedTripJSON = JSON.stringify(trip);
+    renderAll();
+    toast('偵測到其他人更新了這個行程，畫面已同步', 'info');
+    return;
+  }
+
+  // 目前有未儲存的編輯內容（表單填到一半、或正在認領帳單品項）：
+  // 嘗試自動合併，避免正在輸入的東西被無聲蓋掉。
+  const merged = tryMergeTrips(trip, pushedTrip);
+  if (merged){
+    trip = merged;
+    lastSyncedTripJSON = JSON.stringify(trip);
+    renderAll();
+    toast('已自動合併其他人剛剛的更新', 'info');
+  } else {
+    toast('其他人剛更新了這個行程，但無法自動合併，請儘快儲存或重新整理頁面取得最新版本', 'error');
+  }
+}
+
+// 🆕 [即時同步] 行程被刪除時的處理：分享連結模式下這個 token 本身也已經
+// 跟著行程一起消失了（shareLinks 是存在 trip 物件裡的），直接沿用既有的
+// 「連結失效」全頁提示；擁有者模式下沒有對應的全頁畫面，用醒目、不會自動
+// 消失太快的 toast 提醒，並刷新伺服器/行程清單，避免使用者沒注意到還繼續
+// 對著一個已經不存在的行程按「儲存回 Bot」（那會被伺服器當成建立一個
+//全新、同名的行程，見 webui/server.js 的 PUT /api/trip/:guildId/:tripId）。
+function handleIncomingTripDeleted(){
+  disconnectTripEventStream();
+  if (shareMode){
+    showShareError('這個行程已經被刪除了，分享連結也跟著失效。');
+    return;
+  }
+  toast('⚠️ 這個行程已經在別處被刪除了。畫面上仍保留刪除前的最後一份資料，但請避免直接按「儲存回 Bot」，那會被當成建立一個新行程。', 'error', { duration: 10000 });
+  if (document.getElementById('guildSelect').value){
+    refreshGuildList().catch(()=>{});
+  }
+}
+
 async function loadTripFromApi(){
   const guildId = document.getElementById('guildSelect').value;
   const tripId = document.getElementById('tripSelect').value;
@@ -3240,6 +3382,7 @@ async function loadTripFromApi(){
     if (currentSettingsSub === 'share') renderShareLinksPanel();
     saveOwnerConnectionState();
     renderAll();
+    connectTripEventStream();
   }catch(err){
     toast('載入失敗：' + err.message, 'error');
   }
@@ -3257,64 +3400,106 @@ async function saveTripToApi(){
     toast('請先在這裡完成連線（選擇伺服器與行程），之後就能在支出／轉帳頁直接按「儲存到 Bot」了', 'error');
     return;
   }
-  // 版本比對：儲存前先看看伺服器上的版本跟我們最後一次同步的是否一致，
-  // 偵測到衝突時嘗試自動合併（把伺服器有但本地沒有的筆數加進來），
-  // 只有在無法自動合併時才詢問使用者。
-  try{
-    const checkRes = await fetch(`${apiBaseUrl()}/api/trip/${encodeURIComponent(guildId)}/${encodeURIComponent(tripId)}`, { headers: apiHeaders() });
-    if (checkRes.ok){
-      const serverTrip = await checkRes.json();
-      if (!lastSyncedTripJSON) {
-        // 首次儲存（從未載入過），直接確認
-        const proceed = await confirmModal(`確定要把目前的行程資料儲存到 Bot 伺服器（${guildId} / ${tripId}）嗎？`, { confirmText:'儲存' });
-        if (!proceed) return;
-      } else if (serverTrip.updatedAt && trip.updatedAt && serverTrip.updatedAt !== trip.updatedAt) {
-        // 伺服器版本比本地版本新，嘗試智慧合併
-        const merged = tryMergeTrips(trip, serverTrip);
-        if (merged) {
-          // 合併成功：靜默套用合併結果，不打擾使用者
-          trip = merged;
-          renderAll();
-          toast('已自動合併其他人的更新', 'info');
-        } else {
-          // 合併失敗（有衝突）：詢問使用者
-          const proceed = await confirmModal('伺服器上的資料已被其他人更新，且與你的變更有衝突，無法自動合併。確定要用你目前這份覆蓋掉嗎？', { danger:true, confirmText:'仍要覆蓋', title:'偵測到資料衝突' });
+
+  // 🆕 [併發保護] 最多重試幾次：多人幾乎同時存檔時，即使每次都被伺服器的
+  // 原子化版本檢查擋下（409），本地合併後重試一次通常就會成功；重試上限
+  // 只是避免理論上的無限迴圈（例如短時間內一直有新的人持續搶著存檔）。
+  const MAX_SAVE_RETRY = 3;
+
+  for (let attempt = 0; attempt < MAX_SAVE_RETRY; attempt++){
+    // 版本比對：儲存前先看看伺服器上的版本跟我們最後一次同步的是否一致，
+    // 偵測到衝突時嘗試自動合併（把伺服器有但本地沒有的筆數加進來），
+    // 只有在無法自動合併時才詢問使用者。
+    // ⚠️ 這一步只是「儘量減少」不必要的衝突、給使用者更即時的合併體驗，
+    // 不是真正的併發保護——它跟下面的 PUT 是兩個分開的請求，兩者之間仍有
+    // 極短的競爭視窗。真正的保護在於 PUT 請求本身帶了 expectedUpdatedAt，
+    // 由伺服器端原子化比對＋拒絕（見下方 409 處理）。
+    try{
+      const checkRes = await fetch(`${apiBaseUrl()}/api/trip/${encodeURIComponent(guildId)}/${encodeURIComponent(tripId)}`, { headers: apiHeaders() });
+      if (checkRes.ok){
+        const serverTrip = await checkRes.json();
+        if (!lastSyncedTripJSON) {
+          // 首次儲存（從未載入過），直接確認
+          const proceed = await confirmModal(`確定要把目前的行程資料儲存到 Bot 伺服器（${guildId} / ${tripId}）嗎？`, { confirmText:'儲存' });
           if (!proceed) return;
-        }
-      } else if (lastSyncedTripJSON && JSON.stringify(serverTrip) !== lastSyncedTripJSON && !serverTrip.updatedAt) {
-        // 舊版伺服器（沒有 updatedAt），退回原本的整包比對
-        const merged = tryMergeTrips(trip, serverTrip);
-        if (merged) {
-          trip = merged;
-          renderAll();
-          toast('已自動合併其他人的更新', 'info');
-        } else {
-          const proceed = await confirmModal('伺服器上的資料似乎已經被更新過（可能是別人剛存過，或你在別的分頁存過），確定要用你目前這份覆蓋掉嗎？', { danger:true, confirmText:'仍要覆蓋', title:'偵測到資料衝突' });
-          if (!proceed) return;
+        } else if (serverTrip.updatedAt && trip.updatedAt && serverTrip.updatedAt !== trip.updatedAt) {
+          // 伺服器版本比本地版本新，嘗試智慧合併
+          const merged = tryMergeTrips(trip, serverTrip);
+          if (merged) {
+            // 合併成功：靜默套用合併結果，不打擾使用者
+            trip = merged;
+            renderAll();
+            toast('已自動合併其他人的更新', 'info');
+          } else {
+            // 合併失敗（有衝突）：詢問使用者
+            const proceed = await confirmModal('伺服器上的資料已被其他人更新，且與你的變更有衝突，無法自動合併。確定要用你目前這份覆蓋掉嗎？', { danger:true, confirmText:'仍要覆蓋', title:'偵測到資料衝突' });
+            if (!proceed) return;
+          }
+        } else if (lastSyncedTripJSON && JSON.stringify(serverTrip) !== lastSyncedTripJSON && !serverTrip.updatedAt) {
+          // 舊版伺服器（沒有 updatedAt），退回原本的整包比對
+          const merged = tryMergeTrips(trip, serverTrip);
+          if (merged) {
+            trip = merged;
+            renderAll();
+            toast('已自動合併其他人的更新', 'info');
+          } else {
+            const proceed = await confirmModal('伺服器上的資料似乎已經被更新過（可能是別人剛存過，或你在別的分頁存過），確定要用你目前這份覆蓋掉嗎？', { danger:true, confirmText:'仍要覆蓋', title:'偵測到資料衝突' });
+            if (!proceed) return;
+          }
         }
       }
-    }
-  }catch(e){ /* 檢查失敗就略過，不要因為這個擋住存檔 */ }
+    }catch(e){ /* 檢查失敗就略過，不要因為這個擋住存檔 */ }
 
-  try{
-    const res = await fetch(`${apiBaseUrl()}/api/trip/${encodeURIComponent(guildId)}/${encodeURIComponent(tripId)}`, {
-      method: 'PUT',
-      headers: Object.assign({ 'Content-Type': 'application/json' }, apiHeaders()),
-      body: JSON.stringify(trip)
-    });
-    if (!res.ok){
-      const body = await res.json().catch(()=>({}));
-      throw new Error(body.error || ('HTTP ' + res.status));
+    try{
+      // 🆕 [併發保護] 把本地目前認定的版本號一併送給伺服器；伺服器會在真正
+      // 寫入前原子化比對這個版本號是否仍然等於它「當下」的版本，不一致就
+      // 回傳 409，讓下面的重試邏輯接手，而不是悶不吭聲地整包覆蓋。
+      const payload = Object.assign({}, trip, { expectedUpdatedAt: trip.updatedAt || null });
+      const res = await fetch(`${apiBaseUrl()}/api/trip/${encodeURIComponent(guildId)}/${encodeURIComponent(tripId)}`, {
+        method: 'PUT',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, apiHeaders()),
+        body: JSON.stringify(payload)
+      });
+
+      if (res.status === 409){
+        // 真的被別人搶先一步存檔了（上面的預先檢查沒能攔到這個極短的競爭
+        // 視窗）：拿伺服器回傳的「當下最新版本」合併，合併成功就重試一次；
+        // 合併不了（真衝突）就不再重試，請使用者重新整理頁面。
+        const body = await res.json().catch(()=>({}));
+        const serverTrip = body.currentTrip;
+        const merged = serverTrip ? tryMergeTrips(trip, serverTrip) : null;
+
+        if (!merged){
+          toast('儲存失敗：資料版本衝突且無法自動合併，請重新整理頁面後再試一次。', 'error');
+          return;
+        }
+
+        trip = merged;
+        renderAll();
+        if (attempt < MAX_SAVE_RETRY - 1){
+          toast('儲存時發現有人剛好搶先一步更新，已自動合併並重新儲存…', 'info');
+          continue; // 用合併後的版本再跑一次迴圈重新存一次
+        }
+        toast('已自動合併其他人的更新，但重試次數已用完，請再按一次「儲存」把合併後的結果存回 Bot。', 'error');
+        return;
+      }
+
+      if (!res.ok){
+        const body = await res.json().catch(()=>({}));
+        throw new Error(body.error || ('HTTP ' + res.status));
+      }
+      const savedData = await res.json();
+      trip = repairTrip(savedData); // 用伺服器回傳的版本（含最新 updatedAt）更新本地
+      lastSyncedTripJSON = JSON.stringify(trip);
+      toast('已儲存到 Bot 伺服器', 'success');
+      updateBotStatusPill(true, trip.name);
+      saveOwnerConnectionState();
+      renderAll();
+      return; // 成功，結束整個函式
+    }catch(err){
+      toast('儲存失敗：' + err.message, 'error');
+      return;
     }
-    const savedData = await res.json();
-    trip = repairTrip(savedData); // 用伺服器回傳的版本（含最新 updatedAt）更新本地
-    lastSyncedTripJSON = JSON.stringify(trip);
-    toast('已儲存到 Bot 伺服器', 'success');
-    updateBotStatusPill(true, trip.name);
-    saveOwnerConnectionState();
-    renderAll();
-  }catch(err){
-    toast('儲存失敗：' + err.message, 'error');
   }
 }
 
@@ -3383,23 +3568,56 @@ async function saveSharedTripToApi(){
     toast('這個分享連結是唯讀的，無法儲存變更。', 'error');
     return;
   }
-  try{
-    const res = await fetch(`${apiBaseUrl()}/api/shared-trip/${encodeURIComponent(shareMode.token)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(trip)
-    });
-    if (!res.ok){
-      const body = await res.json().catch(()=>({}));
-      throw new Error(body.error || ('HTTP ' + res.status));
+
+  // 🆕 [併發保護] 跟擁有者版本 saveTripToApi() 用同一套機制：帶上
+  // expectedUpdatedAt 讓伺服器原子化比對，衝突時合併＋重試，見那邊的
+  // 完整說明。分享連結版本先前完全沒有任何併發保護，兩位朋友同時透過
+  // 同一個分享連結編輯時特別容易中獎，這裡優先度其實更高。
+  const MAX_SAVE_RETRY = 3;
+
+  for (let attempt = 0; attempt < MAX_SAVE_RETRY; attempt++){
+    try{
+      const payload = Object.assign({}, trip, { expectedUpdatedAt: trip.updatedAt || null });
+      const res = await fetch(`${apiBaseUrl()}/api/shared-trip/${encodeURIComponent(shareMode.token)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (res.status === 409){
+        const body = await res.json().catch(()=>({}));
+        const serverTrip = body.currentTrip;
+        const merged = serverTrip ? tryMergeTrips(trip, serverTrip) : null;
+
+        if (!merged){
+          toast('儲存失敗：資料版本衝突且無法自動合併，請重新整理頁面後再試一次。', 'error');
+          return;
+        }
+
+        trip = merged;
+        renderAll();
+        if (attempt < MAX_SAVE_RETRY - 1){
+          toast('儲存時發現有人剛好搶先一步更新，已自動合併並重新儲存…', 'info');
+          continue;
+        }
+        toast('已自動合併其他人的更新，但重試次數已用完，請再按一次「儲存」把合併後的結果存回去。', 'error');
+        return;
+      }
+
+      if (!res.ok){
+        const body = await res.json().catch(()=>({}));
+        throw new Error(body.error || ('HTTP ' + res.status));
+      }
+      const data = await res.json();
+      trip = repairTrip(data.trip);
+      lastSyncedTripJSON = JSON.stringify(trip);
+      toast('已儲存', 'success');
+      renderAll();
+      return;
+    }catch(err){
+      toast('儲存失敗：' + err.message, 'error');
+      return;
     }
-    const data = await res.json();
-    trip = repairTrip(data.trip);
-    lastSyncedTripJSON = JSON.stringify(trip);
-    toast('已儲存', 'success');
-    renderAll();
-  }catch(err){
-    toast('儲存失敗：' + err.message, 'error');
   }
 }
 
@@ -3664,6 +3882,7 @@ async function initShareMode(token){
     applyShareModeUI();
     editingExpenseId = null; editingDepositId = null;
     renderAll();
+    connectTripEventStream();
   }catch(err){
     showShareError('連線時發生問題，請確認網路連線後重新整理頁面看看。');
   }
@@ -3715,6 +3934,7 @@ async function applyUrlParams(){
 }
 
 /* init */
+window.addEventListener('beforeunload', disconnectTripEventStream); // 🆕 [即時同步] 離開頁面時主動關閉 SSE 連線，讓伺服器能立即釋放資源
 initFsApiUi();
 renderAll();
 // 🆕 [分享連結] 分享連結模式優先於一般的擁有者自動連線流程——兩者互斥，

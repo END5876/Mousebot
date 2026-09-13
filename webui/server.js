@@ -40,6 +40,7 @@
  */
 
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
@@ -66,6 +67,106 @@ async function getFxRatesFor(base){
   fxCache.set(base, entry);
   return entry;
 }
+
+// ════════════════════════════════════════════════════════════════
+// 🆕 [即時同步] SSE（Server-Sent Events）：讓多個同時開著這個行程的分頁
+// （包含 webui 彼此之間、以及 webui 與 Discord 面板之間）在資料被任一方
+// 改動時互相即時同步，不用手動重新整理才會看到別人剛存的東西。
+//
+// 設計重點：
+// - 廣播來源統一掛在 storage.tripEvents（見 storage.js 的 touchTrip()），
+//   涵蓋所有寫入路徑，不用在每個 API 端點各自補播送邏輯。
+// - 瀏覽器原生 EventSource 不支援自訂 header，因此無法沿用其餘 /api/*
+//   路由靠 x-api-key header 驗證的方式。擁有者連線改用「短效、一次性
+//   票券」：先用一般帶 header 的請求換票（POST /api/sse-ticket），
+//   再用票券建立 SSE 連線，避免把長效的 SPLITBILL_API_KEY 直接放進
+//   連線網址、留在伺服器存取紀錄裡。
+// - 分享連結（/api/shared-trip/:token/events）沿用既有設計：token 本身
+//   就是寫在路徑上的憑證（跟同檔案其他 /api/shared-trip/:token 端點一致），
+//   不需要額外換票。
+// ════════════════════════════════════════════════════════════════
+const sseTickets = new Map(); // ticket -> { isOwner, providedKey, expiresAt }
+const SSE_TICKET_TTL_MS = 30 * 1000; // 換票後 30 秒內沒拿去開 SSE 連線就作廢
+
+function pruneSseTickets() {
+  const now = Date.now();
+  for (const [ticket, entry] of sseTickets) {
+    if (entry.expiresAt < now) sseTickets.delete(ticket);
+  }
+}
+
+// tripId -> Set<express.Response>，每個 res 都是一條保持開啟中的 SSE 連線
+const tripSubscribers = new Map();
+
+function addTripSubscriber(tripId, res) {
+  if (!tripSubscribers.has(tripId)) tripSubscribers.set(tripId, new Set());
+  tripSubscribers.get(tripId).add(res);
+}
+function removeTripSubscriber(tripId, res) {
+  const set = tripSubscribers.get(tripId);
+  if (!set) return;
+  set.delete(res);
+  if (!set.size) tripSubscribers.delete(tripId);
+}
+
+/**
+ * 開啟一條 SSE 串流並掛進訂閱表。連線本身不主動關閉，靠使用者關閉分頁／
+ * 網路中斷觸發 res 的 'close' 事件時清理；期間定期送出註解行當心跳，
+ * 避免部分反向代理或 PaaS 因為連線閒置太久而主動斷開。
+ */
+function openTripSseStream(res, tripId) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no', // 避免 nginx 等反向代理把 SSE 資料流緩衝住不即時送出
+  });
+  res.write('event: connected\ndata: {}\n\n');
+
+  addTripSubscriber(tripId, res);
+
+  const keepAlive = setInterval(() => {
+    res.write(': ping\n\n');
+  }, 25000);
+  if (typeof keepAlive.unref === 'function') keepAlive.unref();
+
+  res.on('close', () => {
+    clearInterval(keepAlive);
+    removeTripSubscriber(tripId, res);
+  });
+}
+
+// 訂閱 storage 層的變更事件：不管是 webui 存檔，還是 Discord 面板操作，
+// 只要呼叫過 storage.touchTrip()，這裡就會收到通知並廣播給該行程目前
+// 所有開著的 SSE 連線。
+storage.tripEvents.on('trip-updated', (tripId) => {
+  const subscribers = tripSubscribers.get(tripId);
+  if (!subscribers || !subscribers.size) return; // 沒有人在看這個行程，省下組資料的成本
+
+  const found = storage.findTripById(tripId);
+  if (!found) return; // 理論上不會發生（剛觸發過 touchTrip 代表行程存在），防呆用
+
+  const payload = `event: trip-updated\ndata: ${JSON.stringify(found.trip)}\n\n`;
+  for (const res of subscribers) {
+    res.write(payload);
+  }
+});
+
+// 🆕 [即時同步] 行程被刪除時（見 tripUI.js 的 trip_btn_delete_confirm）：
+// 通知所有訂閱者一聲，然後直接把連線關掉——這個行程已經不存在了，之後
+// 也不會再有任何 'trip-updated' 事件可以推播，繼續留著連線沒有意義，
+// 不如讓伺服器跟前端都能立刻釋放資源。
+storage.tripEvents.on('trip-deleted', (tripId) => {
+  const subscribers = tripSubscribers.get(tripId);
+  if (!subscribers || !subscribers.size) return;
+
+  const payload = 'event: trip-deleted\ndata: {}\n\n';
+  for (const res of subscribers) {
+    res.write(payload);
+    res.end();
+  }
+  tripSubscribers.delete(tripId);
+});
 
 const RECEIPT_PROMPT = `你是一個帳單／收據辨識助手。請仔細閱讀這張照片，只回傳一個 JSON 物件，不要有任何其他文字、不要用 markdown code block 包起來、不要加註解。
 
@@ -160,6 +261,10 @@ function startWebApi(options = {}) {
   // 因此這裡直接放行、把驗證完全交給該端點自己依路徑上的 token 判斷。
   app.use('/api', (req, res, next) => {
     if (req.path.startsWith('/shared-trip/')) return next();
+    // 🆕 [即時同步] SSE 端點無法使用 x-api-key header（瀏覽器原生 EventSource
+    // 不支援自訂 header），驗證改在路由本身用一次性票券（見下方 sse-ticket
+    // 相關端點）處理，這裡直接放行，不吃這裡的 header 檢查。
+    if (req.path.endsWith('/events')) return next();
     if (!apiKey) return next(); // 沒設定金鑰就不驗證（僅建議在受信任的內網／VPN 環境這樣用）
     const provided = req.get('x-api-key');
     if (!provided) {
@@ -194,6 +299,56 @@ function startWebApi(options = {}) {
     }
     return true;
   }
+
+  // ════════════════════════════════════════════════════════════════
+  // 🆕 [即時同步] POST /api/sse-ticket：擁有者專用，用一般的 header 驗證
+  // （沿用上面 app.use('/api', ...) 的 x-api-key 檢查）換取一張短效、
+  // 一次性的票券，再拿這張票券去開啟下面的 SSE 連線。分享連結不需要
+  // 呼叫這個端點——它的 SSE 連線直接用網址上的 token 當憑證即可。
+  // ════════════════════════════════════════════════════════════════
+  app.post('/api/sse-ticket', (req, res) => {
+    pruneSseTickets();
+    const ticket = crypto.randomBytes(24).toString('hex');
+    sseTickets.set(ticket, {
+      isOwner: apiKey ? !!req.isOwner : true, // 沒設定金鑰時，整台伺服器沒有身份區分，視為擁有者
+      providedKey: req.providedKey || null,
+      expiresAt: Date.now() + SSE_TICKET_TTL_MS,
+    });
+    res.json({ ticket, expiresInMs: SSE_TICKET_TTL_MS });
+  });
+
+  // ---- GET /api/trip/:guildId/:tripId/events：SSE，這個行程被任何人改動時即時推播 ----
+  app.get('/api/trip/:guildId/:tripId/events', (req, res) => {
+    const guild = storage.getGuild(req.params.guildId);
+    const trip = guild.trips[req.params.tripId];
+    if (!trip) return res.status(404).json({ error: '找不到這個行程' });
+
+    let authCtx = { isOwner: true, providedKey: null };
+    if (apiKey) {
+      pruneSseTickets();
+      const ticketId = req.query.ticket;
+      const ticket = ticketId && sseTickets.get(ticketId);
+      if (!ticket || ticket.expiresAt < Date.now()) {
+        return res.status(401).json({ error: '缺少或已過期的連線憑證，請重新整理頁面再試一次。' });
+      }
+      sseTickets.delete(ticketId); // 單次使用，用過即棄
+      authCtx = ticket;
+    }
+
+    if (!authorizeTripAccess(authCtx, res, trip, false)) return;
+
+    openTripSseStream(res, trip.id);
+  });
+
+  // ---- GET /api/shared-trip/:token/events：SSE，分享連結版本 ----
+  app.get('/api/shared-trip/:token/events', (req, res) => {
+    const found = storage.findTripByShareToken(req.params.token);
+    if (!found) return res.status(404).json({ error: '這個分享連結不存在，可能已經被撤銷或網址有誤' });
+    if (storage.isShareLinkExpired(found.shareLink)) {
+      return res.status(403).json({ error: '這個分享連結已經過期，請跟建立連結的人索取新的連結' });
+    }
+    openTripSseStream(res, found.trip.id);
+  });
 
   // ---- GET /api/guilds：列出所有伺服器與底下的行程（給前端下拉選單用） ----
   // 🆕 [分享連結] 這裡會列出「全部」伺服器與行程名稱，分享連結的持有者絕對
@@ -256,7 +411,29 @@ function startWebApi(options = {}) {
       } else {
         if (!requireOwner(req, res)) return;
       }
+      // 🆕 [併發保護] 原子化版本比對（真正的樂觀鎖）：
+      // 先前的保護完全靠前端「存檔前先 GET 查一次現在的版本、比對後才 PUT」，
+      // 但這是兩個分開的 HTTP 請求，中間有一段競爭視窗——如果 A、B 兩個分頁
+      // 幾乎同時各自查完版本（都還沒看到對方），會誰都判斷「沒有衝突」，
+      // 兩邊都直接送出覆蓋式 PUT，最後送達的那個會整包蓋掉先送達的，較早
+      // 存的那份資料就消失。修正方式是把「檢查版本」搬進這次 PUT 請求本身，
+      // 讓檢查與寫入在伺服器這裡合併成單一原子操作：只要前端送來的
+      // expectedUpdatedAt 跟伺服器「當下」的版本對不上，就直接拒絕（409），
+      // 不會被任何其他請求插隊。前端收到 409 後會自動合併最新版本並重試
+      // （見 webui/public/index.html 的 saveTripToApi()）。
+      // 沒有帶 expectedUpdatedAt（例如非常舊版的前端）或行程原本就沒有
+      // updatedAt（尚未被任何人存過）時，維持原本行為、不擋。
+      if (existing) {
+        const expected = req.body && req.body.expectedUpdatedAt;
+        if (typeof expected === 'number' && typeof existing.updatedAt === 'number' && expected !== existing.updatedAt) {
+          return res.status(409).json({
+            error: '這個行程已經被其他人更新過，請合併最新版本後再儲存一次。',
+            currentTrip: existing,
+          });
+        }
+      }
       const incoming = req.body || {};
+      delete incoming.expectedUpdatedAt; // 只是拿來比對版本用的欄位，不屬於行程資料本身，避免被存進去
       // 🔒 [分享連結安全性] shareLinks 永遠沿用伺服器上原有的清單，完全忽略
       // 前端送上來的 shareLinks 內容。
       // 理由一（非擁有者）：避免持有「可編輯」分享連結的人竄改分享清單。
@@ -268,9 +445,14 @@ function startWebApi(options = {}) {
         incoming.shareLinks = existing.shareLinks;
       }
       const repaired = storage.repairTrip({ ...incoming, id: req.params.tripId });
-      // 🆕 [多人協作] 每次成功寫入都更新 updatedAt 時間戳記，供前端做輕量版本比對
-      repaired.updatedAt = Date.now();
       guild.trips[req.params.tripId] = repaired;
+      // 🆕 [多人協作 / 即時同步] 改用 storage.touchTrip() 而不是直接寫
+      // repaired.updatedAt = Date.now()：touchTrip() 內部除了蓋時間戳記，
+      // 也會 emit('trip-updated', ...) 觸發 SSE 廣播。這是 webui 最主要的
+      // 寫入路徑（「儲存到 Bot」按鈕），先前這裡繞過 touchTrip() 直接賦值，
+      // 導致 webui 存檔完全不會推播給其他分頁，是「都要重整頁面才會更新」
+      // 的根本原因。
+      storage.touchTrip(repaired);
       storage.persist();
       res.json(repaired);
     } catch (err) {
@@ -445,15 +627,27 @@ function startWebApi(options = {}) {
         return res.status(403).json({ error: '此分享連結為唯讀，無法儲存變更' });
       }
 
+      // 🆕 [併發保護] 原子化版本比對，理由同上方 PUT /api/trip/:guildId/:tripId。
+      // 分享連結版本先前完全沒有任何併發保護（連前端的「先查再比對」都沒有），
+      // 風險其實比擁有者版本更高，這裡一併補上。
+      const expected = req.body && req.body.expectedUpdatedAt;
+      if (typeof expected === 'number' && typeof found.trip.updatedAt === 'number' && expected !== found.trip.updatedAt) {
+        return res.status(409).json({
+          error: '這個行程已經被其他人更新過，請合併最新版本後再儲存一次。',
+          currentTrip: found.trip,
+        });
+      }
+
       const incoming = req.body || {};
+      delete incoming.expectedUpdatedAt;
       // 🔒 同上方 PUT /api/trip/... 的安全性備註：分享連結持有者送來的內容，
       // shareLinks 欄位一律忽略、沿用伺服器上原本的清單，避免被拿來竄改
       // 分享連結本身。
       incoming.shareLinks = found.trip.shareLinks;
       const repaired = storage.repairTrip({ ...incoming, id: found.trip.id });
-      // 🆕 [多人協作] 每次成功寫入都更新 updatedAt 時間戳記
-      repaired.updatedAt = Date.now();
       found.guild.trips[found.trip.id] = repaired;
+      // 🆕 [多人協作 / 即時同步] 同上，改用 touchTrip() 才會觸發 SSE 廣播。
+      storage.touchTrip(repaired);
       storage.persist();
       res.json({ trip: repaired, permission: found.shareLink.permission });
     } catch (err) {
