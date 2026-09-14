@@ -21,8 +21,8 @@ if (WARP_PROXY) {
 // ════════════════════════════════════════════════════════
 //  Cookies 檔案路徑（僅保留「已存在的外部檔案」路徑，不自動建立）
 // ════════════════════════════════════════════════════════
-const COOKIES_PATH    = path.join(__dirname, '..', 'cookies.txt');
-const YT_COOKIES_PATH = path.join(__dirname, '..', 'yt_cookies.txt');
+const COOKIES_PATH    = path.join(__dirname, '..','..', 'data', 'cookies.txt');
+const YT_COOKIES_PATH = path.join(__dirname, '..','..', 'data', 'www.youtube.com_cookies.txt');
 
 // ════════════════════════════════════════════════════════
 //  Bilibili 防爬蟲設定
