@@ -2181,6 +2181,80 @@ document.getElementById('expCurrency').addEventListener('change', ()=>{ document
 ===================================================================== */
 let receiptState = null; // { imageDataUrl, items:[{id,name,price,type,assignedTo:'shared'|string[]}] }
 
+// 🆕 [資料遺失保護] 帳單認領進度草稿：整個認領流程（上傳照片辨識 → 逐項認領 →
+// 建立支出）往往要花一段時間，過程中若使用者不小心重新整理頁面、或分頁被
+// 系統／瀏覽器關閉，receiptState 只存在記憶體裡會直接整個消失，得重新掃描
+// 一次。這裡改成每隔幾秒把目前的進度存一份到 sessionStorage（分頁關閉才會
+// 清除，重新整理不受影響），下次載入行程時偵測到屬於「同一個行程」的草稿，
+// 就詢問使用者要不要復原。
+const RECEIPT_DRAFT_STORAGE_KEY = 'splitbill-receipt-draft';
+let receiptDraftDirty = false;       // 自從上次寫入 sessionStorage 後，內容是否有變動過
+let receiptDraftPromptShown = false; // 這次頁面載入期間，是否已經詢問過使用者一次
+
+function persistReceiptDraft(){
+  try{
+    if (!receiptState){
+      sessionStorage.removeItem(RECEIPT_DRAFT_STORAGE_KEY);
+      return;
+    }
+    sessionStorage.setItem(RECEIPT_DRAFT_STORAGE_KEY, JSON.stringify({
+      tripId: trip.id,
+      savedAt: Date.now(),
+      receiptState,
+    }));
+  }catch(e){
+    // sessionStorage 已滿、或瀏覽器隱私模式下不可用：安靜放棄即可，
+    // 不應該讓「草稿備份」這種錦上添花的功能擋住使用者正常的認領流程。
+  }
+}
+function clearReceiptDraft(){
+  try{ sessionStorage.removeItem(RECEIPT_DRAFT_STORAGE_KEY); }catch(e){}
+}
+
+// 每 3 秒檢查一次：只要認領進度有變動（receiptDraftDirty），就寫一份新的
+// 草稿進去；沒有變動就不做事，避免不必要的重複寫入。
+setInterval(() => {
+  if (receiptDraftDirty){
+    persistReceiptDraft();
+    receiptDraftDirty = false;
+  }
+}, 3000);
+
+// 行程載入完成後呼叫（擁有者／分享連結模式都適用）：若偵測到 sessionStorage
+// 裡有屬於「這個行程」的認領草稿，詢問使用者要不要復原繼續認領。
+// 整個頁面載入期間只會詢問一次，避免使用者按「不用了」之後每次重繪都被再問。
+async function maybeOfferReceiptDraftRestore(){
+  if (receiptDraftPromptShown) return;
+  let raw = null;
+  try{ raw = sessionStorage.getItem(RECEIPT_DRAFT_STORAGE_KEY); }catch(e){}
+  if (!raw) return;
+
+  let draft;
+  try{ draft = JSON.parse(raw); }catch(e){ clearReceiptDraft(); return; }
+
+  // 草稿是屬於別的行程留下的（例如上次瀏覽的是另一個行程），先不理會、
+  // 也不主動清掉——真的切回那個行程時還是可能用得到，不用急著丟棄。
+  if (!draft || draft.tripId !== trip.id) return;
+
+  const itemCount = draft.receiptState && Array.isArray(draft.receiptState.items) ? draft.receiptState.items.length : 0;
+  if (!itemCount){ clearReceiptDraft(); return; }
+
+  receiptDraftPromptShown = true;
+  const restore = await confirmModal(
+    `偵測到上次離開時，有一筆帳單辨識的認領還沒完成（${itemCount} 個項目）。要復原繼續認領嗎？`,
+    { title: '復原上次的認領進度？', confirmText: '復原', cancelText: '不用了，重新開始' }
+  );
+
+  if (restore){
+    receiptState = draft.receiptState;
+    showMainTab('expenses');
+    renderReceiptWorkArea();
+    toast('已復原上次的認領進度', 'success');
+  } else {
+    clearReceiptDraft();
+  }
+}
+
 // 把上傳的圖片縮小＋轉成 JPEG，避免原始照片太大，上傳慢、也浪費辨識費用
 async function fileToResizedDataUrl(file, maxDim, quality){
   maxDim = maxDim || 1600; quality = quality || 0.85;
@@ -2269,6 +2343,7 @@ async function handleReceiptUpload(evt){
       : '';
     toast(`辨識出 ${items.length} 個項目${rateNote}${langNote}，請逐項認領`, 'success');
     renderReceiptWorkArea();
+    persistReceiptDraft(); // 🆕 剛辨識完的基礎資料（含圖片）先立刻存一份，不等下一次週期性儲存
   }catch(err){
     toast('辨識失敗：' + err.message, 'error');
     uploadZone.innerHTML = original;
@@ -2277,6 +2352,8 @@ async function handleReceiptUpload(evt){
 
 function receiptResetUpload(){
   receiptState = null;
+  clearReceiptDraft(); // 🆕 認領已放棄或已完成，清掉暫存草稿，避免下次重整又跳出復原提示
+  receiptDraftDirty = false;
   document.getElementById('receiptWorkArea').style.display = 'none';
   document.getElementById('receiptWorkArea').innerHTML = '';
   document.getElementById('receiptUploadZone').style.display = '';
@@ -2398,6 +2475,7 @@ function buildReceiptSummaryHtml(){
 }
 
 function renderReceiptWorkArea(){
+  receiptDraftDirty = true; // 🆕 內容有變動，交給週期性儲存在下一輪把最新草稿寫進 sessionStorage
   document.getElementById('receiptUploadZone').style.display = 'none';
   const area = document.getElementById('receiptWorkArea');
   area.style.display = 'block';
@@ -2544,6 +2622,40 @@ async function finalizeReceiptExpense(){
 }
 
 /* ===================== expense CRUD ===================== */
+// 🆕 [即時同步保護] 判斷「新增支出」表單目前是否有使用者還沒送出的內容——
+// 不只是編輯既有支出（editingExpenseId），也包含「正在填一筆全新的支出」：
+// 已輸入項目名稱/金額，或已勾選任何代墊人/分攤成員。
+// 用途：renderAll() 在別人透過 SSE 存檔、或任何其他操作觸發重繪時，
+// 都會呼叫 buildChips() 整個重建 chips 清單（innerHTML 覆蓋），這會讓
+// 使用者剛勾選的成員與手動調整的金額無聲消失。呼叫端只要偵測到這裡回傳
+// true，就該跳過重建，保留使用者正在輸入的內容。
+function hasUnsavedExpenseFormContent(){
+  if (editingExpenseId) return true; // 正在編輯既有一筆，本來就該保護
+  const descEl = document.getElementById('expDesc');
+  const amountEl = document.getElementById('expAmount');
+  if ((descEl && descEl.value.trim()) || (amountEl && amountEl.value.trim())) return true;
+  if (document.querySelector('#payerChips .chip.checked')) return true;
+  if (document.querySelector('#participantChips .chip.checked')) return true;
+  return false;
+}
+
+// 🆕 [即時同步保護] 轉帳／預收款表單版本；轉帳表單用的是 <select> 而不是
+// chip-checkbox，renderAll() 重繪時本來就會保留選取值（見 renderDepositSelects()
+// 的「先記住、再重套用」寫法），不會像支出表單那樣被無聲清空，但這裡仍然
+// 一併提供，讓 handleIncomingTripUpdate() 判斷「使用者是否正在操作中」時
+// 可以把轉帳表單也納入考量，行為更一致。
+function hasUnsavedDepositFormContent(){
+  if (editingDepositId) return true;
+  const payer = document.getElementById('depPayer');
+  const collector = document.getElementById('depCollector');
+  const amount = document.getElementById('depAmount');
+  const note = document.getElementById('depNote');
+  return !!(
+    (payer && payer.value) || (collector && collector.value) ||
+    (amount && amount.value.trim()) || (note && note.value.trim())
+  );
+}
+
 function resetExpenseForm(){
   editingExpenseId = null;
   participantsDirty = false;
@@ -3024,7 +3136,7 @@ function renderAll(){
   const curSel = document.getElementById('expCurrency');
   const prevCur = curSel.value || trip.baseCurrency;
   curSel.innerHTML = currencyOptions(prevCur);
-  if (!editingExpenseId) { buildChips('payerChips','payer'); buildChips('participantChips','participant'); }
+  if (!hasUnsavedExpenseFormContent()) { buildChips('payerChips','payer'); buildChips('participantChips','participant'); }
   renderExpenseHint();
 
   // expense list
@@ -3334,7 +3446,7 @@ function handleIncomingTripUpdate(rawPushedTrip){
   if (trip.updatedAt && pushedTrip.updatedAt && pushedTrip.updatedAt <= trip.updatedAt) return;
 
   const isEditing = !!(
-    editingExpenseId || editingDepositId ||
+    hasUnsavedExpenseFormContent() || hasUnsavedDepositFormContent() ||
     (receiptState && Array.isArray(receiptState.items) && receiptState.items.length)
   );
 
@@ -3399,6 +3511,7 @@ async function loadTripFromApi(){
     saveOwnerConnectionState();
     renderAll();
     connectTripEventStream();
+    if (!receiptState) maybeOfferReceiptDraftRestore(); // 🆕 目前沒有進行中的認領才詢問，避免打斷正在做的事
   }catch(err){
     toast('載入失敗：' + err.message, 'error');
   }
@@ -3899,6 +4012,8 @@ async function initShareMode(token){
     editingExpenseId = null; editingDepositId = null;
     renderAll();
     connectTripEventStream();
+    // 🆕 帳單辨識是寫入功能，唯讀分享連結本來就看不到那個區塊，沒必要問
+    if (!receiptState && shareMode.permission === 'write') maybeOfferReceiptDraftRestore();
   }catch(err){
     showShareError('連線時發生問題，請確認網路連線後重新整理頁面看看。');
   }
