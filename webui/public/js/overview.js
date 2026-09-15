@@ -242,13 +242,20 @@ function renderMemberDetails(net) {
     const rows = items.map(item => {
       const desc = item.description
         || (item.counterpart ? `${isIncoming ? '收自' : '付給'} ${escapeHtml(item.counterpart)}` : '');
-      const sub = item.note ? `備註：${escapeHtml(item.note)}` : '';
+      // 🆕 [時間資訊] 沿用跟支出/轉帳明細列表一致的 .ledger-time 樣式（等寬字體、
+      // 淡色），讓總覽頁展開後看到的每一筆記錄，跟「支出」「轉帳」分頁列表裡的
+      // 時間資訊是同一套視覺語言，不會有兩種不同粗細/字體的「時間」混在介面裡。
+      // 時間永遠顯示在最上面一行，備註（若有）接在下一行，兩者共用同一個
+      // detail-row-sub 容器，不佔用額外的區塊間距。
+      const timeLabel = `<span class="ledger-time">${fmtDateTime(item.createdAt)}</span>`;
+      const noteLabel = item.note ? `備註：${escapeHtml(item.note)}` : '';
+      const sub = noteLabel ? `${timeLabel}<br>${noteLabel}` : timeLabel;
       return `<div class="detail-row">
         <div class="detail-row-left">
           <div class="detail-row-desc">
             <span class="detail-tag ${tagClass}">${tagLabel}</span>${escapeHtml(desc)}
           </div>
-          ${sub ? `<div class="detail-row-sub">${sub}</div>` : ''}
+          <div class="detail-row-sub">${sub}</div>
         </div>
         <div class="detail-row-amt">
           <div class="orig">${amtSign > 0 ? '+' : '−'}${fmtMoney(item.amount, item.currency)} ${item.currency}</div>

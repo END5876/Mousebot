@@ -477,6 +477,15 @@
   .ledger-title{font-weight:700; font-size:14.5px;}
   .ledger-sub{font-size:12.5px; color:var(--ink-soft); margin-top:3px; line-height:1.65;}
   .ledger-amt{font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:15px; white-space:nowrap;}
+  /* 🆕 [時間資訊] 支出／轉帳明細列的時間戳記：比一般說明文字更淡一階，
+     用等寬字體呼應介面其他數字/代碼類文字（金額、幣別代碼）的視覺語言，
+     讓它讀起來像「後設資訊」而不是內容本身。 */
+  .ledger-time{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:11px;
+    color:var(--ink-soft);
+    opacity:.85;
+  }
   .ledger-actions{display:flex; gap:6px; margin-top:9px;}
 
   /* 🆕 分享連結列表：沿用跟支出/轉帳明細一致的 .ledger-row 版面（而不是獨立卡片），
