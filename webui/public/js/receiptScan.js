@@ -358,7 +358,7 @@ function renderReceiptWorkArea(){
     <div class="receipt-preview-row">
       <img class="receipt-thumb" src="${receiptState.imageDataUrl}" alt="帳單照片預覽">
       <div style="flex:1;">
-        <p class="hint" style="margin-top:0;">共 ${receiptState.items.length} 個項目。點品項下方的人名認領（可多選＝一起分這項），訂金等雜費已自動歸入「共同分擔」。辨識錯了都可以直接改，或用下面「新增項目」補一筆。${receiptState.items.some(it => it.nameTranslated) ? `<br>🌐 偵測到帳單為<b>${escapeHtml(receiptState.detectedLanguage)}</b>，品項下方已附上繁體中文翻譯供核對。` : ''}</p>
+        <p class="hint" style="margin-top:0;">共 ${receiptState.items.length} 個項目。點選品項下方的人名即可認領（可多選＝一起分攤這項），服務費與訂金已自動歸入「共同分擔」。辨識錯誤都可以直接修改，或用下方「新增項目」補上漏掉的品項。${receiptState.items.some(it => it.nameTranslated) ? `<br>🌐 偵測到帳單為<b>${escapeHtml(receiptState.detectedLanguage)}</b>，品項下方已附上繁體中文翻譯供核對。` : ''}</p>
         <button type="button" class="btn btn-ghost btn-sm" onclick="receiptResetUpload()">🔄 重新上傳照片</button>
       </div>
     </div>
@@ -369,7 +369,7 @@ function renderReceiptWorkArea(){
         <input type="number" inputmode="decimal" step="0.1" min="0" value="${Math.round(receiptState.serviceChargeRate*10000)/100}" onchange="receiptUpdateServiceChargeRate(this.value)">
       </div>
     </div>
-    <p class="hint" style="margin-top:-6px;">改這裡會自動套用到所有還沒被手動改過金額的「品項」；雜費（如訂金）不受影響，已經手動改過金額的品項也不會被覆蓋。</p>
+    <p class="hint" style="margin-top:-6px;">調整比例會自動套用到所有尚未手動改過金額的「品項」；雜費（如訂金）不受影響，已手動改過金額的品項也不會被覆寫。</p>
 
     <div class="field">
       <label>這頓誰有出席？（決定「共同分擔」要平均分給誰）</label>
@@ -400,7 +400,7 @@ function renderReceiptWorkArea(){
     </div>
     ${currencyHint}
     <div class="btn-row">
-      <button class="btn btn-brass btn-block" onclick="withLoading(this,'同步中…',finalizeReceiptExpense)">✅ 建立支出並存到 Bot</button>
+      <button class="btn btn-brass btn-block" onclick="withLoading(this,'儲存中…',finalizeReceiptExpense)">建立這筆支出</button>
     </div>`;
 }
 

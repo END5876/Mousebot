@@ -129,7 +129,7 @@ async function deleteExpense(id){
 
   const expense = trip.expenses[idx];
   const confirmed = await confirmModal(
-    `確定要刪除支出「${expense.description || '未命名支出'}」嗎？確認後將立即儲存到 Bot。`,
+    `確定要刪除支出「${expense.description || '未命名支出'}」嗎？刪除後會立即生效，且無法復原。`,
     {
       title: '確認刪除支出',
       confirmText: '確認刪除',

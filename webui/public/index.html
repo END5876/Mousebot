@@ -139,7 +139,7 @@
   <div class="panel" id="panel-expenses" data-panel="expenses">
     <div class="card" id="receiptScanCard" data-write-only>
       <h2 class="section-title">📷 用帳單照片自動建立支出</h2>
-      <p class="hint">上傳帳單照片，自動辨識品項與金額，逐項認領給每個人，服務費／訂金會自動歸入「共同分擔」，最後一鍵建立這筆支出。</p>
+      <p class="hint">上傳帳單照片就能自動辨識品項與金額。把品項認領給付費的人，服務費和訂金會自動歸入「共同分擔」，最後一鍵建立支出。</p>
       <div id="receiptUploadZone">
         <label class="receipt-upload" for="receiptFileInput">
           <div class="ic">🧾</div>
@@ -169,17 +169,17 @@
       <div class="field" id="expBaseAmountField" hidden>
         <label>換算後真實金額（<span id="expBaseCurrencyLabel"></span>，選填）</label>
         <input type="number" inputmode="decimal" id="expAmountInBase" class="num" placeholder="留白則依匯率自動換算" step="0.01">
-        <p class="hint">若實際扣款或結帳金額與匯率換算不同，請直接填入此值；分帳將以此本位幣金額計算。</p>
+        <p class="hint">若實際扣款金額和匯率換算的結果不同，可以直接填入正確金額，分帳會以這裡填寫的基準幣別金額計算。</p>
       </div>
       <p class="hint" id="expBaseHint"></p>
 
       <div class="field">
-        <label>誰代墊付款？（只勾一位時會自動帶入全額；勾多位請自行填金額，總和需等於金額）</label>
+        <label>誰代墊付款？只勾一位會自動帶入全額；勾選多位時請自行輸入各自金額，加總須等於總金額。</label>
         <div class="chip-select" id="payerChips"></div>
       </div>
 
       <div class="field">
-        <label>誰要分攤？（請自行勾選；已勾選的人會即時平均分攤，手動改金額後就不會再自動平均）</label>
+        <label>誰要分攤？勾選後金額會自動平均分攤；只要手動改過任一人的金額，之後就不會再自動重算。</label>
         <div class="chip-select" id="participantChips"></div>
         <div class="btn-row">
           <button class="btn btn-ghost btn-sm" onclick="equalFillChips('participant')">依已勾選人數重新平均</button>
@@ -189,7 +189,7 @@
       </div>
 
       <div class="btn-row">
-        <button class="btn btn-brass btn-block" id="btnSaveExpenseSync" onclick="withLoading(this,'同步中…',saveExpenseAndSync)">儲存</button>
+        <button class="btn btn-brass btn-block" id="btnSaveExpenseSync" onclick="withLoading(this,'儲存中…',saveExpenseAndSync)">儲存</button>
         <button class="btn btn-ghost" onclick="resetExpenseForm()">清空表單</button>
       </div>
     </div>
@@ -228,7 +228,7 @@
       <div class="field" id="depBaseAmountField" hidden>
         <label>換算後真實金額（<span id="depBaseCurrencyLabel"></span>，選填）</label>
         <input type="number" inputmode="decimal" id="depAmountInBase" class="num" placeholder="留白則依匯率自動換算" step="0.01">
-        <p class="hint">若實際轉帳金額與匯率換算不同，請直接填入此值；結算將以此本位幣金額計算。</p>
+        <p class="hint">若實際轉帳金額和匯率換算的結果不同，可以直接填入正確金額，結算會以這裡填寫的基準幣別金額計算。</p>
       </div>
       <p class="hint" id="depBaseHint"></p>
       <div class="field">
@@ -236,14 +236,13 @@
         <input type="text" id="depNote" placeholder="例如：提前收團費">
       </div>
       <div class="btn-row">
-        <button class="btn btn-brass btn-block" id="btnSaveDepositSync" onclick="withLoading(this,'同步中…',saveDepositAndSync)">儲存</button>
+        <button class="btn btn-brass btn-block" id="btnSaveDepositSync" onclick="withLoading(this,'儲存中…',saveDepositAndSync)">儲存</button>
         <button class="btn btn-ghost" onclick="resetDepositForm()">清空表單</button>
       </div>
     </div>
 
     <div class="card">
       <h2 class="section-title">轉帳明細 <span class="n" id="depositCount"></span>
-        <button class="btn btn-brass btn-sm" style="margin-left:auto;" id="btnSyncDepositList" onclick="withLoading(this,'同步中…',()=>saveTripToApi())" data-write-only>儲存</button>
       </h2>
       <div id="depositList"></div>
     </div>
@@ -283,7 +282,7 @@
     <div class="subpanel" id="panel-rates" data-subpanel="rates">
       <div class="card">
         <h2 class="section-title">匯率設定</h2>
-        <p class="hint">1 該幣別 = <code class="inline">rate</code> 基準幣別（<span id="baseLabel">TWD</span>）。基準幣別本身固定為 1。</p>
+        <p class="hint">1 單位該幣別 = <code class="inline">rate</code> 個基準幣別（<span id="baseLabel">TWD</span>）。基準幣別本身固定為 1。</p>
         <table class="rate-table">
           <thead><tr><th>幣別代碼</th><th>兌基準幣匯率</th><th></th></tr></thead>
           <tbody id="rateTableBody"></tbody>
