@@ -132,7 +132,7 @@ function handleIncomingTripDeleted(){
     showShareError('這個行程已經被刪除了，分享連結也跟著失效。');
     return;
   }
-  toast('⚠️ 這個行程已經在別處被刪除了。畫面上仍保留刪除前的最後一份資料，但請避免直接按「儲存回 Bot」，那會被當成建立一個新行程。', 'error', { duration: 10000 });
+  toast('⚠️ 這個行程已經在別處被刪除了。畫面上仍保留刪除前的最後一份資料，但請避免直接按「儲存」，那會被當成建立一筆新的行程。', 'error', { duration: 10000 });
   if (document.getElementById('guildSelect').value){
     refreshGuildList().catch(()=>{});
   }

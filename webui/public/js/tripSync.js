@@ -37,7 +37,7 @@ async function saveTripToApi(){
   const tripId = document.getElementById('tripSelect').value || trip.id;
   if (!guildId){
     showMainTab('settings'); showSettingsSub('connect');
-    toast('請先在這裡完成連線（選擇伺服器與行程），之後就能在支出／轉帳頁直接按「儲存到 Bot」了', 'error');
+    toast('尚未連線，請先到「設定 → 🔌 連線 Bot」選擇伺服器與行程，之後就能在這裡直接儲存。', 'error');
     return;
   }
 
@@ -60,7 +60,7 @@ async function saveTripToApi(){
         const serverTrip = await checkRes.json();
         if (!lastSyncedTripJSON) {
           // 首次儲存（從未載入過），直接確認
-          const proceed = await confirmModal(`確定要把目前的行程資料儲存到 Bot 伺服器（${guildId} / ${tripId}）嗎？`, { confirmText:'儲存' });
+          const proceed = await confirmModal(`確定要儲存目前的行程資料嗎？（伺服器 ${guildId} ／行程 ${tripId}）`, { confirmText:'儲存' });
           if (!proceed) return;
         } else if (serverTrip.updatedAt && trip.updatedAt && serverTrip.updatedAt !== trip.updatedAt) {
           // 伺服器版本比本地版本新，嘗試智慧合併
@@ -72,7 +72,7 @@ async function saveTripToApi(){
             toast('已自動合併其他人的更新', 'info');
           } else {
             // 合併失敗（有衝突）：詢問使用者
-            const proceed = await confirmModal('伺服器上的資料已被其他人更新，且與你的變更有衝突，無法自動合併。確定要用你目前這份覆蓋掉嗎？', { danger:true, confirmText:'仍要覆蓋', title:'偵測到資料衝突' });
+            const proceed = await confirmModal('這個行程已經被其他人更新過，而且跟你目前的內容有衝突，無法自動合併。確定要用你目前這份覆蓋掉嗎？', { danger:true, confirmText:'仍要覆蓋', title:'偵測到資料衝突' });
             if (!proceed) return;
           }
         } else if (lastSyncedTripJSON && JSON.stringify(serverTrip) !== lastSyncedTripJSON && !serverTrip.updatedAt) {
@@ -83,7 +83,7 @@ async function saveTripToApi(){
             renderAll();
             toast('已自動合併其他人的更新', 'info');
           } else {
-            const proceed = await confirmModal('伺服器上的資料似乎已經被更新過（可能是別人剛存過，或你在別的分頁存過），確定要用你目前這份覆蓋掉嗎？', { danger:true, confirmText:'仍要覆蓋', title:'偵測到資料衝突' });
+            const proceed = await confirmModal('這份行程資料似乎已經被更新過（可能是別人剛存過，或你在別的分頁存過），確定要用你目前這份覆蓋掉嗎？', { danger:true, confirmText:'仍要覆蓋', title:'偵測到資料衝突' });
             if (!proceed) return;
           }
         }
@@ -120,7 +120,7 @@ async function saveTripToApi(){
           toast('儲存時發現有人剛好搶先一步更新，已自動合併並重新儲存…', 'info');
           continue; // 用合併後的版本再跑一次迴圈重新存一次
         }
-        toast('已自動合併其他人的更新，但重試次數已用完，請再按一次「儲存」把合併後的結果存回 Bot。', 'error');
+        toast('已自動合併其他人的更新，但重試次數已用完，請再按一次「儲存」把合併後的結果存回去。', 'error');
         return;
       }
 
@@ -131,7 +131,7 @@ async function saveTripToApi(){
       const savedData = await res.json();
       trip = repairTrip(savedData); // 用伺服器回傳的版本（含最新 updatedAt）更新本地
       lastSyncedTripJSON = JSON.stringify(trip);
-      toast('已儲存到 Bot 伺服器', 'success');
+      toast('已儲存', 'success');
       updateBotStatusPill(true, trip.name);
       saveOwnerConnectionState();
       renderAll();

@@ -136,7 +136,7 @@ function renderExpenseHint(){
       const base = round2(amount*rate);
       hintHtml = `⏳ 查詢即時匯率中…暫用手動設定的匯率換算約為 <b>${fmtMoney(base, trip.baseCurrency)}</b>`;
     } else {
-      hintHtml = `幣別 ${currency} 尚無匯率，正在查詢即時匯率…若查不到請先到「幣別匯率」分頁手動設定。`;
+      hintHtml = `幣別 ${currency} 尚無匯率資料，正在查詢即時匯率…如果查不到，請到「設定 → 匯率」分頁手動新增。`;
     }
   }
   document.getElementById('expBaseHint').innerHTML = hintHtml;

@@ -44,7 +44,7 @@ function renderDepositHint(){
       const base = round2(amount*rate);
       hintEl.innerHTML = `⏳ 查詢即時匯率中…暫用手動設定的匯率換算約為 <b>${fmtMoney(base, trip.baseCurrency)}</b>`;
     } else {
-      hintEl.innerHTML = `幣別 ${currency} 尚無匯率，正在查詢即時匯率…若查不到請先到「幣別匯率」分頁手動設定。`;
+      hintEl.innerHTML = `幣別 ${currency} 尚無匯率資料，正在查詢即時匯率…如果查不到，請到「設定 → 匯率」分頁手動新增。`;
     }
   }
 }
@@ -114,12 +114,32 @@ function editDeposit(id){
   showMainTab('deposits');
   document.getElementById('panel-deposits').scrollIntoView({behavior:'smooth'});
 }
-function deleteDeposit(id){
-  const idx = trip.deposits.findIndex(d=>d.id===id);
+async function deleteDeposit(id){
+  const idx = trip.deposits.findIndex(d => d.id === id);
   if (idx === -1) return;
-  const [removed] = trip.deposits.splice(idx,1);
-  if (editingDepositId===id) resetDepositForm();
+
+  const deposit = trip.deposits[idx];
+  const confirmed = await confirmModal(
+    `確定要刪除「${memberName(deposit.payerId)} → ${memberName(deposit.collectorId)}」的轉帳紀錄嗎？確認後將立即儲存到 Bot。`,
+    {
+      title: '確認刪除轉帳紀錄',
+      confirmText: '確認刪除',
+      cancelText: '取消',
+      danger: true,
+    }
+  );
+
+  if (!confirmed) return;
+
+  trip.deposits.splice(idx, 1);
+
+  if (editingDepositId === id) {
+    resetDepositForm();
+  }
+
   renderAll();
-  toastUndo(`已刪除「${memberName(removed.payerId)} → ${memberName(removed.collectorId)}」的轉帳紀錄`, ()=>{ trip.deposits.splice(idx,0,removed); renderAll(); });
+
+  // 確認刪除後立即寫入伺服器；分享連結模式也會自動走對應的儲存 API。
+  await saveTripToApi();
 }
 
