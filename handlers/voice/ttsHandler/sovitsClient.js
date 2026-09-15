@@ -1,8 +1,10 @@
 'use strict';
 
+const fs   = require('fs');
 const http = require('http');
 const dns  = require('dns').promises;
 const logger = require('../../../utils/logger');
+const { getActiveModel } = require('./models');
 
 // ── SoVITS 連線設定 ──────────────────────────────────────
 const SOVITS_HOST = process.env.SOVITS_HOST || 'localhost';
