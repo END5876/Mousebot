@@ -58,6 +58,7 @@ function renderAll(){
       <div class="ledger-main">
         <div class="ledger-title">${escapeHtml(e.description)}</div>
         <div class="ledger-sub">
+          <span class="ledger-time">${fmtDateTime(e.createdAt)}</span><br>
           代墊：${e.payers.map(p=>`${escapeHtml(memberName(p.userId))} ${fmtMoney(p.amount,e.currency)}`).join('、')}<br>
           分攤：${e.participants.map(s=>`${escapeHtml(memberName(s.userId))} ${fmtMoney(s.amount,e.currency)}`).join('、')}
         </div>
@@ -84,7 +85,10 @@ function renderAll(){
     <div class="ledger-row">
       <div class="ledger-main">
         <div class="ledger-title">${escapeHtml(memberName(d.payerId))} → ${escapeHtml(memberName(d.collectorId))}</div>
-        <div class="ledger-sub">${d.note ? escapeHtml(d.note) : '（無備註）'}</div>
+        <div class="ledger-sub">
+          <span class="ledger-time">${fmtDateTime(d.createdAt)}</span><br>
+          ${d.note ? escapeHtml(d.note) : '（無備註）'}
+        </div>
         <div class="ledger-actions" data-write-only>
           <button class="btn btn-ghost btn-sm" onclick="editDeposit('${d.id}')">編輯</button>
           <button class="btn btn-danger btn-sm" onclick="deleteDeposit('${d.id}')">刪除</button>
