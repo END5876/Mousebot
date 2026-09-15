@@ -1,0 +1,750 @@
+:root{
+    --ink:#1E2A33;
+    --ink-soft:#4A5A62;
+    --paper:#EEF0E6;
+    --card:#FBFBF6;
+    --card-line:#D9DCC9;
+    --brass:#8A6A28;         /* 深化以提高文字對比度，且此後只代表「跟 Bot 雲端同步」 */
+    --brass-bg:#9C7A34;
+    --brass-soft:#C9A85C;
+    --credit:#2F6E52;
+    --credit-bg:#E4EFE7;
+    --debt:#A63D3D;
+    --debt-bg:#F5E6E2;
+    --header-bg:#1B2731;
+    --shadow: 0 1px 0 rgba(30,42,51,0.06), 0 8px 24px rgba(30,42,51,0.06);
+    --safe-b: env(safe-area-inset-bottom, 0px);
+    --bottomnav-h: 62px;
+    --focus-ring: 0 0 0 3px rgba(154,116,52,0.35);
+
+    /* 🆕 暗色模式支援：以下這組變數原本散落在各處寫死成 #fff／固定淺色 hex，
+       現在統一收斂成語意化變數，讓 :root[data-theme="dark"] 只要覆寫這裡
+       就能讓整個頁面（表單欄位、卡片、徽章、彈窗遮罩...）跟著換膚，不用
+       在每個元件各自判斷目前是什麼主題。 */
+    --surface:#fff;               /* 輸入框／卡片內的「白色」表面（chip、modal-list-item、member-tag...） */
+    --surface-hover:#F7F6F0;      /* 可互動列表項目的 hover 背景（member-detail-head） */
+    --chip-bg:#EDEAD9;            /* 徽章/標籤類背景（receipt-type-badge、code.inline、幣別標籤...） */
+    --chip-bg-hover:#E0DCC5;
+    --fee-bg:#FBF7EE;             /* 帳單辨識「雜費」項目列背景 */
+    --fee-badge-bg:#F0D9A0;
+    --fee-badge-bg-hover:#E8CC85;
+    --fee-badge-text:#5C4415;
+    --zero-bg:#EEE;               /* 淨額為 0（已結清）時的中性徽章背景 */
+    --brass-tint:#FBF4E4;         /* 勾選中／hover 時的暖色高亮底（chip、claim-chip、modal-list-item） */
+    --scrim:rgba(20,26,30,0.55);  /* Modal 遮罩層 */
+    --paper-stripe:rgba(156,122,52,0.035); /* 背景那道很淡的直紋線 */
+
+    /* 這兩個是「固定深色」用途：不管淺色/暗色模式，都要維持深底＋淺字的按鈕
+       （主要按鈕、作用中分頁、toast），所以刻意不放進 dark 覆寫區塊，兩個
+       主題共用同一組值，避免 --ink 為了適應暗色模式整個翻轉成淺色後，
+       這些「本來就設計成深色底」的元件反而失去對比度。 */
+    --emphasis:#1E2A33;
+    --debt-solid:#B94A3C;         /* 目前唯一用途：確認刪除 Modal 的紅色按鈕背景（白字疊在上面） */
+  }
+
+  /* 🆕 暗色模式調色盤。切換方式見頁尾主程式的 setTheme()／toggleTheme() 函式，
+     並在頁面最前面有一段行內小型腳本，提早依 localStorage／系統偏好設定
+     好 data-theme，避免第一次畫面出現「先亮後暗」的閃爍。 */
+  :root[data-theme="dark"]{
+    --ink:#ECEDE8;
+    --ink-soft:#9BA6A1;
+    --paper:#12181C;
+    --card:#1B2226;
+    --card-line:#323C41;
+    --brass:#D9B36C;
+    --brass-bg:#B0863C;
+    --brass-soft:#E8C77E;
+    --credit:#6FCB94;
+    --credit-bg:#173428;
+    --debt:#E38B8B;
+    --debt-bg:#3A2020;
+    --shadow: 0 1px 0 rgba(0,0,0,0.4), 0 10px 26px rgba(0,0,0,0.5);
+    --focus-ring: 0 0 0 3px rgba(217,179,108,0.4);
+
+    --surface:#20282D;
+    --surface-hover:#273136;
+    --chip-bg:#2A332F;
+    --chip-bg-hover:#333E39;
+    --fee-bg:#2B2417;
+    --fee-badge-bg:#4A3A1B;
+    --fee-badge-bg-hover:#5C4823;
+    --fee-badge-text:#E8C77E;
+    --zero-bg:#2A2F33;
+    --brass-tint:#3A2E15;
+    --scrim:rgba(0,0,0,0.65);
+    --paper-stripe:rgba(217,179,108,0.05);
+    /* --header-bg／--emphasis／--debt-solid 刻意不在這裡覆寫：
+       頁首跟主要按鈕本來就設計成固定深色，暗色模式下維持原樣反而更一致，
+       不需要額外規則。 */
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:
+      repeating-linear-gradient(0deg, var(--paper-stripe) 0px, var(--paper-stripe) 1px, transparent 1px, transparent 34px),
+      var(--paper);
+    color:var(--ink);
+    font-family:'Noto Sans TC', system-ui, sans-serif;
+    min-height:100vh;
+    padding-bottom: calc(var(--bottomnav-h) + var(--safe-b) + 18px);
+  }
+  .wrap{max-width:880px; margin:0 auto; padding:0 14px;}
+  a{color:inherit;}
+
+  /* ---------- Focus visibility (a11y) ---------- */
+  a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
+  textarea:focus-visible, [tabindex]:focus-visible{
+    outline:2px solid var(--brass); outline-offset:2px; border-radius:4px;
+  }
+
+  /* ---------- Sticky app header ---------- */
+  .app-header{
+    position:sticky; top:0; z-index:50;
+    background:linear-gradient(155deg,#22303A,#1B2731 60%,#182229);
+    color:#F3EEDD;
+    padding:calc(10px + env(safe-area-inset-top, 0px)) 14px 10px;
+    box-shadow:0 2px 10px rgba(0,0,0,0.18);
+  }
+  .app-header-inner{max-width:880px; margin:0 auto;}
+  .header-row1{display:flex; align-items:center; gap:10px;}
+  .header-row1 .brand{
+    font-family:'Noto Serif TC',serif; font-weight:900; font-size:16px;
+    color:var(--brass-soft); white-space:nowrap; letter-spacing:.02em;
+  }
+  #tripName{
+    flex:1; min-width:0;
+    background:transparent; border:none; color:#F3EEDD;
+    font-family:'Noto Serif TC',serif; font-weight:700; font-size:16px;
+    padding:6px 8px; border-radius:6px;
+  }
+  #tripName:focus-visible{outline:2px solid var(--brass-soft); background:rgba(255,255,255,0.08);}
+  #tripName::placeholder{color:#8B978E;}
+  .header-currency{
+    background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.22);
+    color:#F3EEDD; padding:6px 8px; border-radius:8px; font-size:12.5px;
+    font-family:'IBM Plex Mono',monospace; max-width:92px; flex-shrink:0;
+  }
+  .header-currency option{color:#1E2A33;}
+  /* 🆕 深色/淺色模式切換鈕：跟旁邊的幣別選單用一樣的視覺語言（半透明白底、淡邊框），
+     因為頁首本身固定深色，不隨主題切換，這裡沿用同一套 header 專用配色即可，
+     不需要另外引用 --surface 之類會隨主題翻轉的變數。 */
+  .theme-toggle-btn{
+    background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.22);
+    color:#F3EEDD; width:34px; height:34px; border-radius:8px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:16px; line-height:1; cursor:pointer; flex-shrink:0; padding:0;
+  }
+  .theme-toggle-btn:hover{background:rgba(255,255,255,0.16);}
+  .status-pills{display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;}
+
+  /* 🆕 [分享連結] 分享連結模式下的畫面收斂：
+     - data-owner-only：只有擁有者（用真正的 SPLITBILL_API_KEY 連線）才看得到的東西，
+       例如「連線 Bot／檔案」等技術性設定、帳單掃描（伺服器端本來就只准擁有者用）。
+       分享連結的朋友完全看不到、也點不到這些，畫面單純很多，不會誤觸也不會困惑。
+     - data-write-only：分享連結為「唯讀」時，這些會被隱藏——新增/編輯/刪除/儲存
+       等寫入類按鈕與表單，唯讀訪客只能看不能改。
+     這裡只負責畫面收斂（UX），真正的存取控制永遠由伺服器端把關（見 webui/server.js
+     的 authorizeTripAccess()），就算有人繞過前端硬送 API 請求，伺服器一樣會擋下來。 */
+  body.share-mode [data-owner-only]{display:none !important;}
+  body.share-readonly [data-write-only]{display:none !important;}
+
+
+
+
+  /* 分享連結失效時的全頁錯誤畫面：刻意跟一般「尚未連線」畫面分開設計，
+     用字更口語、不提任何技術名詞（金鑰／伺服器／行程 ID...），
+     因為看到這個畫面的通常是不熟悉技術的朋友。 */
+  .share-error-screen{
+    max-width:420px; margin:18vh auto 0; text-align:center; padding:0 20px;
+  }
+  .share-error-screen .ic{font-size:44px; margin-bottom:14px;}
+  .share-error-screen h1{font-family:'Noto Serif TC',serif; font-size:19px; margin:0 0 10px;}
+  .share-error-screen p{color:var(--ink-soft); font-size:14px; line-height:1.7; margin:0;}
+
+  /* 無權限阻擋頁 */
+  #noAccessScreen{
+    display:none; position:fixed; inset:0; z-index:9999;
+    background:var(--bg); align-items:center; justify-content:center;
+  }
+  #noAccessScreen.visible{ display:flex; }
+  .no-access-card{
+    text-align:center; padding:48px 36px 44px; max-width:360px; width:90%;
+    background:var(--card); border:1px solid var(--card-line);
+    border-radius:4px;
+  }
+  .no-access-lock{
+    width:48px; height:48px; margin:0 auto 24px;
+    color:var(--brass);
+  }
+  .no-access-card h1{
+    font-family:'Noto Serif TC',serif; font-size:20px; font-weight:700;
+    color:var(--ink); margin:0 0 12px; letter-spacing:.01em;
+  }
+  .no-access-card p{
+    color:var(--ink-soft); font-size:14px; line-height:1.75; margin:0;
+  }
+  .no-access-divider{
+    width:32px; height:2px; background:var(--brass-soft);
+    margin:20px auto;
+  }
+  .pill{
+    font-size:11px; padding:4px 10px; border-radius:20px;
+    display:inline-flex; align-items:center; gap:5px;
+    font-family:'IBM Plex Mono',monospace; cursor:pointer; border:none;
+    background:rgba(255,255,255,0.08); color:#C7CDC2;
+  }
+  .pill .dot{width:6px; height:6px; border-radius:50%; background:#7C8A80; flex-shrink:0;}
+  .pill.on{background:rgba(47,110,82,0.28); color:#B9EAC9;}
+  .pill.on .dot{background:#4FCB7E;}
+  .pill.warn{background:rgba(201,138,45,0.28); color:#F0D19B;}
+  .pill.warn .dot{background:#E2A23F;}
+
+  /* ---------- Top tabs (desktop) ---------- */
+  .top-nav{display:none; gap:2px; margin-top:22px; border-bottom:2px solid var(--card-line);}
+  .top-nav .nav-btn{
+    font-family:'Noto Serif TC',serif; font-weight:700; font-size:14.5px;
+    background:none; border:none; cursor:pointer;
+    padding:10px 18px 12px; color:var(--ink-soft);
+    border-bottom:3px solid transparent; margin-bottom:-2px;
+    transition:color .15s; display:flex; align-items:center; gap:7px;
+  }
+  .top-nav .nav-btn.active{color:var(--ink); border-bottom-color:var(--brass-bg);}
+  .top-nav .nav-btn:hover{color:var(--ink);}
+
+  /* ---------- Bottom nav (mobile) ---------- */
+  .bottom-nav{
+    position:fixed; left:0; right:0; bottom:0; z-index:60;
+    display:flex; background:var(--card);
+    border-top:1px solid var(--card-line);
+    padding-bottom:var(--safe-b);
+    box-shadow:0 -4px 16px rgba(30,42,51,0.08);
+  }
+  .bottom-nav .nav-btn{
+    flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:2px; background:none; border:none; cursor:pointer;
+    padding:9px 2px 7px; color:var(--ink-soft); font-size:10.5px;
+    font-family:'Noto Sans TC',sans-serif; font-weight:500;
+    min-height:var(--bottomnav-h);
+  }
+  .bottom-nav .nav-btn .ic{font-size:19px; line-height:1;}
+  .bottom-nav .nav-btn.active{color:var(--brass);}
+  .bottom-nav .nav-btn.has-dot{position:relative;}
+  .bottom-nav .nav-btn.has-dot .ic::after{
+    content:""; position:absolute; top:6px; right:calc(50% - 16px);
+    width:8px; height:8px; border-radius:50%; background:var(--debt); border:2px solid var(--card);
+  }
+
+  main{padding-top:16px;}
+  .panel{display:none; animation:fade .18s ease;}
+  .panel.active{display:block;}
+  .subpanel{display:none; animation:fade .18s ease;}
+  .subpanel.active{display:block;}
+  @keyframes fade{from{opacity:0; transform:translateY(3px);} to{opacity:1; transform:none;}}
+
+  .settings-subnav{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px;}
+  .subtab-btn{
+    font-family:'Noto Sans TC',sans-serif; font-weight:700; font-size:12.5px;
+    background:var(--card); border:1px solid var(--card-line); border-radius:20px;
+    padding:8px 14px; cursor:pointer; color:var(--ink-soft);
+  }
+  .subtab-btn.active{background:var(--emphasis); color:#F3EEDD; border-color:var(--emphasis);}
+
+  h2.section-title{
+    font-family:'Noto Serif TC',serif; font-weight:700; font-size:17px;
+    margin:0 0 12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  }
+  h2.section-title .n{font-family:'IBM Plex Mono',monospace; color:var(--brass); font-size:13px;}
+
+  .card{
+    background:var(--card); border:1px solid var(--card-line); border-radius:12px;
+    padding:16px 16px; box-shadow:var(--shadow); margin-bottom:14px;
+  }
+
+  /* ---------- Forms ---------- */
+  .field{margin-bottom:12px;}
+  .field label{display:block; font-size:12.5px; color:var(--ink-soft); margin-bottom:5px; font-weight:500;}
+  .row{display:flex; gap:12px; flex-wrap:wrap;}
+  .row > .field{flex:1; min-width:130px;}
+  input[type=text], input[type=number], input[type=password], select, textarea{
+    width:100%; border:1px solid var(--card-line); background:var(--surface);
+    padding:11px 12px; border-radius:8px; font-size:15px;
+    font-family:'Noto Sans TC',sans-serif; color:var(--ink);
+  }
+  input:focus, select:focus, textarea:focus{outline:2px solid var(--brass-soft); outline-offset:1px;}
+  textarea{font-family:'IBM Plex Mono',monospace; font-size:12.5px; resize:vertical;}
+  .num{font-family:'IBM Plex Mono',monospace;}
+  .input-with-toggle{position:relative;}
+  .input-with-toggle input{padding-right:56px;}
+  .input-toggle-btn{
+    position:absolute; right:4px; top:50%; transform:translateY(-50%);
+    background:none; border:none; color:var(--ink-soft); font-size:11.5px;
+    padding:8px 8px; cursor:pointer; font-family:'IBM Plex Mono',monospace;
+  }
+
+  /* ---------- Buttons: 語意化色彩 ----------
+     ink    = 這個畫面「唯一」的主要動作
+     brass  = 只用在跟 Bot 雲端同步有關的動作（讀取/載入/存回 Bot）
+     ghost  = 次要、可逆、輔助性操作
+     danger = 破壞性操作（刪除）
+  */
+  .btn{
+    font-family:'Noto Sans TC',sans-serif; font-weight:700; font-size:14px;
+    border:none; border-radius:9px; padding:11px 18px; cursor:pointer;
+    transition:transform .1s, background .15s, opacity .15s; min-height:44px;
+    display:inline-flex; align-items:center; justify-content:center; gap:7px;
+  }
+  .btn:active{transform:scale(.97);}
+  .btn:disabled{opacity:.55; cursor:not-allowed; transform:none;}
+  .btn-primary{background:var(--emphasis); color:#F3EEDD;}
+  .btn-primary:hover{background:#0F171C;}
+  .btn-brass{background:var(--brass-bg); color:#fff;}
+  .btn-brass:hover{background:var(--brass);}
+  .btn-ghost{background:transparent; color:var(--ink-soft); border:1px solid var(--card-line);}
+  .btn-ghost:hover{border-color:var(--ink-soft); color:var(--ink);}
+  .btn-danger{background:transparent; color:var(--debt); border:1px solid var(--debt-bg);}
+  .btn-danger:hover{background:var(--debt-bg);}
+  .btn-sm{padding:7px 12px; font-size:12.5px; min-height:34px; border-radius:7px;}
+  .btn-row{display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;}
+  .btn-block{width:100%;}
+
+  .spinner{
+    width:14px; height:14px; border-radius:50%;
+    border:2px solid rgba(255,255,255,0.4); border-top-color:#fff;
+    animation:spin .7s linear infinite; flex-shrink:0;
+  }
+  .btn-ghost .spinner, .btn-danger .spinner{border-color:var(--card-line); border-top-color:var(--ink);}
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  .chip-select{display:flex; flex-wrap:wrap; gap:8px;}
+  .chip{
+    display:flex; align-items:center; gap:8px;
+    border:1.5px solid var(--card-line); border-radius:20px;
+    padding:9px 14px 9px 12px; font-size:13.5px; cursor:pointer;
+    background:var(--surface); user-select:none; min-height:40px;
+  }
+  /* 🔧 Bug fix：原生 checkbox 本身會畫出自己的勾勾（accent-color 讓瀏覽器原生繪製），
+     過去曾疊加一個 .checkmark 自訂勾勾造成「同時出現兩個勾勾」；.checkmark 已整個
+     移除（連同對應的 <span> 標籤，見 buildChips()），現在只剩原生 checkbox 一個
+     勾選指示。 */
+  /* 🔧 對齊修正（v2）：不同瀏覽器對「原生 checkbox」的內部繪製方式不一致
+     （尤其 Safari/WebKit 對 accent-color 樣式的 checkbox，繪製時的內部留白
+     跟 Chrome/Blink 不一樣），單純設定 checkbox 的 width/height 在某些瀏覽器
+     下仍可能讓它看起來偏上或偏下，跟旁邊的名字文字對不齊。
+     這裡改成用一個固定 17×17px、內部用 flex 置中的外層容器 .chip-checkbox
+     包住 checkbox，讓 checkbox 不論瀏覽器內部怎麼畫，都被強制置中在這個固定
+     大小的盒子正中央；.chip-label 的 line-height 也對齊同一個高度，兩者在
+     .chip 的 flex 列（align-items:center）中，中心點就會確實落在同一條水平線。 */
+  .chip-checkbox{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:17px; height:17px; flex-shrink:0;
+  }
+  .chip-checkbox input[type=checkbox]{
+    display:block; margin:0; accent-color:var(--brass-bg); width:17px; height:17px;
+  }
+  .chip-label{ line-height:17px; }
+  .chip.checked{border-color:var(--brass-bg); background:var(--brass-tint);}
+  .chip .amt{
+    width:76px; border:none; border-bottom:1px solid var(--card-line);
+    background:transparent; font-family:'IBM Plex Mono',monospace; font-size:13.5px;
+    padding:3px 2px; text-align:right; display:none;
+  }
+  .chip.checked .amt{display:inline-block;}
+
+  /* ---------- 帳單照片辨識 ---------- */
+  .receipt-upload{
+    display: block; /* 加入這行修正破圖問題 */
+    border:2px dashed var(--card-line); border-radius:12px; padding:22px 16px;
+    text-align:center; cursor:pointer; background:var(--surface);
+  }
+  .receipt-upload:hover{border-color:var(--brass-soft);}
+  .receipt-upload .ic{font-size:28px; margin-bottom:6px;}
+  .receipt-upload input[type=file]{display:none;}
+  .receipt-preview-row{display:flex; gap:12px; align-items:flex-start; margin-bottom:12px;}
+  .receipt-thumb{
+    width:88px; height:88px; object-fit:cover; border-radius:10px;
+    border:1px solid var(--card-line); flex-shrink:0;
+  }
+
+  .receipt-item-row{
+    border:1.5px solid var(--card-line); border-radius:10px; padding:12px; margin-bottom:10px; background:var(--surface);
+  }
+  .receipt-item-row.fee{background:var(--fee-bg); border-color:var(--brass-soft);}
+  .receipt-item-row.unclaimed{border-color:var(--debt);}
+  .receipt-item-head{display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap;}
+  .receipt-item-head input[type=text]{flex:1; min-width:100px; font-weight:700; font-size:14px; border:none; background:transparent; padding:2px;}
+  .receipt-item-head input[type=text]:focus-visible{outline:2px solid var(--brass-soft); border-radius:4px;}
+  .receipt-item-head .amt-input{width:90px; flex-shrink:0;}
+  .receipt-type-badge{
+    font-family:'IBM Plex Mono',monospace; font-size:10.5px; padding:3px 7px; border-radius:5px;
+    background:var(--chip-bg); color:var(--ink-soft); flex-shrink:0;
+    border:none; cursor:pointer;
+  }
+  .receipt-type-badge:hover{background:var(--chip-bg-hover);}
+  .receipt-type-badge.fee{background:var(--fee-badge-bg); color:var(--fee-badge-text);}
+  .receipt-type-badge.fee:hover{background:var(--fee-badge-bg-hover);}
+  .receipt-claim-chips{display:flex; flex-wrap:wrap; gap:6px;}
+  .claim-chip{
+    font-size:12.5px; padding:6px 11px; border-radius:16px; cursor:pointer;
+    border:1.5px solid var(--card-line); background:var(--surface); color:var(--ink-soft);
+  }
+  .claim-chip.on{border-color:var(--brass-bg); background:var(--brass-tint); color:var(--ink); font-weight:700;}
+  .claim-chip.shared{border-color:var(--credit); }
+  .claim-chip.shared.on{background:var(--credit-bg); border-color:var(--credit); color:var(--credit);}
+  .receipt-summary{
+    background:var(--card); border:1px dashed var(--card-line); border-radius:10px;
+    padding:12px 14px; margin:14px 0; font-size:13px;
+  }
+  .receipt-summary-row{display:flex; justify-content:space-between; padding:4px 0; font-family:'IBM Plex Mono',monospace;}
+  .receipt-summary-row.total{border-top:1px dashed var(--card-line); margin-top:4px; padding-top:8px; font-weight:700; font-size:14px;}
+
+  /* ---------- Toast system (統一取代原本分散的 msg 區塊) ---------- */
+  #toastStack{
+    position:fixed; left:14px; right:14px; z-index:200;
+    bottom:calc(var(--bottomnav-h) + var(--safe-b) + 12px);
+    display:flex; flex-direction:column; gap:8px; align-items:center;
+    pointer-events:none;
+  }
+  .toast{
+    pointer-events:auto;
+    max-width:480px; width:100%;
+    background:var(--emphasis); color:#F3EEDD;
+    border-radius:10px; padding:12px 14px;
+    display:flex; align-items:center; gap:10px;
+    font-size:13.5px; line-height:1.5;
+    box-shadow:0 8px 24px rgba(0,0,0,0.25);
+    animation:toast-in .18s ease;
+  }
+  .toast .ic{font-size:16px; flex-shrink:0;}
+  .toast .msg-text{flex:1;}
+  .toast.success{background:#1F3A2C;}
+  .toast.error{background:#3E2222;}
+  .toast .undo-btn{
+    background:rgba(255,255,255,0.12); border:none; color:#F3EEDD;
+    font-weight:700; font-size:12.5px; padding:6px 11px; border-radius:7px;
+    cursor:pointer; flex-shrink:0;
+  }
+  .toast .undo-btn:hover{background:rgba(255,255,255,0.22);}
+  .toast.closing{animation:toast-out .18s ease forwards;}
+  @keyframes toast-in{from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:none;}}
+  @keyframes toast-out{to{opacity:0; transform:translateY(8px);}}
+  @media (min-width:860px){
+    #toastStack{left:auto; right:20px; bottom:20px; align-items:flex-end;}
+  }
+
+  /* ---------- Modal system ---------- */
+  .modal-overlay{
+    position:fixed; inset:0; z-index:300; background:var(--scrim);
+    display:flex; align-items:flex-end; justify-content:center;
+    padding:0; animation:overlay-in .15s ease;
+  }
+  @keyframes overlay-in{from{opacity:0;} to{opacity:1;}}
+  .modal-box{
+    background:var(--card); width:100%; max-width:460px;
+    border-radius:16px 16px 0 0; padding:22px 20px calc(20px + var(--safe-b));
+    box-shadow:0 -8px 30px rgba(0,0,0,0.3);
+    animation:modal-in .2s ease;
+    max-height:82vh; overflow-y:auto;
+  }
+  @keyframes modal-in{from{transform:translateY(24px); opacity:0;} to{transform:none; opacity:1;}}
+  .modal-title{font-family:'Noto Serif TC',serif; font-weight:700; font-size:17px; margin:0 0 10px;}
+  .modal-body{font-size:14px; color:var(--ink-soft); line-height:1.65; margin-bottom:18px;}
+  .modal-actions{display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;}
+  .modal-list{display:flex; flex-direction:column; gap:8px; margin-bottom:6px;}
+  .modal-list-item{
+    text-align:left; width:100%; background:var(--surface); border:1.5px solid var(--card-line);
+    border-radius:10px; padding:12px 14px; cursor:pointer; font-family:inherit; font-size:14px; color:var(--ink);
+  }
+  .modal-list-item:hover{border-color:var(--brass-bg); background:#FBF4E4;}
+  .modal-list-item .mli-title{font-weight:700;}
+  .modal-list-item .mli-sub{font-size:12px; color:var(--ink-soft); margin-top:3px; font-family:'IBM Plex Mono',monospace;}
+  @media (min-width:640px){
+    .modal-overlay{align-items:center;}
+    .modal-box{border-radius:16px;}
+  }
+
+  .msg{font-size:13px; padding:10px 12px; border-radius:8px; margin:10px 0; display:none; line-height:1.5;}
+  .msg.show{display:block;}
+  .msg.err{background:var(--debt-bg); color:var(--debt);}
+  .msg.ok{background:var(--credit-bg); color:var(--credit);}
+
+  /* ---------- Lists / ledger rows ---------- */
+  .ledger-row{
+    display:flex; justify-content:space-between; align-items:flex-start;
+    padding:13px 0; border-bottom:1px dashed var(--card-line); gap:12px;
+  }
+  .ledger-row:last-child{border-bottom:none;}
+  .ledger-main{flex:1; min-width:0;}
+  .ledger-title{font-weight:700; font-size:14.5px;}
+  .ledger-sub{font-size:12.5px; color:var(--ink-soft); margin-top:3px; line-height:1.65;}
+  .ledger-amt{font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:15px; white-space:nowrap;}
+  .ledger-actions{display:flex; gap:6px; margin-top:9px;}
+
+  /* 🆕 分享連結列表：沿用跟支出/轉帳明細一致的 .ledger-row 版面（而不是獨立卡片），
+     權限改用跟「換算幣別」小選單一致的 .convert-select 樣式（寬度固定縮小、inline
+     顯示在到期日期旁邊），維持整體介面語彙一致、也不會把一整排撐得過長。 */
+  .share-link-perm-select{ margin-right:6px; }  .share-link-footer{display:flex; gap:8px;}
+  .share-link-footer .btn{flex:1;}
+
+  .empty-state{
+    text-align:center; padding:30px 16px; color:var(--ink-soft);
+  }
+  .empty-state .ic{font-size:30px; margin-bottom:8px; opacity:.7;}
+  .empty-state p{font-size:13.5px; margin:0 0 12px;}
+
+  /* ---------- Member tags ---------- */
+  .member-list{display:flex; flex-wrap:wrap; gap:10px;}
+  .member-tag{
+    display:flex; align-items:center; gap:8px;
+    background:var(--surface); border:1px solid var(--card-line); border-radius:10px;
+    padding:8px 10px 8px 12px;
+  }
+  .member-tag .dot{width:9px; height:9px; border-radius:50%; background:var(--brass-soft); flex-shrink:0;}
+  .member-tag input{border:none; background:transparent; font-size:14px; width:100px; padding:2px;}
+  .member-tag input:focus-visible{outline:none; border-bottom:1px solid var(--brass);}
+
+  /* ---------- Overview / receipt ---------- */
+  .receipt{
+    background:var(--card); border:1px solid var(--card-line); border-radius:12px;
+    box-shadow:var(--shadow); position:relative; overflow:hidden;
+  }
+  .receipt-head{
+    padding:16px 18px 13px; border-bottom:1px dashed var(--card-line);
+    display:flex; justify-content:space-between; align-items:center; gap:10px;
+  }
+  .receipt-head .t1{font-family:'Noto Serif TC',serif; font-weight:700; font-size:16px;}
+  .receipt-head .t2{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft);}
+  .balance-row{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:13px 18px; border-bottom:1px dashed var(--card-line); gap:10px;
+  }
+  .balance-row:last-of-type{border-bottom:none;}
+  .balance-name{font-weight:700; font-size:14.5px;}
+  .balance-tagline{font-size:11.5px; color:var(--ink-soft); margin-top:2px;}
+  .balance-amt{font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:15.5px; padding:4px 10px; border-radius:6px; white-space:nowrap;}
+  .balance-amt.pos{background:var(--credit-bg); color:var(--credit);}
+  .balance-amt.neg{background:var(--debt-bg); color:var(--debt);}
+  .balance-amt.zero{background:var(--zero-bg); color:var(--ink-soft);}
+
+  .stamp{
+    font-family:'IBM Plex Mono',monospace; font-size:11px; font-weight:600;
+    color:var(--brass); border:2px solid var(--brass); border-radius:6px;
+    padding:4px 8px; letter-spacing:.06em; opacity:.9; white-space:nowrap; flex-shrink:0;
+  }
+  .stamp.settled{color:var(--credit); border-color:var(--credit);}
+
+  .settle-list{padding:4px 18px 16px;}
+  .settle-item{
+    display:flex; align-items:center; gap:8px; font-size:13.5px; flex-wrap:wrap;
+    padding:10px 0; border-bottom:1px dashed var(--card-line);
+  }
+  .settle-item:last-child{border-bottom:none;}
+  .settle-arrow{color:var(--brass); font-family:'IBM Plex Mono',monospace;}
+  .settle-amt{margin-left:auto; font-family:'IBM Plex Mono',monospace; font-weight:700;}
+  .settle-amt-cur{font-size:11px; font-weight:500; color:var(--ink-soft); margin-left:3px;}
+
+  /* 🆕「建議轉帳」「彼此累計欠款總額」的幣別換算列：小型下拉選單＋匯率提示文字
+     並排在同一行，取代原本另外佔一整個欄位的大型 select。 */
+  .convert-bar{
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    padding:10px 18px 0;
+  }
+  .convert-label{ font-size:12px; color:var(--ink-soft); white-space:nowrap; flex-shrink:0; }
+  .convert-select{
+    width:auto; max-width:120px; padding:5px 8px; font-size:12.5px;
+    border-radius:6px; flex-shrink:0;
+  }
+  .convert-note{ font-size:11.5px; color:var(--ink-soft); line-height:1.5; }
+
+  .kv-summary{display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:14px;}
+  .kv-card{background:var(--card); border:1px solid var(--card-line); border-radius:10px; padding:12px 14px;}
+  .kv-card .k{font-size:10.5px; color:var(--ink-soft); font-family:'IBM Plex Mono',monospace;}
+  .kv-card .v{font-family:'Noto Serif TC',serif; font-weight:700; font-size:19px; margin-top:4px; word-break:break-all;}
+
+  .rate-table{width:100%; border-collapse:collapse;}
+  .rate-table th{
+    text-align:left; font-size:11.5px; color:var(--ink-soft); font-weight:600;
+    padding:6px 8px; border-bottom:1px solid var(--card-line); font-family:'IBM Plex Mono',monospace;
+  }
+  .rate-table td{padding:9px 8px; border-bottom:1px dashed var(--card-line); font-size:14px;}
+  .rate-table input{width:100px;}
+
+  .hint{font-size:12px; color:var(--ink-soft); margin-top:6px; line-height:1.6;}
+  code.inline{background:var(--chip-bg); border-radius:4px; padding:1px 5px; font-family:'IBM Plex Mono',monospace; font-size:12px; word-break:break-all;}
+
+  details.adv{border:1px dashed var(--card-line); border-radius:10px; padding:2px 14px; margin-top:4px;}
+  details.adv > summary{
+    cursor:pointer; padding:10px 0; font-weight:700; font-size:13.5px; color:var(--ink-soft);
+    list-style:none; display:flex; align-items:center; gap:6px;
+  }
+  details.adv > summary::-webkit-details-marker{display:none;}
+  details.adv > summary::before{content:"▸"; font-size:11px; transition:transform .15s;}
+  details.adv[open] > summary::before{transform:rotate(90deg);}
+  details.adv > summary:focus-visible{outline:2px solid var(--brass); outline-offset:2px; border-radius:4px;}
+  details.adv .adv-inner{padding-bottom:14px;}
+
+  footer{text-align:center; font-size:11px; color:var(--ink-soft); margin-top:26px; font-family:'IBM Plex Mono',monospace; padding:0 4px;}
+
+  /* ---------- Overview: Balance Bar Chart ---------- */
+  .bar-chart-wrap{
+    padding:16px 18px 18px;
+  }
+  .bar-chart-legend{
+    display:flex; gap:14px; flex-wrap:wrap; margin-bottom:14px;
+    font-size:11px; font-family:'IBM Plex Mono',monospace; color:var(--ink-soft);
+  }
+  .bar-chart-legend span{
+    display:inline-flex; align-items:center; gap:5px;
+  }
+  .bar-chart-legend .swatch{
+    width:10px; height:10px; border-radius:2px; flex-shrink:0;
+  }
+  .bar-row{
+    display:flex; align-items:center; gap:0; margin-bottom:10px;
+  }
+  .bar-row:last-child{ margin-bottom:0; }
+  .bar-name{
+    width:72px; flex-shrink:0; font-size:12.5px; font-weight:700;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    text-align:right; padding-right:10px; color:var(--ink);
+  }
+  .bar-track{
+    flex:1; display:flex; align-items:center; position:relative; height:28px;
+  }
+  .bar-axis{
+    position:absolute; left:50%; top:0; bottom:0;
+    width:1px; background:var(--card-line);
+  }
+  .bar-fill-pos{
+    position:absolute; left:50%; height:18px; top:5px;
+    background:var(--credit); border-radius:0 4px 4px 0;
+    transition:width .45s cubic-bezier(.4,0,.2,1);
+    min-width:0;
+  }
+  .bar-fill-neg{
+    position:absolute; right:50%; height:18px; top:5px;
+    background:var(--debt); border-radius:4px 0 0 4px;
+    transition:width .45s cubic-bezier(.4,0,.2,1);
+    min-width:0;
+  }
+  .bar-fill-zero{
+    position:absolute; left:50%; height:18px; top:5px;
+    width:2px; margin-left:-1px;
+    background:var(--card-line); border-radius:2px;
+  }
+  .bar-val{
+    width:90px; flex-shrink:0; font-family:'IBM Plex Mono',monospace;
+    font-size:11.5px; font-weight:600; padding-left:8px; white-space:nowrap;
+  }
+  .bar-val.pos{ color:var(--credit); }
+  .bar-val.neg{ color:var(--debt); }
+  .bar-val.zero{ color:var(--ink-soft); }
+
+  /* ---------- Overview: Member Detail Cards ---------- */
+  .member-detail-list{
+    display:flex; flex-direction:column; gap:12px;
+    padding:14px 16px 16px;
+  }
+  .member-detail-card{
+    background:var(--surface); border:1px solid var(--card-line); border-radius:10px;
+    overflow:hidden;
+  }
+  .member-detail-head{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:11px 14px; cursor:pointer; gap:10px;
+    border-bottom:1px solid transparent;
+    transition:background .12s;
+  }
+  .member-detail-card.open .member-detail-head{
+    border-bottom-color:var(--card-line);
+    background:var(--surface-hover);
+  }
+  .member-detail-head:hover{ background:var(--surface-hover); }
+  .member-detail-name{
+    font-weight:700; font-size:14px; display:flex; align-items:center; gap:8px;
+  }
+  .member-detail-name .status-dot{
+    width:8px; height:8px; border-radius:50%; flex-shrink:0;
+  }
+  .member-detail-net{
+    font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:13.5px;
+    padding:4px 9px; border-radius:6px; white-space:nowrap; flex-shrink:0;
+  }
+  .member-detail-net.pos{ background:var(--credit-bg); color:var(--credit); }
+  .member-detail-net.neg{ background:var(--debt-bg); color:var(--debt); }
+  .member-detail-net.zero{ background:var(--chip-bg); color:var(--ink-soft); }
+  .member-detail-chevron{
+    font-size:11px; color:var(--ink-soft); transition:transform .2s; flex-shrink:0;
+  }
+  .member-detail-card.open .member-detail-chevron{ transform:rotate(180deg); }
+  .member-detail-body{
+    display:none; padding:0 14px 12px;
+  }
+  .member-detail-card.open .member-detail-body{ display:block; }
+  .detail-section-title{
+    font-size:10.5px; font-family:'IBM Plex Mono',monospace; color:var(--ink-soft);
+    letter-spacing:.06em; text-transform:uppercase;
+    margin:12px 0 6px; padding-bottom:4px;
+    border-bottom:1px dashed var(--card-line);
+  }
+  .detail-row{
+    display:flex; justify-content:space-between; align-items:flex-start;
+    padding:7px 0; border-bottom:1px dashed var(--card-line); gap:10px;
+    font-size:13px;
+  }
+  .detail-row:last-child{ border-bottom:none; }
+  .detail-row-left{ flex:1; min-width:0; }
+  .detail-row-desc{ font-weight:600; font-size:13px; }
+  .detail-row-sub{ font-size:11.5px; color:var(--ink-soft); margin-top:2px; line-height:1.5; }
+  .detail-row-amt{ flex-shrink:0; text-align:right; }
+  .detail-row-amt .orig{ font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:13px; }
+  .detail-row-amt .base{ font-size:10.5px; color:var(--ink-soft); font-family:'IBM Plex Mono',monospace; margin-top:2px; }
+  .detail-tag{
+    display:inline-block; font-size:10px; font-family:'IBM Plex Mono',monospace;
+    padding:1px 6px; border-radius:4px; margin-right:4px; vertical-align:middle;
+  }
+  .detail-tag.paid{ background:var(--credit-bg); color:var(--credit); }
+  .detail-tag.share{ background:var(--debt-bg); color:var(--debt); }
+  .detail-tag.transfer-in{ background:var(--credit-bg); color:var(--credit); }
+  .detail-tag.transfer-out{ background:var(--debt-bg); color:var(--debt); }
+  .detail-summary-row{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:9px 0 4px; font-size:12.5px;
+  }
+  .detail-summary-row .label{ color:var(--ink-soft); }
+  .detail-summary-row .val{ font-family:'IBM Plex Mono',monospace; font-weight:700; }
+  .detail-summary-row .val.pos{ color:var(--credit); }
+  .detail-summary-row .val.neg{ color:var(--debt); }
+  .detail-summary-row .val.zero{ color:var(--ink-soft); }
+  .detail-currency-group{ margin-top:8px; }
+  .detail-currency-badge{
+    display:inline-block; font-family:'IBM Plex Mono',monospace; font-size:10px;
+    background:var(--chip-bg); color:var(--ink-soft); padding:2px 7px; border-radius:4px;
+    margin-bottom:6px;
+  }
+
+  /* ---------- Small phones ---------- */
+  @media (max-width:420px){
+    .kv-summary{grid-template-columns:repeat(2,1fr);}
+    .balance-row{flex-wrap:wrap;}
+    .ledger-row{flex-direction:column;}
+    .ledger-amt{align-self:flex-end;}
+    .rate-table thead{display:none;}
+    .rate-table, .rate-table tbody, .rate-table tr, .rate-table td{display:block; width:100%;}
+    .rate-table tr{border-bottom:1px dashed var(--card-line); padding:8px 0;}
+    .rate-table td{border:none; padding:3px 0; display:flex; justify-content:space-between; align-items:center;}
+    .rate-table td::before{content:attr(data-label); font-size:11px; color:var(--ink-soft); font-family:'IBM Plex Mono',monospace;}
+  }
+
+  /* ---------- Desktop layout ---------- */
+  @media (min-width:860px){
+    body{padding-bottom:60px;}
+    .wrap{padding:0 20px;}
+    .app-header{padding:16px 20px;}
+    .header-row1 .brand{font-size:18px;}
+    #tripName{font-size:19px;}
+    .top-nav{display:flex;}
+    .bottom-nav{display:none;}
+    main{padding-top:20px;}
+    .kv-summary{grid-template-columns:repeat(4,1fr);}
+    .card{padding:22px 24px;}
+  }
