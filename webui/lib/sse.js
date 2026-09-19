@@ -74,7 +74,7 @@ function openTripSseStream(res, tripId) {
 // tripSubscribers 訂閱表——不管是擁有者的 SSE 連線，還是分享連結持有者
 // 的 SSE 連線，本來就已經依 tripId 訂閱在這裡，不需要另外開一組端點或
 // 另外換票。entry 為 null 時代表協作已結束（帳單已建立成支出，或被取消）。
-function broadcastReceiptSession(tripId, entry) {
+function broadcastReceiptSession(tripId, entry, reason) {
   const subscribers = tripSubscribers.get(tripId);
   if (!subscribers || !subscribers.size) return;
   const payload = entry
@@ -83,7 +83,10 @@ function broadcastReceiptSession(tripId, entry) {
         updatedAt: entry.updatedAt,
         writerId: entry.writerId,
       })}\n\n`
-    : 'event: receipt-session-cleared\ndata: {}\n\n';
+    // 🆕 [結束/放棄] reason 讓收到通知的其他協作者知道這場協作「為什麼」結束——
+    // 是有人按下建立支出了（finalized），還是有人主動按下「結束（放棄）」
+    // 中止了（abandoned）——而不是只看到一句語意含糊的「協作已結束」。
+    : `event: receipt-session-cleared\ndata: ${JSON.stringify({ reason: reason || null })}\n\n`;
   for (const res of subscribers) {
     res.write(payload);
   }
