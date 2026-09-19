@@ -70,6 +70,25 @@ function openTripSseStream(res, tripId) {
   });
 }
 
+// 🆕 [多人協作] 廣播「帳單辨識認領進度」有更新／已結束，直接重用既有的
+// tripSubscribers 訂閱表——不管是擁有者的 SSE 連線，還是分享連結持有者
+// 的 SSE 連線，本來就已經依 tripId 訂閱在這裡，不需要另外開一組端點或
+// 另外換票。entry 為 null 時代表協作已結束（帳單已建立成支出，或被取消）。
+function broadcastReceiptSession(tripId, entry) {
+  const subscribers = tripSubscribers.get(tripId);
+  if (!subscribers || !subscribers.size) return;
+  const payload = entry
+    ? `event: receipt-session-updated\ndata: ${JSON.stringify({
+        state: entry.state,
+        updatedAt: entry.updatedAt,
+        writerId: entry.writerId,
+      })}\n\n`
+    : 'event: receipt-session-cleared\ndata: {}\n\n';
+  for (const res of subscribers) {
+    res.write(payload);
+  }
+}
+
 function createSseHub() {
   return {
     sseTickets,
@@ -79,6 +98,7 @@ function createSseHub() {
     addTripSubscriber,
     removeTripSubscriber,
     openTripSseStream,
+    broadcastReceiptSession,
   };
 }
 

@@ -109,6 +109,7 @@ async function initShareMode(token){
     editingExpenseId = null; editingDepositId = null;
     renderAll();
     connectTripEventStream();
+    if (shareMode.permission === 'write') checkReceiptSessionAvailability(); // 🆕 [多人協作] 唯讀訪客不需要看到「加入認領」的提示
     // 🆕 帳單辨識是寫入功能，唯讀分享連結本來就看不到那個區塊，沒必要問
     if (!receiptState && shareMode.permission === 'write') maybeOfferReceiptDraftRestore();
   }catch(err){
