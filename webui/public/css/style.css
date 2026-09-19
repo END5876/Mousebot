@@ -365,6 +365,12 @@
     border:1px solid var(--card-line); flex-shrink:0;
   }
 
+  /* 🆕 [多人協作] 「有人正在辨識帳單中」提示列 */
+  .receipt-session-banner{
+    display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
+    font-size:13.5px;
+  }
+
   .receipt-item-row{
     border:1.5px solid var(--card-line); border-radius:10px; padding:12px; margin-bottom:10px; background:var(--surface);
   }
