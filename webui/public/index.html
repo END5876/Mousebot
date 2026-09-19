@@ -137,6 +137,9 @@
 
   <!-- ================= EXPENSES ================= -->
   <div class="panel" id="panel-expenses" data-panel="expenses">
+    <!-- 🆕 [多人協作] 有其他人正在進行帳單辨識認領時，顯示「加入認領」提示 -->
+    <div class="card" id="receiptSessionBanner" data-write-only style="display:none;"></div>
+
     <div class="card" id="receiptScanCard" data-write-only>
       <h2 class="section-title">📷 用帳單照片自動建立支出</h2>
       <p class="hint">上傳帳單照片就能自動辨識品項與金額。把品項認領給付費的人，服務費和訂金會自動歸入「共同分擔」，最後一鍵建立支出。</p>

@@ -22,6 +22,7 @@ async function loadTripFromApi(){
     saveOwnerConnectionState();
     renderAll();
     connectTripEventStream();
+    checkReceiptSessionAvailability(); // 🆕 [多人協作] 看看有沒有人正在進行帳單辨識協作
     if (!receiptState) maybeOfferReceiptDraftRestore(); // 🆕 目前沒有進行中的認領才詢問，避免打斷正在做的事
   }catch(err){
     toast('載入失敗：' + err.message, 'error');

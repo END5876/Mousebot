@@ -6,6 +6,137 @@
 ===================================================================== */
 let receiptState = null; // { imageDataUrl, items:[{id,name,price,type,assignedTo:'shared'|string[]}] }
 
+/* =====================================================================
+   🆕 [多人協作] 帳單辨識認領進度的即時同步
+   ---------------------------------------------------------------------
+   沿用既有的「分享連結」可編輯權限即可，不另外產生新的協作連結：任何
+   擁有這個行程可編輯權限的人（擁有者本人、或 write 權限的分享連結持有者）
+   開始掃描帳單、產生 receiptState 後，就會自動把這份認領進度廣播給同一個
+   行程裡其他擁有可編輯權限的人。不特別區分「你是誰」，任何人都可以直接
+   幫任何人勾選——沿用既有的 receiptToggleClaim() 等函式，這裡只是額外把
+   每次的變動同步推播出去。
+   這份協作狀態刻意不落地寫進 trip.json，只存在伺服器記憶體（見
+   webui/lib/receiptSessions.js），沒人更新一段時間後會自動過期。
+===================================================================== */
+let receiptSessionJoined = false;      // 目前這個分頁的 receiptState 是否正在跟伺服器同步
+let receiptSessionPushDirty = false;   // 自從上次推播後，是否有新的變動待送出
+let remoteReceiptSessionInfo = null;   // 偵測到「其他人正在辨識中」時的摘要，用來畫加入提示
+
+function receiptSessionUrl(suffix){
+  suffix = suffix || '';
+  if (shareMode) return `${apiBaseUrl()}/api/shared-trip/${encodeURIComponent(shareMode.token)}/receipt-session${suffix}`;
+  const guildId = document.getElementById('guildSelect').value;
+  const tripId = document.getElementById('tripSelect').value || trip.id;
+  return `${apiBaseUrl()}/api/trip/${encodeURIComponent(guildId)}/${encodeURIComponent(tripId)}/receipt-session${suffix}`;
+}
+
+async function pushReceiptSessionToServer(){
+  if (!receiptState) return;
+  try{
+    await fetch(receiptSessionUrl(), {
+      method: 'PUT',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, apiHeadersAny()),
+      body: JSON.stringify({ state: receiptState, writerId: CLIENT_INSTANCE_ID })
+    });
+  }catch(e){
+    // 廣播失敗不影響自己本地繼續操作，下一輪偵測到還有變動時會再試一次
+  }
+}
+
+async function clearReceiptSessionOnServer(){
+  try{ await fetch(receiptSessionUrl(), { method: 'DELETE', headers: apiHeadersAny() }); }catch(e){}
+}
+
+// 🆕 [Bug fix] 只有「這個分頁自己做的編輯」才該標記為待推播；套用從伺服器／
+// SSE 收到的別人狀態時絕對不能標記，否則每個分頁收到更新後都會在自己的
+// 週期性計時器裡把「剛收到、可能已經是舊的」那份狀態原封不動地推回去，
+// 跟其他人幾乎同時的最新編輯互相搶時間覆蓋——這正是「別人點的項目過幾秒
+// 又被換回發起人版本」的成因：renderReceiptWorkArea() 原本無論呼叫來源
+// 一律標記待推播，導致純粹「接收＋重繪」也會觸發一次沒有意義、甚至帶著
+// 舊資料的再推播。現在改成只有實際觸發編輯的函式（receiptToggleClaim 等）
+// 會呼叫這個函式，renderReceiptWorkArea() 本身不再自動標記。
+function markReceiptSessionDirty(){
+  receiptSessionPushDirty = true;
+}
+
+// 每 1.5 秒檢查一次：認領動作希望盡快讓其他人看到，比草稿備份的 3 秒間隔更緊湊一點。
+setInterval(() => {
+  if (receiptSessionJoined && receiptSessionPushDirty){
+    receiptSessionPushDirty = false;
+    pushReceiptSessionToServer();
+  }
+}, 1500);
+
+function renderReceiptSessionBanner(){
+  const zone = document.getElementById('receiptSessionBanner');
+  if (!zone) return;
+  if (remoteReceiptSessionInfo && !receiptState){
+    zone.style.display = '';
+    zone.innerHTML = `
+      <div class="receipt-session-banner">
+        <span>📡 有人正在進行帳單辨識認領中，加入即可立刻同步、一起點選品項</span>
+        <button type="button" class="btn btn-brass btn-sm" onclick="withLoading(this,'加入中…',joinReceiptSession)">加入認領</button>
+      </div>`;
+  } else {
+    zone.style.display = 'none';
+    zone.innerHTML = '';
+  }
+}
+
+// 🆕 由 SSE 收到「有其他人開始／更新了認領進度」時呼叫；只有目前沒有自己
+// 認領畫面的人才需要看到這個提示，已經在協作中的分頁會直接套用最新狀態
+// （見 js/sse.js 的 receipt-session-updated 監聽器），不需要另外顯示提示。
+function receiptSessionAnnounceUpdate(updatedAt){
+  remoteReceiptSessionInfo = { updatedAt };
+  renderReceiptSessionBanner();
+}
+function receiptSessionAnnounceCleared(){
+  remoteReceiptSessionInfo = null;
+  renderReceiptSessionBanner();
+}
+
+// 進入「支出記帳」分頁、或剛連上行程時呼叫：查詢目前是否有其他人正在
+// 進行帳單辨識協作，若有則顯示「加入認領」的提示按鈕。
+async function checkReceiptSessionAvailability(){
+  if (receiptSessionJoined || receiptState) return;
+  if (!shareMode){
+    const guildId = document.getElementById('guildSelect').value;
+    const tripId = document.getElementById('tripSelect').value;
+    if (!guildId || !tripId) return; // 尚未連線，不用檢查
+  }
+  try{
+    const res = await fetch(receiptSessionUrl(), { headers: apiHeadersAny() });
+    if (!res.ok) return;
+    const body = await res.json();
+    remoteReceiptSessionInfo = (body && body.active) ? { updatedAt: body.updatedAt } : null;
+    renderReceiptSessionBanner();
+  }catch(e){ /* 安靜失敗，不影響其他功能 */ }
+}
+
+// 加入其他人正在進行的認領：直接拉回目前最新的 state 套用成自己的 receiptState。
+// 這裡刻意不標記待推播（見 markReceiptSessionDirty 的說明）：套用別人給的
+// 狀態不是「自己的新變動」，之後只有實際點選品項等本地操作才會標記待推播。
+async function joinReceiptSession(){
+  try{
+    const res = await fetch(receiptSessionUrl(), { headers: apiHeadersAny() });
+    if (!res.ok){ toast('加入失敗，請稍後再試一次', 'error'); return; }
+    const body = await res.json();
+    if (!body || !body.active){
+      toast('這個認領進度剛好已經結束了', 'error');
+      remoteReceiptSessionInfo = null;
+      renderReceiptSessionBanner();
+      return;
+    }
+    receiptState = body.state;
+    receiptSessionJoined = true;
+    remoteReceiptSessionInfo = null;
+    renderReceiptWorkArea();
+    toast('已加入，現在可以一起點選品項了', 'success');
+  }catch(err){
+    toast('加入失敗：' + err.message, 'error');
+  }
+}
+
 // 🆕 [資料遺失保護] 帳單認領進度草稿：整個認領流程（上傳照片辨識 → 逐項認領 →
 // 建立支出）往往要花一段時間，過程中若使用者不小心重新整理頁面、或分頁被
 // 系統／瀏覽器關閉，receiptState 只存在記憶體裡會直接整個消失，得重新掃描
@@ -71,10 +202,42 @@ async function maybeOfferReceiptDraftRestore(){
   );
 
   if (restore){
-    receiptState = draft.receiptState;
+    // 🆕 [多人協作] 復原草稿時要自動重新加入協作，而不是只把重整前的本地
+    // 畫面原封不動叫回來就結束。重新整理頁面會讓 receiptSessionJoined
+    // 這個記憶體旗標歸零，若什麼都不做，這個分頁會變成一份「看得到、
+    // 但既不會推播自己的變動、也不會套用別人變動」的殭屍畫面。
+    // 這裡先問伺服器「這場協作現在還在不在」：
+    //   - 還在（自己重整的這段期間，其他人可能持續在認領）→ 直接採用
+    //     伺服器上「當下最新」的狀態，而不是用手上這份可能已經過時的
+    //     本地草稿，避免一加入就把別人剛做的認領覆蓋掉。
+    //   - 不在了（可能沒人接手，或協作早就結束）→ 沿用本地草稿內容，
+    //     並主動把它重新廣播出去，讓自己等同「重新發起」這場協作，
+    //     其他人一樣能看到「加入認領」的提示、接續使用。
+    let usedServerState = false;
+    try{
+      const res = await fetch(receiptSessionUrl(), { headers: apiHeadersAny() });
+      if (res.ok){
+        const body = await res.json();
+        if (body && body.active){
+          receiptState = body.state;
+          usedServerState = true;
+        }
+      }
+    }catch(e){ /* 查詢失敗就退回使用本地草稿，不阻擋復原 */ }
+
+    if (!usedServerState) receiptState = draft.receiptState;
+    receiptSessionJoined = true;
+
+    // 這裡刻意在 receiptState／receiptSessionJoined 都設定好之後才切分頁：
+    // 切分頁時會順便觸發 checkReceiptSessionAvailability()（見 js/state.js），
+    // 該函式一看到 receiptState 已經有值就會直接跳過，不會因為時間差而
+    // 短暫顯示一個多餘、其實已經沒有意義的「加入認領」提示。
     showMainTab('expenses');
     renderReceiptWorkArea();
-    toast('已復原上次的認領進度', 'success');
+
+    if (!usedServerState) pushReceiptSessionToServer(); // 重新把（沒人接手的）這份協作廣播出去
+
+    toast(usedServerState ? '已復原並同步最新的認領進度' : '已復原上次的認領進度，並已重新加入協作', 'success');
   } else {
     clearReceiptDraft();
   }
@@ -169,6 +332,10 @@ async function handleReceiptUpload(evt){
     toast(`辨識出 ${items.length} 個項目${rateNote}${langNote}，請逐項認領`, 'success');
     renderReceiptWorkArea();
     persistReceiptDraft(); // 🆕 剛辨識完的基礎資料（含圖片）先立刻存一份，不等下一次週期性儲存
+    // 🆕 [多人協作] 新掃描出來的這份認領進度，預設就是這個分頁在「驅動」，
+    // 立刻標記為已加入並廣播出去，讓其他擁有可編輯權限的人能馬上看到「加入認領」的提示。
+    receiptSessionJoined = true;
+    pushReceiptSessionToServer();
   }catch(err){
     toast('辨識失敗：' + err.message, 'error');
     uploadZone.innerHTML = original;
@@ -179,6 +346,8 @@ function receiptResetUpload(){
   receiptState = null;
   clearReceiptDraft(); // 🆕 認領已放棄或已完成，清掉暫存草稿，避免下次重整又跳出復原提示
   receiptDraftDirty = false;
+  receiptSessionJoined = false;      // 🆕 [多人協作] 離開這次的認領畫面（不會結束其他人的協作，見上方說明）
+  receiptSessionPushDirty = false;   // 🆕
   document.getElementById('receiptWorkArea').style.display = 'none';
   document.getElementById('receiptWorkArea').innerHTML = '';
   document.getElementById('receiptUploadZone').style.display = '';
@@ -194,6 +363,7 @@ function receiptToggleAttendee(memberId){
   const idx = receiptState.attendeeIds.indexOf(memberId);
   if (idx > -1) receiptState.attendeeIds.splice(idx,1);
   else receiptState.attendeeIds.push(memberId);
+  markReceiptSessionDirty();
   renderReceiptWorkArea();
 }
 function receiptToggleClaim(itemId, memberId){
@@ -202,21 +372,25 @@ function receiptToggleClaim(itemId, memberId){
   const idx = item.assignedTo.indexOf(memberId);
   if (idx > -1) item.assignedTo.splice(idx,1);
   else item.assignedTo.push(memberId);
+  markReceiptSessionDirty();
   renderReceiptWorkArea();
 }
 function receiptSetShared(itemId){
   const item = receiptState.items.find(i=>i.id===itemId);
   item.assignedTo = (item.assignedTo === 'shared') ? [] : 'shared';
+  markReceiptSessionDirty();
   renderReceiptWorkArea();
 }
 function receiptUpdateField(itemId, field, value){
   const item = receiptState.items.find(i=>i.id===itemId);
   if (field === 'price'){ item.price = parseFloat(value) || 0; item.priceOverridden = true; } // 使用者接手了，不再自動套用服務費比例
   else if (field === 'name'){ item.name = value; item.nameTranslated = ''; } // 名稱被手動改過，AI 原本的翻譯已經對不上，直接清空避免顯示過時翻譯
+  markReceiptSessionDirty();
   renderReceiptWorkArea(); // 完整重繪，讓「已含服務費」提示能正確消失/更新
 }
 function receiptRemoveItem(itemId){
   receiptState.items = receiptState.items.filter(i=>i.id!==itemId);
+  markReceiptSessionDirty();
   renderReceiptWorkArea();
 }
 // 手動新增一個辨識漏掉的品項
@@ -231,6 +405,7 @@ function receiptAddManualItem(){
     type: 'item',
     assignedTo: [],
   });
+  markReceiptSessionDirty();
   renderReceiptWorkArea();
   const rows = document.querySelectorAll('#receiptWorkArea .receipt-item-head input[type=text]');
   if (rows.length) rows[rows.length-1].focus();
@@ -247,6 +422,7 @@ function receiptToggleItemType(itemId){
       item.price = round2(item.basePrice * (1 + receiptState.serviceChargeRate));
     }
   }
+  markReceiptSessionDirty();
   renderReceiptWorkArea();
 }
 // 服務費比例辨識錯誤時可以手動修正；還沒被手動改過金額的品項會依新比例重新計算
@@ -260,6 +436,7 @@ function receiptUpdateServiceChargeRate(value){
       item.price = round2(item.basePrice * (1 + rate));
     }
   });
+  markReceiptSessionDirty();
   renderReceiptWorkArea();
 }
 
@@ -405,6 +582,28 @@ function renderReceiptWorkArea(){
 }
 
 async function finalizeReceiptExpense(){
+  // 🆕 [Bug fix] 建立支出前，先跟伺服器確認一次「這場協作是否還在進行中」。
+  // 上面 SSE 的 receipt-session-cleared 監聽器只能處理「事件已經送達」之後
+  // 的情況；如果兩個人幾乎同時按下「建立這筆支出」，在對方的送出結果透過
+  // SSE 傳回來之前，自己這邊完全不知情、照樣會建立出第二筆重複的支出。
+  // 這裡在真正寫入之前，用一次即時查詢當最後防線：若協作已經被別人結束
+  // （代表已經有人送出過了），就直接中止並提示，而不是照樣送出。
+  // 查詢失敗（例如網路問題）時不擋，維持原本可以送出的行為。
+  if (receiptSessionJoined){
+    try{
+      const checkRes = await fetch(receiptSessionUrl(), { headers: apiHeadersAny() });
+      if (checkRes.ok){
+        const body = await checkRes.json();
+        if (!body || !body.active){
+          toast('這筆帳單剛好已經被其他人建立完成了，這裡就不用再送一次囉', 'error');
+          receiptResetUpload();
+          renderAll();
+          return;
+        }
+      }
+    }catch(e){ /* 查詢失敗就不擋，維持原本可以送出的行為 */ }
+  }
+
   // 手動新增後忘記填寫、金額還是 0 又沒填名稱的空白列，視為放棄該列，直接忽略不擋結算
   receiptState.items = receiptState.items.filter(i => i.name.trim() || i.price !== 0);
   const items = receiptState.items;
@@ -441,8 +640,10 @@ async function finalizeReceiptExpense(){
     createdBy: 'web-ui-receipt',
   });
   toast(`已建立支出「${description}」，共 ${fmtMoney(grandTotal, currency)} ${currency}`, 'success');
+  const wasJoined = receiptSessionJoined; // 🆕 [多人協作] 先記住這次是不是正在協作中，等 reset 完再決定要不要通知大家結束
   receiptResetUpload();
   renderAll();
   await saveTripToApi();
+  if (wasJoined) clearReceiptSessionOnServer(); // 🆕 這筆帳單已經正式記入支出，通知所有協作者這次認領已經結束
 }
 

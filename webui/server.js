@@ -53,12 +53,14 @@ const { getFxRatesFor } = require('./lib/fxRates');
 const { genAI, extractJsonObject, sanitizeReceiptResponse, recognizeReceipt } = require('./lib/receiptScan');
 const { createApiKeyMiddleware, createAuthHelpers } = require('./lib/auth');
 const { createSseHub, attachTripEventBroadcast } = require('./lib/sse');
+const { getReceiptSession, setReceiptSession, clearReceiptSession } = require('./lib/receiptSessions');
 
 const createTripsRouter = require('./routes/trips');
 const createShareLinksRouter = require('./routes/shareLinks');
 const createSharedTripRouter = require('./routes/sharedTrip');
 const createSseRouter = require('./routes/sse');
 const createUtilityRouter = require('./routes/utility');
+const createReceiptSessionRouter = require('./routes/receiptSession');
 
 function startWebApi(options = {}) {
   const port = options.port || process.env.PORT || process.env.SPLITBILL_WEB_PORT || 3000;
@@ -84,10 +86,15 @@ function startWebApi(options = {}) {
     storage,
     apiKey,
     ...auth,       // authorizeTripAccess, requireOwner, hasShareableCredential
-    ...sseHub,      // sseTickets, pruneSseTickets, SSE_TICKET_TTL_MS, openTripSseStream, ...
+    ...sseHub,      // sseTickets, pruneSseTickets, SSE_TICKET_TTL_MS, openTripSseStream, broadcastReceiptSession, ...
     getFxRatesFor,
     genAI,
     recognizeReceipt,
+    // 🆕 [多人協作] 帳單辨識認領進度的共享狀態（見 lib/receiptSessions.js），
+    // 刻意跟 storage 分開、不落地寫進 splitbill.json。
+    getReceiptSession,
+    setReceiptSession,
+    clearReceiptSession,
   };
 
   app.use('/api', createSseRouter(ctx));
@@ -95,6 +102,7 @@ function startWebApi(options = {}) {
   app.use('/api', createShareLinksRouter(ctx));
   app.use('/api', createSharedTripRouter(ctx));
   app.use('/api', createUtilityRouter(ctx));
+  app.use('/api', createReceiptSessionRouter(ctx));
 
   app.listen(port, () => {
     console.log(`[splitbill-web] 網頁記帳介面已啟動： http://0.0.0.0:${port}`);

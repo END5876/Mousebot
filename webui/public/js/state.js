@@ -21,6 +21,7 @@ function showMainTab(tab){
   document.querySelectorAll('#topNav .nav-btn, #bottomNav .nav-btn').forEach(b=>b.classList.toggle('active', b.dataset.tab===tab));
   document.querySelectorAll('.panel[data-panel]').forEach(p=>p.classList.toggle('active', p.dataset.panel===tab));
   if (tab === 'settings') showSettingsSub(currentSettingsSub);
+  if (tab === 'expenses' && typeof checkReceiptSessionAvailability === 'function') checkReceiptSessionAvailability(); // 🆕 [多人協作] 進入支出分頁時，順便確認有沒有人正在進行帳單辨識協作
   renderAll();
   window.scrollTo({top:0, behavior:'smooth'});
 }

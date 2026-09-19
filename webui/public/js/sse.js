@@ -74,6 +74,39 @@ async function connectTripEventStream(){
       handleIncomingTripDeleted();
     });
 
+    // 🆕 [多人協作] 帳單辨識認領進度：有人更新了認領狀態（勾選/取消勾選、
+    // 修改品項等）就會收到這個事件；如果自己也正在同一份協作裡，直接套用
+    // 最新狀態；如果自己還沒加入，只更新「有人正在辨識中」的提示。
+    es.addEventListener('receipt-session-updated', (evt) => {
+      try{
+        const payload = JSON.parse(evt.data);
+        if (payload && payload.writerId && payload.writerId === CLIENT_INSTANCE_ID) return; // 自己剛推播的回音
+        if (typeof receiptSessionJoined !== 'undefined' && receiptSessionJoined){
+          receiptState = payload.state;
+          renderReceiptWorkArea();
+        } else if (typeof receiptSessionAnnounceUpdate === 'function') {
+          receiptSessionAnnounceUpdate(payload.updatedAt);
+        }
+      }catch(e){ /* 忽略解析失敗的單一事件 */ }
+    });
+
+    // 🆕 [Bug fix] 這次的帳單辨識協作已經結束（帳單已建立成支出，或被取消）。
+    // 過去這裡只把 receiptSessionJoined 這個旗標設回 false，畫面上的認領
+    // 表單、品項清單、「建立這筆支出」按鈕卻完全沒有跟著關閉——導致還沒
+    // 收到通知前就已經打開這頁的人，即使協作其實已經結束，依然可以照樣
+    // 按下「建立這筆支出」，用自己手上那份（其實已經失效）的資料再送出
+    // 一次，變成同一張帳單被重複記帳兩筆。現在改成直接呼叫
+    // receiptResetUpload()：只對「真的還在這場協作裡」的分頁生效（本人
+    // 剛送出的那個分頁已經在 finalizeReceiptExpense() 裡自行 reset 過，
+    // receiptSessionJoined 這時已經是 false，不會重複顯示提示或誤觸）。
+    es.addEventListener('receipt-session-cleared', () => {
+      if (typeof receiptSessionJoined !== 'undefined' && receiptSessionJoined){
+        if (typeof receiptResetUpload === 'function') receiptResetUpload();
+        toast('這次帳單辨識協作已經結束了（可能已經建立成支出，或發起人已取消），請重新掃描或確認結果', 'info');
+      }
+      if (typeof receiptSessionAnnounceCleared === 'function') receiptSessionAnnounceCleared();
+    });
+
     es.onerror = () => {
       // 連線中斷：關閉舊連線，稍等一下用「新換的票券」重新連線，
       // 不讓瀏覽器用同一個（已失效的一次性票券）網址自動重試。
