@@ -99,10 +99,18 @@ async function connectTripEventStream(){
     // receiptResetUpload()：只對「真的還在這場協作裡」的分頁生效（本人
     // 剛送出的那個分頁已經在 finalizeReceiptExpense() 裡自行 reset 過，
     // receiptSessionJoined 這時已經是 false，不會重複顯示提示或誤觸）。
-    es.addEventListener('receipt-session-cleared', () => {
+    es.addEventListener('receipt-session-cleared', (evt) => {
+      let reason = null;
+      try{ reason = (JSON.parse(evt.data) || {}).reason; }catch(e){ /* 忽略解析失敗，退回通用訊息 */ }
       if (typeof receiptSessionJoined !== 'undefined' && receiptSessionJoined){
         if (typeof receiptResetUpload === 'function') receiptResetUpload();
-        toast('這次帳單辨識協作已經結束了（可能已經建立成支出，或發起人已取消），請重新掃描或確認結果', 'info');
+        // 🆕 依實際結束原因給出對應的訊息，而不是一句語意含糊的「可能已經…」
+        const msg = reason === 'finalized'
+          ? '這次帳單辨識協作已經結束了：已經有人建立成支出，畫面已自動關閉'
+          : reason === 'abandoned'
+          ? '這次帳單辨識協作已經被結束（放棄），沒有建立任何支出'
+          : '這次帳單辨識協作已經結束了（可能已經建立成支出，或發起人已取消），請重新掃描或確認結果';
+        toast(msg, 'info');
       }
       if (typeof receiptSessionAnnounceCleared === 'function') receiptSessionAnnounceCleared();
     });

@@ -43,8 +43,8 @@ async function pushReceiptSessionToServer(){
   }
 }
 
-async function clearReceiptSessionOnServer(){
-  try{ await fetch(receiptSessionUrl(), { method: 'DELETE', headers: apiHeadersAny() }); }catch(e){}
+async function clearReceiptSessionOnServer(reason){
+  try{ await fetch(receiptSessionUrl(`?reason=${encodeURIComponent(reason || '')}`), { method: 'DELETE', headers: apiHeadersAny() }); }catch(e){}
 }
 
 // 🆕 [Bug fix] 只有「這個分頁自己做的編輯」才該標記為待推播；套用從伺服器／
@@ -330,11 +330,16 @@ async function handleReceiptUpload(evt){
       ? `，偵測到帳單為${receiptState.detectedLanguage}，已附上繁中翻譯`
       : '';
     toast(`辨識出 ${items.length} 個項目${rateNote}${langNote}，請逐項認領`, 'success');
+    // 🆕 [Bug fix] 順序很重要：一定要先把 receiptSessionJoined 設成 true，
+    // 再呼叫 renderReceiptWorkArea()——「🛑 結束認領（放棄）」按鈕是否顯示
+    // 就是看這個當下的值。先前這兩行順序相反，導致第一次掃描完成、剛畫出
+    // 畫面那一刻 receiptSessionJoined 還是 false，按鈕整個不會出現，
+    // 要等使用者之後隨便點了什麼觸發重繪才會冒出來。
+    receiptSessionJoined = true;
     renderReceiptWorkArea();
     persistReceiptDraft(); // 🆕 剛辨識完的基礎資料（含圖片）先立刻存一份，不等下一次週期性儲存
     // 🆕 [多人協作] 新掃描出來的這份認領進度，預設就是這個分頁在「驅動」，
-    // 立刻標記為已加入並廣播出去，讓其他擁有可編輯權限的人能馬上看到「加入認領」的提示。
-    receiptSessionJoined = true;
+    // 立刻廣播出去，讓其他擁有可編輯權限的人能馬上看到「加入認領」的提示。
     pushReceiptSessionToServer();
   }catch(err){
     toast('辨識失敗：' + err.message, 'error');
@@ -357,6 +362,25 @@ function receiptResetUpload(){
       <div>點這裡上傳帳單照片（或用手機拍照）</div>
       <input type="file" id="receiptFileInput" accept="image/*" onchange="handleReceiptUpload(event)">
     </label>`;
+}
+
+// 🆕 [多人協作] 明確「結束（放棄）」這次認領：不建立任何支出，直接把整場
+// 協作結束掉，並通知所有正在一起認領的人。
+// 跟上面的「🔄 重新上傳照片」不同——那個只會讓「自己」離開這個畫面，
+// 伺服器上的協作仍然存在，其他人可以繼續認領；這個按鈕則是主動終止整場
+// 協作，任何一位參與者都可以按（不特別區分發起人），因為之前已經確認
+// 不需要區分「你是誰」。會影響到所有正在協作的人，因此先跳確認框，
+// 避免手滑誤觸中斷別人正在做的事。
+async function abandonReceiptSession(){
+  const ok = await confirmModal(
+    '確定要結束這次認領嗎？不會建立任何支出，正在一起認領的其他人也會被中斷，需要的話得重新掃描。',
+    { title: '結束（放棄）這次認領？', confirmText: '結束並放棄', cancelText: '取消', danger: true }
+  );
+  if (!ok) return;
+  const wasJoined = receiptSessionJoined;
+  receiptResetUpload();
+  if (wasJoined) await clearReceiptSessionOnServer('abandoned');
+  toast('已結束這次認領，沒有建立任何支出', 'info');
 }
 
 function receiptToggleAttendee(memberId){
@@ -536,7 +560,10 @@ function renderReceiptWorkArea(){
       <img class="receipt-thumb" src="${receiptState.imageDataUrl}" alt="帳單照片預覽">
       <div style="flex:1;">
         <p class="hint" style="margin-top:0;">共 ${receiptState.items.length} 個項目。點選品項下方的人名即可認領（可多選＝一起分攤這項），服務費與訂金已自動歸入「共同分擔」。辨識錯誤都可以直接修改，或用下方「新增項目」補上漏掉的品項。${receiptState.items.some(it => it.nameTranslated) ? `<br>🌐 偵測到帳單為<b>${escapeHtml(receiptState.detectedLanguage)}</b>，品項下方已附上繁體中文翻譯供核對。` : ''}</p>
-        <button type="button" class="btn btn-ghost btn-sm" onclick="receiptResetUpload()">🔄 重新上傳照片</button>
+        <div class="btn-row">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="receiptResetUpload()">🔄 重新上傳照片</button>
+          ${receiptSessionJoined ? '<button type="button" class="btn btn-danger btn-sm" onclick="abandonReceiptSession()">🛑 結束認領（放棄）</button>' : ''}
+        </div>
       </div>
     </div>
 
@@ -644,6 +671,6 @@ async function finalizeReceiptExpense(){
   receiptResetUpload();
   renderAll();
   await saveTripToApi();
-  if (wasJoined) clearReceiptSessionOnServer(); // 🆕 這筆帳單已經正式記入支出，通知所有協作者這次認領已經結束
+  if (wasJoined) clearReceiptSessionOnServer('finalized'); // 🆕 這筆帳單已經正式記入支出，通知所有協作者這次認領已經結束
 }
 

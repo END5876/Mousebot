@@ -23,6 +23,13 @@ module.exports = function createReceiptSessionRouter(ctx) {
     res.json(entry ? { active: true, state: entry.state, updatedAt: entry.updatedAt } : { active: false });
   }
 
+  // 只接受已知的兩種結束原因，其餘一律當成 null（前端會顯示語意含糊但仍
+  // 安全的預設訊息），避免任意字串未經檢查就被塞進 SSE 廣播內容。
+  const KNOWN_END_REASONS = new Set(['finalized', 'abandoned']);
+  function sanitizeReceiptSessionEndReason(raw) {
+    return KNOWN_END_REASONS.has(raw) ? raw : null;
+  }
+
   // ---- 擁有者／一般分享連結路徑：/api/trip/:guildId/:tripId/receipt-session ----
   router.get('/trip/:guildId/:tripId/receipt-session', (req, res) => {
     try {
@@ -62,7 +69,7 @@ module.exports = function createReceiptSessionRouter(ctx) {
       if (!trip) return res.status(404).json({ error: '找不到這個行程' });
       if (!authorizeTripAccess(req, res, trip, true)) return;
       clearReceiptSession(trip.id);
-      broadcastReceiptSession(trip.id, null);
+      broadcastReceiptSession(trip.id, null, sanitizeReceiptSessionEndReason(req.query.reason));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -121,7 +128,7 @@ module.exports = function createReceiptSessionRouter(ctx) {
         return res.status(403).json({ error: '此分享連結為唯讀，無法結束帳單辨識協作' });
       }
       clearReceiptSession(found.trip.id);
-      broadcastReceiptSession(found.trip.id, null);
+      broadcastReceiptSession(found.trip.id, null, sanitizeReceiptSessionEndReason(req.query.reason));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
