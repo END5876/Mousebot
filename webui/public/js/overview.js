@@ -163,9 +163,13 @@ function renderBalanceBarChart(net) {
    1. transferIn / transferOut 的 amtSign 原本與 summaryRows 矛盾，
       導致「已轉帳結清」的人淨額不減反增，形同債務加倍計算。
       現已對調為：transferIn = -1（減少淨額），transferOut = +1（增加淨額）。
-   2. 明細文字「收自／付給」原本耦合在 amtSign 判斷式中，
-      對調正負號後文字會跟著錯。現改用獨立參數 isIncoming 控制文字，
-      amtSign 只單純代表「對淨額的影響方向」。
+      對應的 .detail-tag.transfer-in / .transfer-out 顏色（style.css）
+      原本也跟這個方向相反，一併對調修正。
+   2. 明細文字「收自／付給」原本會在 tagLabel 標籤上顯示一次、又在
+      desc 裡重複組一次（例如「〔收自〕收自 小明」），且 desc 還被
+      雙重 escapeHtml() 導致名字含特殊字元時顯示亂碼。現改成 desc
+      只放名字本身（item.counterpart），方向完全交給 tagLabel 顯示，
+      不再需要額外的 isIncoming 參數。
    3. 移除未被呼叫的死代碼 fmtOrigAndBase()。
 ===================================================================== */
 function renderMemberDetails(net) {
@@ -237,16 +241,10 @@ function renderMemberDetails(net) {
 
   // amtSign：僅代表「對淨額的影響方向」（+1 增加淨額 / -1 減少淨額）
   // isIncoming：僅代表「文字顯示為收自 / 付給」，兩者互相獨立，不再耦合
-  function renderSection(title, items, tagClass, tagLabel, amtSign, isIncoming) {
+  function renderSection(title, items, tagClass, tagLabel, amtSign) {
     if (!items.length) return '';
     const rows = items.map(item => {
-      const desc = item.description
-        || (item.counterpart ? `${isIncoming ? '收自' : '付給'} ${escapeHtml(item.counterpart)}` : '');
-      // 🆕 [時間資訊] 沿用跟支出/轉帳明細列表一致的 .ledger-time 樣式（等寬字體、
-      // 淡色），讓總覽頁展開後看到的每一筆記錄，跟「支出」「轉帳」分頁列表裡的
-      // 時間資訊是同一套視覺語言，不會有兩種不同粗細/字體的「時間」混在介面裡。
-      // 時間永遠顯示在最上面一行，備註（若有）接在下一行，兩者共用同一個
-      // detail-row-sub 容器，不佔用額外的區塊間距。
+      const desc = item.description || item.counterpart || '';
       const timeLabel = `<span class="ledger-time">${fmtDateTime(item.createdAt)}</span>`;
       const noteLabel = item.note ? `備註：${escapeHtml(item.note)}` : '';
       const sub = noteLabel ? `${timeLabel}<br>${noteLabel}` : timeLabel;
@@ -281,10 +279,10 @@ function renderMemberDetails(net) {
 
     // ↓↓↓ 修正處：transferIn 改為 -1（收到預付款＝減少淨額，因為原本墊款義務已被抵銷）
     //             transferOut 改為 +1（付出預付款＝增加淨額，等同預先幫忙代墊）
-    const paidSection   = renderSection('代墊支出（＋增加淨額）', ld.paid, 'paid', '代墊', 1, false);
-    const shareSection  = renderSection('分攤費用（－減少淨額）', ld.share, 'share', '分攤', -1, false);
-    const tInSection    = renderSection('預收款／轉帳收入（－減少淨額）', ld.transferIn, 'transfer-in', '收自', -1, true);
-    const tOutSection   = renderSection('預付款／轉帳支出（＋增加淨額）', ld.transferOut, 'transfer-out', '付給', 1, false);
+    const paidSection   = renderSection('代墊支出（＋增加淨額）', ld.paid, 'paid', '代墊', 1);
+    const shareSection  = renderSection('分攤費用（－減少淨額）', ld.share, 'share', '分攤', -1);
+    const tInSection    = renderSection('預收款／轉帳收入（－減少淨額）', ld.transferIn, 'transfer-in', '收自', -1);
+    const tOutSection   = renderSection('預付款／轉帳支出（＋增加淨額）', ld.transferOut, 'transfer-out', '付給', 1);
 
     const totalPaid  = round2(ld.paid.reduce((s,x)=>s+x.amountInBase,0));
     const totalShare = round2(ld.share.reduce((s,x)=>s+x.amountInBase,0));
