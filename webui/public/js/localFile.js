@@ -30,6 +30,10 @@ function updateLocalFileStatus(){
     pillText.textContent = '未連結本機檔案';
     pill.classList.remove('on','warn');
   }
+  // 🆕 [狀態 pill 精簡] 「未連結本機檔案」是多數人（用 Bot 連線）的預設/
+  // 正常狀態，不需要常駐提醒；只有使用者主動連結了本機檔案（代表接下來
+  // 存檔會直接覆寫本機磁碟上的那個檔案，是需要使用者知情的狀態）才顯示。
+  pill.style.display = localFileHandle ? '' : 'none';
 }
 function updateBotStatusPill(connected, label){
   const pillText = document.getElementById('botStatusText');
@@ -41,6 +45,9 @@ function updateBotStatusPill(connected, label){
     pillText.textContent = '未連線 Bot';
     pill.classList.remove('on','warn');
   }
+  // 🆕 [狀態 pill 精簡] 已連線是正常狀態，不需要常駐佔位；未連線才是需要
+  // 使用者處理的狀態，才跳出來提醒（點下去可直接跳到「連線 Bot」分頁）。
+  pill.style.display = connected ? 'none' : '';
 }
 function toggleApiKeyVisibility(){
   const input = document.getElementById('apiKey');
@@ -113,4 +120,3 @@ function scheduleAutoSave(){
   clearTimeout(autoSaveTimer);
   autoSaveTimer = setTimeout(()=>{ saveToLocalFile(true); }, 500);
 }
-
