@@ -136,6 +136,7 @@
   }
   .theme-toggle-btn:hover{background:rgba(255,255,255,0.16);}
   .status-pills{display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;}
+  .status-pills .pill {display: none;}
 
   /* 🆕 [分享連結] 分享連結模式下的畫面收斂：
      - data-owner-only：只有擁有者（用真正的 SPLITBILL_API_KEY 連線）才看得到的東西，
@@ -360,6 +361,27 @@
   }
   .chip:hover{border-color:var(--brass-soft);}
   .chip.checked{border-color:var(--brass-bg); background:var(--brass-tint);}
+  /* 🆕 [手動標記視覺化] 使用者手動輸入過金額的 chip：邊框加一圈內陰影強調＋
+     右上角小徽章（鉛筆符號），跟「系統自動平分」的 chip 區分開來，一眼就
+     能看出哪筆金額不會被自動覆寫。取消勾選、按「重新平均」等操作會清空
+     手動集合，這個標記也會跟著消失（見 expenseForm.js 的 syncManualMarks()）。 */
+  .chip.manual{
+    border-color:var(--brass-bg);
+    box-shadow:inset 0 0 0 1px var(--brass-bg);
+  }
+  .chip.manual .amt{
+    border-color:var(--brass-bg);
+    background:var(--brass-tint);
+  }
+  .chip.manual::after{
+    content:"✎";
+    position:absolute; top:-6px; right:-6px;
+    width:16px; height:16px; border-radius:50%;
+    background:var(--brass-bg); color:#fff;
+    font-size:9px; line-height:16px; text-align:center;
+    box-shadow:0 1px 3px rgba(30,42,51,0.3);
+    pointer-events:none;
+  }
   /* 可點擊區：整個左半部（勾選方塊＋名字）都是 label，觸控目標 ≥ 44px 高 */
   .chip .chip-main{
     display:flex; align-items:center; gap:10px; min-width:0;

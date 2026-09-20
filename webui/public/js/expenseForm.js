@@ -27,6 +27,21 @@ function setChipChecked(chip, checked){
     if (!checked) amt.value = '';
   }
 }
+// 🆕 [手動標記視覺化] 同步「這格是手動輸入」的視覺標記（.chip.manual），
+// 讓使用者一眼分辨哪些金額是自己打的、哪些是系統自動平分算出來的。
+// 凡是會新增/刪除 payerManualIds 或 participantManualIds 內容的地方，
+// 呼叫完之後都補呼叫這個函式同步畫面，避免每處各自重複判斷邏輯。
+function syncManualMarks(prefix){
+  const wrap = document.getElementById(prefix==='payer' ? 'payerChips' : 'participantChips');
+  if (!wrap) return;
+  const manualIds = prefix==='payer' ? payerManualIds : participantManualIds;
+  wrap.querySelectorAll('.chip').forEach(chip=>{
+    const isManual = manualIds.has(chip.dataset.id);
+    chip.classList.toggle('manual', isManual);
+    const amt = chip.querySelector('.amt');
+    if (amt) amt.title = isManual ? '已手動輸入，不會被自動平分覆蓋' : '';
+  });
+}
 // 🆕 更新欄位標題列右側的「已選 N 人」計數（見 index.html 的 .field-head
 // / .field-meta）。找不到對應元素時安靜略過，不強制要求每個呼叫端都有
 // 這段 UI，之後要不要在某個欄位顯示計數，加不加那個 <span> 都不影響邏輯。
@@ -55,6 +70,7 @@ function buildChips(containerId, prefix){
         oninput="${prefix==='payer' ? `onPayerAmountInput('${m.id}')` : `onParticipantAmountInput('${m.id}')`}">
     </div>`).join('') || '<p class="hint">尚未新增成員，請先到「成員」分頁新增。</p>';
   updateChipFieldMeta(container);
+  syncManualMarks(prefix); // 🆕 重建後保險起見清掉舊的手動標記樣式（此時集合已重設為空）
 }
 function onChipToggle(prefix, id, checked){
   const wrap = document.getElementById(prefix==='payer'?'payerChips':'participantChips');
@@ -71,6 +87,7 @@ function onChipToggle(prefix, id, checked){
     if (!checked) participantManualIds.delete(id);
     if (!participantsDirty) rebalanceParticipantAmounts();
   }
+  syncManualMarks(prefix); // 🆕
   updateChipFieldMeta(wrap);
   renderExpenseHint();
 }
@@ -79,6 +96,7 @@ function onChipToggle(prefix, id, checked){
 function onPayerAmountInput(id){
   payerManualIds.add(id);
   rebalancePayerAmounts();
+  syncManualMarks('payer'); // 🆕
   renderExpenseHint();
 }
 
@@ -87,6 +105,7 @@ function onPayerAmountInput(id){
 function onParticipantAmountInput(id){
   participantManualIds.add(id);
   if (!participantsDirty) rebalanceParticipantAmounts();
+  syncManualMarks('participant'); // 🆕
   renderExpenseHint();
 }
 
@@ -166,6 +185,7 @@ function equalFillChips(prefix){
   if (prefix === 'payer'){
     payerManualIds = new Set(); // 🆕 同步修正：點「平均分配」也應清空代墊人的手動標記
   }
+  syncManualMarks(prefix); // 🆕
   const shares = equalSplit(amount, checked);
   shares.forEach(s=>{
     const input = wrap.querySelector(`.chip[data-id="${s.userId}"] .amt`);
@@ -185,6 +205,7 @@ function checkAllParticipants(){
   });
   participantsDirty = false;
   participantManualIds = new Set(); // 🆕 全選視為重新平均分配，清空所有手動標記
+  syncManualMarks('participant'); // 🆕
   if (amount > 0){
     const shares = equalSplit(amount, allIds);
     shares.forEach(s=>{
@@ -214,6 +235,7 @@ function selfShareParticipants(){
   });
   participantsDirty = true; // 已手動指定金額，之後改動金額/勾選不要被自動平均覆蓋
   participantManualIds = new Set(payers.map(p=>p.userId)); // 🆕 同步標記為手動金額，維持與代墊付款人一致的鎖定邏輯
+  syncManualMarks('participant'); // 🆕
   updateChipFieldMeta(wrap);
   renderExpenseHint();
 }
