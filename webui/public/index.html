@@ -8,18 +8,12 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@500;700;900&family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" referrerpolicy="no-referrer-when-downgrade">
 <script>
-// 🆕 在套用樣式表之前、頁面第一次繪製前就先決定要用亮色還是暗色，避免使用者已經
-// 選過暗色模式時，畫面先閃一下亮色主題才切換過去（FOUC）。這段刻意寫成同步、
-// 極簡的行內腳本（不依賴外部檔案），確保瀏覽器一定會在套用樣式前執行完畢。
 (function(){
   try{
     var saved = localStorage.getItem('splitbill-theme');
     var theme = saved || ((window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light');
     document.documentElement.setAttribute('data-theme', theme);
-  }catch(e){
-    // localStorage 或 matchMedia 不可用時（例如某些隱私模式），安靜地退回預設亮色，
-    // 不影響頁面繼續載入。
-  }
+  }catch(e){}
 })();
 </script>
 <link rel="stylesheet" href="css/style.css">
@@ -70,7 +64,6 @@
       <div class="kv-card"><div class="k">總花費（基準幣）</div><div class="v" id="kvTotal">0</div></div>
     </div>
 
-    <!-- 1. 橫向淨額長條圖 -->
     <div class="receipt" style="margin-bottom:14px;">
       <div class="receipt-head">
         <div>
@@ -88,7 +81,6 @@
       </div>
     </div>
 
-    <!-- 2. 建議轉帳表：清單永遠完整顯示，可用下方小型選單即時換算成其他幣別 -->
     <div class="receipt" style="margin-bottom:14px;">
       <div class="receipt-head">
         <div>
@@ -104,7 +96,6 @@
       <div class="settle-list" id="settleList"></div>
     </div>
 
-    <!-- 3. 每位成員多幣別逐筆明細 -->
     <div class="receipt">
       <div class="receipt-head">
         <div>
@@ -115,9 +106,6 @@
       <div class="member-detail-list" id="memberDetailList"></div>
     </div>
 
-    <!-- 4. 🆕 彼此累計欠款總額：只在同一組兩人之間互抵，不像上面「建議轉帳」
-         那樣為了求最少筆數而跨第三人合併，用來忠實呈現「誰實際欠誰多少」。
-         清單永遠完整顯示，可用下方小型選單即時換算成其他幣別。 -->
     <div class="receipt" style="margin-top:14px;">
       <div class="receipt-head">
         <div>
@@ -137,7 +125,6 @@
 
   <!-- ================= EXPENSES ================= -->
   <div class="panel" id="panel-expenses" data-panel="expenses">
-    <!-- 🆕 [多人協作] 有其他人正在進行帳單辨識認領時，顯示「加入認領」提示 -->
     <div class="card" id="receiptSessionBanner" data-write-only style="display:none;"></div>
 
     <div class="card" id="receiptScanCard" data-write-only>
@@ -176,13 +163,26 @@
       </div>
       <p class="hint" id="expBaseHint"></p>
 
+      <!-- 🆕 [成員膠囊重新設計] 欄位標題改用 .field-head：左邊說明文字，
+           右邊即時顯示「已選 N 人」，靠 expenseForm.js 的 updateChipFieldMeta()
+           自動同步，勾選/取消勾選時就會更新，不用另外按按鈕確認選了誰。 -->
       <div class="field">
-        <label>誰代墊付款？只勾一位會自動帶入全額；勾選多位時請自行輸入各自金額，加總須等於總金額。</label>
+        <div class="field-head">
+          <label>誰代墊付款？只勾一位會自動帶入全額；勾選多位時請自行輸入各自金額，加總須等於總金額。</label>
+          <div class="field-tools">
+            <span class="field-meta" id="payerFieldMeta">已選 0 人</span>
+          </div>
+        </div>
         <div class="chip-select" id="payerChips"></div>
       </div>
 
       <div class="field">
-        <label>誰要分攤？勾選後金額會自動平均分攤；只要手動改過任一人的金額，之後就不會再自動重算。</label>
+        <div class="field-head">
+          <label>誰要分攤？勾選後金額會自動平均分攤；只要手動改過任一人的金額，之後就不會再自動重算。</label>
+          <div class="field-tools">
+            <span class="field-meta" id="participantFieldMeta">已選 0 人</span>
+          </div>
+        </div>
         <div class="chip-select" id="participantChips"></div>
         <div class="btn-row">
           <button class="btn btn-ghost btn-sm" onclick="equalFillChips('participant')">依已勾選人數重新平均</button>
@@ -261,7 +261,6 @@
       <button class="subtab-btn" data-subtab="io" onclick="showSettingsSub('io')">📁 檔案</button>
     </div>
 
-    <!-- ---- members ---- -->
     <div class="subpanel active" id="panel-members" data-subpanel="members">
       <div class="card">
         <h2 class="section-title">成員名單 <span class="n" id="memberCount"></span></h2>
@@ -281,7 +280,6 @@
       </div>
     </div>
 
-    <!-- ---- rates ---- -->
     <div class="subpanel" id="panel-rates" data-subpanel="rates">
       <div class="card">
         <h2 class="section-title">匯率設定</h2>
@@ -298,7 +296,6 @@
       </div>
     </div>
 
-    <!-- ---- 🆕 [分享連結] 分享連結管理 ---- -->
     <div class="subpanel" id="panel-share" data-subpanel="share">
       <div class="card">
         <h2 class="section-title">🔗 分享連結</h2>
@@ -344,7 +341,6 @@
       </div>
     </div>
 
-    <!-- ---- connect to bot ---- -->
     <div class="subpanel" id="panel-connect" data-subpanel="connect">
       <div class="card">
         <h2 class="section-title">連線到 Discord Bot</h2>
@@ -388,7 +384,6 @@
       </div>
     </div>
 
-    <!-- ---- local file / import export (進階／備用) ---- -->
     <div class="subpanel" id="panel-io" data-subpanel="io">
       <p class="hint" style="margin-bottom:14px;">已連線 Bot 時，資料會直接同步到雲端；以下是離線編輯或備援用的本機方式，平常不一定會用到。</p>
 
@@ -444,9 +439,6 @@
   <button class="nav-btn" data-tab="settings" onclick="showMainTab('settings')" data-owner-only><span class="ic">⚙️</span>設定</button>
 </nav>
 
-
-<!-- 原本的單一 inline <script> 已拆成 webui/public/js/ 底下多個模組，
-     依原始執行順序載入（非 module 腳本，彼此共用同一個全域作用域）。 -->
 <script src="js/helpers.js"></script>
 <script src="js/theme.js"></script>
 <script src="js/tripModel.js"></script>

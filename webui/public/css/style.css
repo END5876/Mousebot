@@ -263,6 +263,20 @@
   /* ---------- Forms ---------- */
   .field{margin-bottom:12px;}
   .field label{display:block; font-size:12.5px; color:var(--ink-soft); margin-bottom:5px; font-weight:500;}
+  /* 🆕 [成員膠囊重新設計] 欄位標題列：左邊問題文字、右邊「已選 N 人」計數
+     與全選／清除快捷連結，兩端對齊。只用在有 chip-select 的欄位（誰代墊／
+     誰分攤），沒有這個結構的一般欄位不受影響。 */
+  .field-head{
+    display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:8px;
+  }
+  .field-head label{margin-bottom:0;}
+  .field-head .field-tools{display:flex; align-items:baseline; gap:10px; flex-shrink:0;}
+  .field-head .field-meta{font-size:11.5px; color:var(--ink-soft); font-family:'IBM Plex Mono',monospace; white-space:nowrap;}
+  .field-head .link-btn{
+    background:none; border:none; padding:0; cursor:pointer;
+    font-size:11.5px; color:var(--brass); font-weight:700; font-family:inherit;
+  }
+  .field-head .link-btn:hover{ text-decoration:underline; }
   .row{display:flex; gap:12px; flex-wrap:wrap;}
   .row > .field{flex:1; min-width:130px;}
   input[type=text], input[type=number], input[type=password], select, textarea{
@@ -315,40 +329,81 @@
   .btn-ghost .spinner, .btn-danger .spinner{border-color:var(--card-line); border-top-color:var(--ink);}
   @keyframes spin{to{transform:rotate(360deg);}}
 
-  .chip-select{display:flex; flex-wrap:wrap; gap:8px;}
+  /* ════════════════════════════════════════════════════════════════
+     🆕 [成員膠囊重新設計] 誰代墊／誰分攤：完整重新設計，取代舊版一路
+     小補的 chip 實作。設計重點：
+     1. .chip-select 用 grid + minmax(min(100%,230px), 1fr)：手機螢幕
+        寬度不足 230px 時自動退化成單欄撐滿整行，平板/桌機隨寬度自動
+        增加欄數，且同一個 grid 裡每一欄永遠等寬。
+     2. .chip 本身也是一個 2 欄 grid：左邊（可點擊的勾選+名字）彈性寬、
+        右邊金額欄位固定 96px。因為外層欄寬已經統一、內層金額欄位又是
+        固定寬度放在最右側，金額輸入框在「所有」chip 上的水平位置必然
+        對齊，跟成員名字長短完全無關，不需要任何 JS 或額外計算。
+     3. 金額欄位不再用 display/visibility 切換顯示——未勾選時用
+        disabled + 虛線＋淡化樣式呈現「幽靈槽位」，勾選後才變成一般
+        實線輸入框；因為欄位本身的存在與寬度全程不變，不會有版面跳動。
+     4. 原生 checkbox 保留在 DOM 裡（供鍵盤 Tab／螢幕報讀器使用），只是
+        視覺上隱藏，改用旁邊的 .chip-box 自訂方塊呈現勾選狀態，儲值/
+        勾選行為仍是原生 checkbox 語意，無障礙支援比純 CSS 模擬更完整。
+     ════════════════════════════════════════════════════════════════ */
+  .chip-select{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(min(100%, 230px), 1fr));
+    gap:8px;
+  }
   .chip{
-    display:flex; align-items:center; gap:8px;
-    border:1.5px solid var(--card-line); border-radius:20px;
-    padding:9px 14px 9px 12px; font-size:13.5px; cursor:pointer;
-    background:var(--surface); user-select:none; min-height:40px;
+    position:relative;
+    display:grid; grid-template-columns:minmax(0,1fr) 96px; align-items:center;
+    min-height:46px; padding-right:7px;
+    border:1.5px solid var(--card-line); border-radius:10px; background:var(--surface);
+    transition:border-color .15s, background .15s;
   }
-  /* 🔧 Bug fix：原生 checkbox 本身會畫出自己的勾勾（accent-color 讓瀏覽器原生繪製），
-     過去曾疊加一個 .checkmark 自訂勾勾造成「同時出現兩個勾勾」；.checkmark 已整個
-     移除（連同對應的 <span> 標籤，見 buildChips()），現在只剩原生 checkbox 一個
-     勾選指示。 */
-  /* 🔧 對齊修正（v2）：不同瀏覽器對「原生 checkbox」的內部繪製方式不一致
-     （尤其 Safari/WebKit 對 accent-color 樣式的 checkbox，繪製時的內部留白
-     跟 Chrome/Blink 不一樣），單純設定 checkbox 的 width/height 在某些瀏覽器
-     下仍可能讓它看起來偏上或偏下，跟旁邊的名字文字對不齊。
-     這裡改成用一個固定 17×17px、內部用 flex 置中的外層容器 .chip-checkbox
-     包住 checkbox，讓 checkbox 不論瀏覽器內部怎麼畫，都被強制置中在這個固定
-     大小的盒子正中央；.chip-label 的 line-height 也對齊同一個高度，兩者在
-     .chip 的 flex 列（align-items:center）中，中心點就會確實落在同一條水平線。 */
-  .chip-checkbox{
-    display:inline-flex; align-items:center; justify-content:center;
-    width:17px; height:17px; flex-shrink:0;
-  }
-  .chip-checkbox input[type=checkbox]{
-    display:block; margin:0; accent-color:var(--brass-bg); width:17px; height:17px;
-  }
-  .chip-label{ line-height:17px; }
+  .chip:hover{border-color:var(--brass-soft);}
   .chip.checked{border-color:var(--brass-bg); background:var(--brass-tint);}
-  .chip .amt{
-    width:76px; border:none; border-bottom:1px solid var(--card-line);
-    background:transparent; font-family:'IBM Plex Mono',monospace; font-size:13.5px;
-    padding:3px 2px; text-align:right; display:none;
+  /* 可點擊區：整個左半部（勾選方塊＋名字）都是 label，觸控目標 ≥ 44px 高 */
+  .chip .chip-main{
+    display:flex; align-items:center; gap:10px; min-width:0;
+    align-self:stretch; padding:0 6px 0 12px; cursor:pointer; user-select:none;
   }
-  .chip.checked .amt{display:inline-block;}
+  /* 原生 checkbox 視覺隱藏但保留互動（鍵盤/讀屏），改由 .chip-box 呈現勾選狀態 */
+  .chip-checkbox{position:absolute; opacity:0; width:1px; height:1px; margin:0; pointer-events:none;}
+  .chip-box{
+    width:18px; height:18px; flex-shrink:0; position:relative; border-radius:5px;
+    border:1.5px solid var(--ink-soft); background:var(--surface);
+    transition:background .15s, border-color .15s, box-shadow .15s;
+  }
+  .chip-box::after{
+    content:""; position:absolute; left:5px; top:1px; width:5px; height:10px;
+    border:solid #fff; border-width:0 2px 2px 0;
+    transform:rotate(45deg) scale(0); transition:transform .12s ease-out;
+  }
+  .chip-checkbox:checked ~ .chip-box{background:var(--brass-bg); border-color:var(--brass-bg);}
+  .chip-checkbox:checked ~ .chip-box::after{transform:rotate(45deg) scale(1);}
+  .chip-checkbox:focus-visible ~ .chip-box{box-shadow:var(--focus-ring);}
+  .chip-label{
+    flex:1; min-width:0; font-size:13.5px; line-height:1.3;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  /* 金額欄位：跟全站 input 一致的實線框＋圓角；未勾選時變成「幽靈槽位」
+     （虛線、淡化、disabled），寬度全程不變，不會跳動、左右永遠對齊。 */
+  .chip .amt{
+    width:100%; height:32px; margin:0;
+    border:1px solid var(--card-line); border-radius:7px; background:var(--card);
+    font-family:'IBM Plex Mono',monospace; font-size:16px; /* ≥16px 避免 iOS 聚焦時自動縮放頁面 */
+    text-align:right; padding:0 8px; color:var(--ink);
+    transition:opacity .15s, border-color .15s, background .15s;
+  }
+  .chip .amt::placeholder{color:var(--ink-soft); opacity:.75;}
+  .chip .amt:focus{outline:2px solid var(--brass-soft); outline-offset:1px;}
+  .chip.checked .amt{border-color:var(--brass-soft);}
+  .chip .amt:disabled{opacity:.38; border-style:dashed; background:transparent; pointer-events:none;}
+  .chip .amt.invalid{border-color:var(--debt); background:var(--debt-bg);}
+  .chip .amt::-webkit-outer-spin-button, .chip .amt::-webkit-inner-spin-button{-webkit-appearance:none; margin:0;}
+  .chip .amt[type=number]{-moz-appearance:textfield; appearance:textfield;}
+  @media (min-width:860px){
+    .chip{min-height:44px;}
+    .chip .amt{font-size:13.5px; height:30px;}
+  }
 
   /* ---------- 帳單照片辨識 ---------- */
   .receipt-upload{
@@ -390,10 +445,20 @@
   .receipt-type-badge.fee:hover{background:var(--fee-badge-bg-hover);}
   .receipt-claim-chips{display:flex; flex-wrap:wrap; gap:6px;}
   .claim-chip{
-    font-size:12.5px; padding:6px 11px; border-radius:16px; cursor:pointer;
+    font-size:12.5px; padding:6px 11px; border-radius:10px; cursor:pointer;
     border:1.5px solid var(--card-line); background:var(--surface); color:var(--ink-soft);
+    transition:border-color .15s, background .15s, color .15s;
   }
-  .claim-chip.on{border-color:var(--brass-bg); background:var(--brass-tint); color:var(--ink); font-weight:700;}
+  /* 🔧 Bug fix：版面跳動——原本 .on 狀態會把 font-weight 從一般切到 700，
+     但粗體字元比一般字元寬，勾選瞬間 chip 文字寬度跟著變寬，跟 .chip 金額
+     欄位是同一種問題（會讓整排 claim-chip 重新換行、跳動）。這裡拿掉
+     font-weight 的切換，改用不影響文字排版寬度的 text-shadow 疊出「加粗」
+     的視覺效果，讓選取狀態一樣看起來更醒目，但文字本身的量測寬度全程
+     不變，不會再有跳動問題。 */
+  .claim-chip.on{
+    border-color:var(--brass-bg); background:var(--brass-tint); color:var(--ink);
+    text-shadow:0.3px 0 currentColor, -0.3px 0 currentColor;
+  }
   .claim-chip.shared{border-color:var(--credit); }
   .claim-chip.shared.on{background:var(--credit-bg); border-color:var(--credit); color:var(--credit);}
   .receipt-summary{
@@ -719,8 +784,8 @@
   }
   .detail-tag.paid{ background:var(--credit-bg); color:var(--credit); }
   .detail-tag.share{ background:var(--debt-bg); color:var(--debt); }
-  .detail-tag.transfer-in{ background:var(--credit-bg); color:var(--credit); }
-  .detail-tag.transfer-out{ background:var(--debt-bg); color:var(--debt); }
+  .detail-tag.transfer-in{ background:var(--debt-bg); color:var(--debt); }
+  .detail-tag.transfer-out{ background:var(--credit-bg); color:var(--credit); }
   .detail-summary-row{
     display:flex; justify-content:space-between; align-items:center;
     padding:9px 0 4px; font-size:12.5px;

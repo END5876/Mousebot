@@ -110,14 +110,28 @@ function editExpense(id){
   document.getElementById('expAmountInBase').value = exp.currency !== trip.baseCurrency ? exp.amountInBase : '';
   buildChips('payerChips','payer');
   buildChips('participantChips','participant');
+  // 🆕 [成員膠囊重新設計] 金額欄位預設是 disabled 的幽靈槽位，這裡改用
+  // setChipChecked() 統一處理（同步勾選 checkbox、切掉 disabled、更新樣式），
+  // 而不是只加 .checked class——不然輸入框雖然顯示了金額，卻仍是唯讀的。
   exp.payers.forEach(p=>{
     const chip = document.querySelector(`#payerChips .chip[data-id="${p.userId}"]`);
-    if (chip){ chip.querySelector('input[type=checkbox]').checked = true; chip.classList.add('checked'); chip.querySelector('.amt').value = p.amount; }
+    if (chip){ setChipChecked(chip, true); chip.querySelector('.amt').value = p.amount; }
   });
+  // 載入既有支出時，所有儲存的代墊金額都是既有的手動分配；
+  // 標記後可避免自動平衡機制改寫歷史紀錄。
+  payerManualIds = new Set(exp.payers.map(p=>p.userId));
   exp.participants.forEach(s=>{
     const chip = document.querySelector(`#participantChips .chip[data-id="${s.userId}"]`);
-    if (chip){ chip.querySelector('input[type=checkbox]').checked = true; chip.classList.add('checked'); chip.querySelector('.amt').value = s.amount; }
+    if (chip){ setChipChecked(chip, true); chip.querySelector('.amt').value = s.amount; }
   });
+  // 🆕 同理，載入既有支出時所有儲存的分攤金額也視為既有的手動分配；
+  // 標記後可避免 rebalanceParticipantAmounts() 之後改寫這些歷史紀錄
+  // （目前 participantsDirty=true 已會整組跳過自動平衡，這裡補上是為了
+  // 讓狀態保持一致——萬一之後 participantsDirty 被重置為 false，
+  // 例如使用者中途按了其他按鈕，仍能正確識別哪些人是「已手動」金額）。
+  participantManualIds = new Set(exp.participants.map(p=>p.userId));
+  updateChipFieldMeta('payerChips');
+  updateChipFieldMeta('participantChips');
   renderExpenseHint();
   refreshExpenseLiveRate();
   showMainTab('expenses');
@@ -151,4 +165,3 @@ async function deleteExpense(id){
   // 確認刪除後立即寫入伺服器；分享連結模式也會自動走對應的儲存 API。
   await saveTripToApi();
 }
-
