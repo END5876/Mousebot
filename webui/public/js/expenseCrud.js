@@ -132,6 +132,10 @@ function editExpense(id){
   participantManualIds = new Set(exp.participants.map(p=>p.userId));
   updateChipFieldMeta('payerChips');
   updateChipFieldMeta('participantChips');
+  // 🆕 [手動標記視覺化] 編輯既有支出時載入的金額全部視為「手動」，
+  // 同步套上 .chip.manual 視覺標記，讓使用者知道這些是原始存檔的值。
+  syncManualMarks('payer');
+  syncManualMarks('participant');
   renderExpenseHint();
   refreshExpenseLiveRate();
   showMainTab('expenses');
