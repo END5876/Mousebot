@@ -18,6 +18,22 @@ function initFsApiUi(){
     hint.textContent = '按「選擇 trip.json」開啟你要編輯的檔案，之後按「儲存並覆寫檔案」會直接寫回同一個檔案，不用再下載、也不用手動貼上。此功能需要 HTTPS 或 localhost。';
   }
 }
+// 🆕 [狀態 pill 精簡] 兩顆 pill 各自只負責自己的 display，但外層容器
+// .status-pills 本身有 margin-top，就算兩顆都被設成 display:none，容器
+// 依然存在、依然占用那段垂直間距，畫面上會看起來「狀態不見了、但空間
+// 還留著」。這裡統一在每次任一顆 pill 的狀態更新完之後，檢查「這兩顆
+// 現在是不是全部都隱藏」，是的話連容器本身也一起 display:none，
+// 只要有任一顆需要顯示，就把容器打開——徹底收掉那段留白，而不是只讓
+// 裡面的內容消失。
+function syncStatusPillsVisibility(){
+  const wrap = document.querySelector('.status-pills');
+  if (!wrap) return;
+  const botPill = document.getElementById('botStatusPill');
+  const filePill = document.getElementById('fileStatusPill');
+  const botVisible = !!botPill && botPill.style.display !== 'none';
+  const fileVisible = !!filePill && filePill.style.display !== 'none';
+  wrap.style.display = (botVisible || fileVisible) ? 'flex' : 'none';
+}
 function updateLocalFileStatus(){
   const el = document.getElementById('localFileStatus');
   el.textContent = localFileHandle ? `目前連結檔案：${localFileHandle.name}` : '尚未連結本機檔案';
@@ -34,6 +50,7 @@ function updateLocalFileStatus(){
   // 正常狀態，不需要常駐提醒；只有使用者主動連結了本機檔案（代表接下來
   // 存檔會直接覆寫本機磁碟上的那個檔案，是需要使用者知情的狀態）才顯示。
   pill.style.display = localFileHandle ? '' : 'none';
+  syncStatusPillsVisibility();
 }
 function updateBotStatusPill(connected, label){
   const pillText = document.getElementById('botStatusText');
@@ -48,6 +65,7 @@ function updateBotStatusPill(connected, label){
   // 🆕 [狀態 pill 精簡] 已連線是正常狀態，不需要常駐佔位；未連線才是需要
   // 使用者處理的狀態，才跳出來提醒（點下去可直接跳到「連線 Bot」分頁）。
   pill.style.display = connected ? 'none' : '';
+  syncStatusPillsVisibility();
 }
 function toggleApiKeyVisibility(){
   const input = document.getElementById('apiKey');
