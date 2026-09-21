@@ -135,7 +135,12 @@
     font-size:16px; line-height:1; cursor:pointer; flex-shrink:0; padding:0;
   }
   .theme-toggle-btn:hover{background:rgba(255,255,255,0.16);}
-  .status-pills{display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;}
+  /* 🆕 [狀態 pill 精簡] 容器本身預設也先隱藏（避免 JS 尚未執行完成前，
+     margin-top 那段留白先閃現出來）；真正的顯示/隱藏交給
+     js/localFile.js 的 syncStatusPillsVisibility() 統一控制——它會在
+     兩顆 pill 都被判定為「不需要顯示」時，連容器一起收掉，不會只是
+     藏起裡面的文字、卻留著一段空白版位。 */
+  .status-pills{display:none; gap:6px; flex-wrap:wrap; margin-top:8px;}
   .status-pills .pill {display: none;}
 
   /* 🆕 [分享連結] 分享連結模式下的畫面收斂：
