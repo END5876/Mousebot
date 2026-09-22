@@ -1,38 +1,38 @@
 'use strict';
 // 總覽頁：建議轉帳／彼此累計欠款的幣別換算與渲染、淨額長條圖、成員逐筆明細。
 /* =====================================================================
-   🆕 Overview: 「建議轉帳」與「彼此累計欠款總額」共用的幣別換算邏輯
+   🆕 Overview: 「建議轉帳」與「彼此累計欠款總額」合併成同一張卡片
    ---------------------------------------------------------------------
-   兩個區塊行為一致：
-   - 清單永遠完整顯示（不收合），每一行金額旁邊直接標示幣別代碼。
-   - 卡片內建一列小型「換算幣別」下拉選單（預設＝行程基準幣別，不需額外
-     請求），選別的幣別時才即時向 /api/fx-rate 查匯率換算；查不到即時
-     匯率則退回行程裡手動設定的匯率，兩者都查不到就維持顯示基準幣別並
-     附上提示文字，跟選單同一行顯示。
+   兩種檢視共用一張卡片、一個幣別換算下拉選單：
+   - debtViewMode 決定目前顯示哪一份清單，預設 'transfer'（建議轉帳），
+     由卡片標題那顆 <select>（#debtViewSelect）切換，不再各自佔一張卡。
+   - debtDisplayCurrency 是兩種檢視共用的顯示幣別，切換檢視模式不會重置
+     使用者選好的幣別；换算邏輯（resolveDisplayRate）跟換算前一致。
    - 清單本身（simplifyDebts / calcPairwiseDebts 的計算結果）永遠是用
      「基準幣別」算出來的金額，換算只發生在顯示這一層，不影響背後的
      淨額計算邏輯。
 ===================================================================== */
-let transferDisplayCurrency = null;   // 目前選擇的顯示幣別；預設為 trip.baseCurrency
-let pairwiseDisplayCurrency = null;
+let debtViewMode = 'transfer';        // 'transfer'＝建議轉帳（預設）｜'pairwise'＝彼此累計欠款總額
+let debtDisplayCurrency = null;       // 目前選擇的顯示幣別；預設為 trip.baseCurrency
 let lastTransferTx = [];              // 每次 renderAll() 都會依基準幣別重新計算一次
 let lastPairwiseDebts = [];
 
-// 🔒 換了一整個行程（匯入 JSON／從 Bot 載入／清空重開）時，上一個行程選過的顯示幣別
-// 對新行程來說可能沒有意義（例如新行程根本沒設定那個幣別），這裡重置回「跟著新行程
-// 的基準幣別」。
+// 🔒 換了一整個行程（匯入 JSON／從 Bot 載入／清空重開）時，上一個行程選過的
+// 顯示幣別與檢視模式對新行程來說可能沒有意義，這裡重置回「跟著新行程的
+// 基準幣別」，並且一律從「建議轉帳」開始看，避免畫面停在上一個行程切過去
+// 的「彼此累計欠款」造成混淆。
 function resetOverviewSectionCurrencyState(){
-  transferDisplayCurrency = null;
-  pairwiseDisplayCurrency = null;
+  debtViewMode = 'transfer';
+  debtDisplayCurrency = null;
 }
 
-function onTransferCurrencyChange(value){
-  transferDisplayCurrency = value;
-  renderTransferSectionUI();
+function onDebtViewChange(value){
+  debtViewMode = value === 'pairwise' ? 'pairwise' : 'transfer';
+  renderDebtSectionUI();
 }
-function onPairwiseCurrencyChange(value){
-  pairwiseDisplayCurrency = value;
-  renderPairwiseSectionUI();
+function onDebtCurrencyChange(value){
+  debtDisplayCurrency = value;
+  renderDebtSectionUI();
 }
 
 /**
@@ -50,25 +50,39 @@ async function resolveDisplayRate(targetCurrency){
   return null;
 }
 
-async function renderTransferSectionUI(){
-  const listEl = document.getElementById('settleList');
-  const selectEl = document.getElementById('transferCurrencySelect');
-  const noteEl = document.getElementById('transferRateNote');
+async function renderDebtSectionUI(){
+  const listEl = document.getElementById('debtSettleList');
+  const selectEl = document.getElementById('debtCurrencySelect');
+  const noteEl = document.getElementById('debtRateNote');
+  const viewSelect = document.getElementById('debtViewSelect');
+  const subtitleEl = document.getElementById('debtViewSubtitle');
   if (!listEl) return;
 
-  const wantedCurrency = transferDisplayCurrency || trip.baseCurrency;
+  if (viewSelect) viewSelect.value = debtViewMode;
+
+  const isTransfer = debtViewMode !== 'pairwise';
+  const sourceList = isTransfer ? lastTransferTx : lastPairwiseDebts;
+  const arrowLabel = isTransfer ? '應付給 →' : '欠';
+  const emptyMsg = isTransfer ? '🎉 目前沒有需要結算的款項' : '🎉 目前彼此之間沒有任何累計欠款';
+  if (subtitleEl){
+    subtitleEl.textContent = isTransfer
+      ? '最少轉帳次數，一次結清'
+      : '同組兩人互抵，不跨人合併';
+  }
+
+  const wantedCurrency = debtDisplayCurrency || trip.baseCurrency;
   if (selectEl) selectEl.innerHTML = currencyOptions(wantedCurrency);
 
   // effectiveCurrency 代表 displayList 裡的金額「實際上」是用哪個幣別算出來的，
   // 換算失敗時 displayList 會維持基準幣別金額，這裡也要跟著退回基準幣別，
   // 否則畫面會出現「金額還是基準幣別的數字，卻標成使用者選的那個幣別代碼」的錯誤標示。
-  let displayList = lastTransferTx;
+  let displayList = sourceList;
   let effectiveCurrency = trip.baseCurrency;
   let rateNote = '';
   if (wantedCurrency !== trip.baseCurrency){
     const rate = await resolveDisplayRate(wantedCurrency);
     if (rate){
-      displayList = lastTransferTx.map(t => ({ ...t, amount: round2(t.amount * rate) }));
+      displayList = sourceList.map(t => ({ ...t, amount: round2(t.amount * rate) }));
       effectiveCurrency = wantedCurrency;
       rateNote = `依匯率 1 ${trip.baseCurrency} ≈ ${round2(rate)} ${wantedCurrency} 換算，僅供參考。`;
     } else {
@@ -77,46 +91,13 @@ async function renderTransferSectionUI(){
   }
   if (noteEl) noteEl.textContent = rateNote;
 
-  listEl.innerHTML = lastTransferTx.length ? displayList.map(t => `
+  listEl.innerHTML = sourceList.length ? displayList.map(t => `
     <div class="settle-item">
       <span>${escapeHtml(memberName(t.from))}</span>
-      <span class="settle-arrow">應付給 →</span>
+      <span class="settle-arrow">${arrowLabel}</span>
       <span>${escapeHtml(memberName(t.to))}</span>
       <span class="settle-amt">${fmtMoney(t.amount, effectiveCurrency)}<span class="settle-amt-cur">${effectiveCurrency}</span></span>
-    </div>`).join('') : '<p class="empty-state" style="padding:16px;">🎉 目前沒有需要結算的款項</p>';
-}
-
-async function renderPairwiseSectionUI(){
-  const listEl = document.getElementById('pairwiseDebtList');
-  const selectEl = document.getElementById('pairwiseCurrencySelect');
-  const noteEl = document.getElementById('pairwiseRateNote');
-  if (!listEl) return;
-
-  const wantedCurrency = pairwiseDisplayCurrency || trip.baseCurrency;
-  if (selectEl) selectEl.innerHTML = currencyOptions(wantedCurrency);
-
-  let displayList = lastPairwiseDebts;
-  let effectiveCurrency = trip.baseCurrency;
-  let rateNote = '';
-  if (wantedCurrency !== trip.baseCurrency){
-    const rate = await resolveDisplayRate(wantedCurrency);
-    if (rate){
-      displayList = lastPairwiseDebts.map(t => ({ ...t, amount: round2(t.amount * rate) }));
-      effectiveCurrency = wantedCurrency;
-      rateNote = `依匯率 1 ${trip.baseCurrency} ≈ ${round2(rate)} ${wantedCurrency} 換算，僅供參考。`;
-    } else {
-      rateNote = `⚠️ 無法取得 ${wantedCurrency} 匯率，暫時仍以 ${trip.baseCurrency} 顯示。`;
-    }
-  }
-  if (noteEl) noteEl.textContent = rateNote;
-
-  listEl.innerHTML = lastPairwiseDebts.length ? displayList.map(t => `
-    <div class="settle-item">
-      <span>${escapeHtml(memberName(t.from))}</span>
-      <span class="settle-arrow">欠</span>
-      <span>${escapeHtml(memberName(t.to))}</span>
-      <span class="settle-amt">${fmtMoney(t.amount, effectiveCurrency)}<span class="settle-amt-cur">${effectiveCurrency}</span></span>
-    </div>`).join('') : '<p class="empty-state" style="padding:16px;">🎉 目前彼此之間沒有任何累計欠款</p>';
+    </div>`).join('') : `<p class="empty-state" style="padding:16px;">${emptyMsg}</p>`;
 }
 
 /* =====================================================================

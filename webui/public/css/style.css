@@ -16,6 +16,15 @@
     --safe-b: env(safe-area-inset-bottom, 0px);
     --bottomnav-h: 62px;
     --focus-ring: 0 0 0 3px rgba(154,116,52,0.35);
+    /* 🆕 [下拉選單深色模式] 讓瀏覽器原生繪製的表單控制項（select 選單展開
+       後的選項清單、date/time picker、捲軸等）套用正確的亮/暗配色。少了
+       這個屬性，瀏覽器只會依系統偏好（prefers-color-scheme）決定這些原生
+       彈出視窗要畫成亮還是暗，跟這個網站自己用 data-theme 手動切換的主題
+       無關，兩者不同步時就會出現「選單本體（closed 狀態）已經是深色，但
+       點開後的選項清單本體卻還是預設亮色」的不一致——「建議轉帳／彼此累計
+       欠款總額」標題那顆 <select>（.t1-select）跟換算幣別選單最明顯，但
+       實際上影響全站所有 select。 */
+    color-scheme: light;
 
     /* 🆕 暗色模式支援：以下這組變數原本散落在各處寫死成 #fff／固定淺色 hex，
        現在統一收斂成語意化變數，讓 :root[data-theme="dark"] 只要覆寫這裡
@@ -60,6 +69,7 @@
     --debt-bg:#3A2020;
     --shadow: 0 1px 0 rgba(0,0,0,0.4), 0 10px 26px rgba(0,0,0,0.5);
     --focus-ring: 0 0 0 3px rgba(217,179,108,0.4);
+    color-scheme: dark; /* 🆕 讓深色模式下的原生 select 選項清單等控制項跟著換成深色 */
 
     --surface:#20282D;
     --surface-hover:#273136;
@@ -124,7 +134,13 @@
     color:#F3EEDD; padding:6px 8px; border-radius:8px; font-size:12.5px;
     font-family:'IBM Plex Mono',monospace; max-width:92px; flex-shrink:0;
   }
-  .header-currency option{color:#1E2A33;}
+  /* 🆕 這行原本只設定文字色，假設展開清單背景永遠是瀏覽器預設的淺色；
+     現在全站 select option 統一補上背景色（見下方 select option 規則），
+     背景會跟著 --card 變數走，深色模式下會變成深色——這裡的下拉選單卻是
+     頁首那顆「固定深色底、不隨主題切換」的特例（見上面 .header-currency
+     本身的設計說明），所以背景也要一併鎖死成淺色，避免深色模式下背景跟
+     文字都變深色、選單本身反而看不清楚。 */
+  .header-currency option{background-color:#FBFBF6; color:#1E2A33;}
   /* 🆕 深色/淺色模式切換鈕：跟旁邊的幣別選單用一樣的視覺語言（半透明白底、淡邊框），
      因為頁首本身固定深色，不隨主題切換，這裡沿用同一套 header 專用配色即可，
      不需要另外引用 --surface 之類會隨主題翻轉的變數。 */
@@ -290,6 +306,14 @@
     padding:11px 12px; border-radius:8px; font-size:15px;
     font-family:'Noto Sans TC',sans-serif; color:var(--ink);
   }
+  /* 🆕 [下拉選單深色模式] color-scheme 屬性（見 :root 區塊）在部分瀏覽器
+     對 <select> 展開清單的支援不完整（尤其某些系統上的 Firefox），這裡
+     直接對 <option> 指定背景/文字色當作更可靠的雙重保險：主流瀏覽器
+     （Chrome／Edge／Firefox）都會確實套用 <option> 自己的 background-color
+     與 color，不像展開清單的其他視覺樣式那樣受限於原生元件的繪製方式。
+     .header-currency option 那行是更早之前針對「頁首固定深色底」的特例
+     （不隨主題切換，永遠要用深色文字），優先度較高，不受這裡影響。 */
+  select option{ background-color:var(--card); color:var(--ink); }
   input:focus, select:focus, textarea:focus{outline:2px solid var(--brass-soft); outline-offset:1px;}
   textarea{font-family:'IBM Plex Mono',monospace; font-size:12.5px; resize:vertical;}
   .num{font-family:'IBM Plex Mono',monospace;}
@@ -433,6 +457,10 @@
   }
 
   /* ---------- 帳單照片辨識 ---------- */
+  /* 🆕 [帳單辨識區塊重新設計] 整條可點擊橫幅（icon + 標題 + 說明 + 箭頭），
+     取代太小不明顯的純圖示按鈕，也取代原本佔版面很大的置中方框；
+     .receipt-upload 是更早之前的大框樣式，不再由 HTML 使用，保留著以防
+     其他地方仍引用，不影響行為。 */
   .receipt-upload{
     display: block; /* 加入這行修正破圖問題 */
     border:2px dashed var(--card-line); border-radius:12px; padding:22px 16px;
@@ -441,6 +469,50 @@
   .receipt-upload:hover{border-color:var(--brass-soft);}
   .receipt-upload .ic{font-size:28px; margin-bottom:6px;}
   .receipt-upload input[type=file]{display:none;}
+  .receipt-scan-trigger{
+    display:block; width:100%; cursor:pointer; text-align:left;
+    border:1.5px dashed var(--brass-soft); border-radius:12px;
+    background:var(--surface); padding:14px 16px;
+    transition:border-color .15s, background .15s, transform .1s;
+  }
+  .receipt-scan-trigger:hover{border-color:var(--brass-bg); background:var(--brass-tint);}
+  .receipt-scan-trigger:active{transform:scale(.99);}
+  .receipt-scan-trigger:focus-within{outline:2px solid var(--brass); outline-offset:2px;}
+  .receipt-scan-trigger input[type=file]{position:absolute; opacity:0; width:1px; height:1px; pointer-events:none;}
+  .receipt-scan-trigger-body{
+    display:flex; align-items:center; gap:14px;
+  }
+  .receipt-scan-ic{
+    width:46px; height:46px; flex-shrink:0; border-radius:11px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:22px; background:var(--brass-tint);
+  }
+  .receipt-scan-txt{flex:1; min-width:0;}
+  .receipt-scan-txt .title{
+    display:block; font-weight:700; font-size:15px; color:var(--ink);
+  }
+  .receipt-scan-txt .sub{
+    display:block; font-size:12px; color:var(--ink-soft); margin-top:3px; line-height:1.55;
+  }
+  .receipt-scan-arrow{
+    font-size:19px; color:var(--brass); flex-shrink:0;
+    font-family:'IBM Plex Mono',monospace;
+  }
+  /* 🆕 拖曳帳單照片到「支出記帳」分頁時，短暫蓋在整個畫面上的提示遮罩。
+     pointer-events:none：遮罩本身不吃滑鼠事件，drop 等事件交給底下真正
+     掛了監聽器的 #panel-expenses 接收（見 js/receiptScan.js）。 */
+  .receipt-drop-overlay{
+    position:fixed; inset:0; z-index:250;
+    background:var(--scrim);
+    display:flex; align-items:center; justify-content:center;
+    pointer-events:none;
+  }
+  .receipt-drop-overlay-inner{
+    font-family:'Noto Serif TC',serif; font-weight:700; font-size:20px;
+    color:#fff; background:rgba(139,106,40,0.92);
+    padding:20px 32px; border-radius:16px; border:2px dashed rgba(255,255,255,0.6);
+    text-align:center;
+  }
   .receipt-preview-row{display:flex; gap:12px; align-items:flex-start; margin-bottom:12px;}
   .receipt-thumb{
     width:88px; height:88px; object-fit:cover; border-radius:10px;
@@ -620,6 +692,20 @@
   }
   .receipt-head .t1{font-family:'Noto Serif TC',serif; font-weight:700; font-size:16px;}
   .receipt-head .t2{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft);}
+  /* 🆕 [總覽簡化] 「建議轉帳／彼此累計欠款總額」合併卡片：標題本身就是一個
+     <select>，樣式盡量貼近 .t1（同樣粗體/字級/無邊框），維持「看起來像標題」
+     的觀感，但保留瀏覽器原生下拉箭頭，讓使用者能一眼看出這裡可以點開切換
+     （跟頁首 .header-currency 幣別選單是同一套「看起來低調但可互動」的做法）。
+     這裡靠 class 選擇器的優先度覆蓋掉全站 select 的預設外框樣式，不需要
+     額外的 !important 或調整規則順序。 */
+  .t1-select{
+    font-family:'Noto Serif TC',serif; font-weight:700; font-size:16px;
+    color:var(--ink); background:transparent; border:none;
+    padding:0 4px 0 0; margin:0; width:auto; max-width:100%;
+    cursor:pointer;
+  }
+  .t1-select:hover{color:var(--brass);}
+  .t1-select:focus-visible{outline:2px solid var(--brass); outline-offset:3px; border-radius:4px;}
   .balance-row{
     display:flex; justify-content:space-between; align-items:center;
     padding:13px 18px; border-bottom:1px dashed var(--card-line); gap:10px;

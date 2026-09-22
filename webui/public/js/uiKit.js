@@ -68,6 +68,32 @@ function confirmModal(message, opts){
     document.getElementById('modalConfirmBtn').focus();
   });
 }
+// 🆕 純告知型 modal（取代原生 alert()）：只有一顆「知道了」按鈕，沒有
+// 取消/確定的選擇，用在只是要提醒使用者「這件事做不到」的場合（例如拖曳
+// 了一個非圖片格式的檔案）。跟 confirmModal() 共用同一套外觀與遮罩，
+// 差別只在按鈕數量與語意（alertdialog 而非 dialog）。resolve 永遠是
+// true，回傳 Promise 純粹是為了讓呼叫端能用 await 等使用者按下去再繼續。
+function alertModal(message, opts){
+  opts = opts || {};
+  return new Promise(resolve=>{
+    const root = document.getElementById('modalRoot');
+    root.innerHTML = `
+      <div class="modal-overlay" id="modalOverlay">
+        <div class="modal-box" role="alertdialog" aria-modal="true">
+          ${opts.title ? `<div class="modal-title">${escapeHtml(opts.title)}</div>` : ''}
+          <div class="modal-body">${escapeHtml(message)}</div>
+          <div class="modal-actions">
+            <button class="btn btn-primary" id="modalOkBtn">${escapeHtml(opts.okText || '知道了')}</button>
+          </div>
+        </div>
+      </div>`;
+    const overlay = document.getElementById('modalOverlay');
+    const finish = ()=>{ closeModal(); resolve(true); };
+    document.getElementById('modalOkBtn').onclick = finish;
+    overlay.addEventListener('click', (e)=>{ if (e.target === overlay) finish(); });
+    document.getElementById('modalOkBtn').focus();
+  });
+}
 // 清單挑選 modal（取代原本 prompt() 手動打行程 ID 的做法）
 function pickModal(title, items){
   // items: [{ value, title, sub }]

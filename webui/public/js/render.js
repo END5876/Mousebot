@@ -114,18 +114,15 @@ function renderAll(){
   stamp.textContent = allSettled ? '已結清' : '待結算';
   stamp.classList.toggle('settled', allSettled);
 
-  // --- 2. 建議轉帳（可換算幣別；清單本身永遠先用基準幣別算好） ---
+  // --- 2. 建議轉帳／彼此累計欠款總額（合併卡片，共用同一個換算幣別；
+  //        清單本身永遠先用基準幣別算好，換算只發生在顯示那一層） ---
   lastTransferTx = simplifyDebts(net);
-  if (!transferDisplayCurrency) transferDisplayCurrency = trip.baseCurrency;
-  renderTransferSectionUI();
+  lastPairwiseDebts = calcPairwiseDebts(trip);
+  if (!debtDisplayCurrency) debtDisplayCurrency = trip.baseCurrency;
+  renderDebtSectionUI();
 
   // --- 3. 每位成員多幣別逐筆明細 ---
   renderMemberDetails(net);
-
-  // --- 4. 彼此累計欠款總額（非最少筆數簡化版；同樣可換算幣別） ---
-  lastPairwiseDebts = calcPairwiseDebts(trip);
-  if (!pairwiseDisplayCurrency) pairwiseDisplayCurrency = trip.baseCurrency;
-  renderPairwiseSectionUI();
 
   // json preview
   document.getElementById('jsonPreview').value = JSON.stringify(trip, null, 2);
