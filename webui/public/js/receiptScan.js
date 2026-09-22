@@ -268,15 +268,34 @@ async function fileToResizedDataUrl(file, maxDim, quality){
   }
 }
 
-async function handleReceiptUpload(evt){
-  const file = evt.target.files[0];
-  evt.target.value = ''; // 允許之後重新選同一個檔案也能觸發 change
+// 🆕 [帳單辨識收斂] 這個函式現在有兩種呼叫方式：
+//   1. 原本的 <input type="file" onchange="handleReceiptUpload(event)">，
+//      傳進來的是 change 事件，檔案要從 evt.target.files[0] 取。
+//   2. 拖放上傳（見下方 handleReceiptDrop()），已經在外層做完格式檢查與
+//      二次確認，直接把 File 物件傳進來，不需要再包一層假事件。
+// 用 `instanceof File` 判斷是哪一種呼叫方式，兩條路徑共用同一套辨識邏輯，
+// 不用各自維護一份幾乎一樣的程式碼。
+async function handleReceiptUpload(fileOrEvent){
+  const isDirectFile = fileOrEvent instanceof File;
+  const file = isDirectFile ? fileOrEvent : fileOrEvent.target.files[0];
+  if (!isDirectFile) fileOrEvent.target.value = ''; // 允許之後重新選同一個檔案也能觸發 change
   if (!file) return;
   if (!file.type.startsWith('image/')){ toast('請上傳圖片檔案', 'error'); return; }
 
-  const uploadZone = document.getElementById('receiptUploadZone');
-  const original = uploadZone.innerHTML;
-  uploadZone.innerHTML = `<div class="receipt-upload" style="cursor:default;"><span class="spinner" style="border-color:var(--card-line); border-top-color:var(--ink); margin:0 auto 8px; display:block;"></span>辨識中，請稍候…</div>`;
+  // 🆕 [帳單辨識區塊重新設計] 整條橫幅列（icon＋標題＋說明＋箭頭）在辨識
+  // 期間暫時換成 spinner + 「辨識中」狀態，避免使用者以為沒反應而重複點擊
+  // 或再拖一次；辨識完成或失敗都會換回原本內容（成功時 renderReceiptWorkArea()
+  // 會把整條列隱藏起來，所以不需要在成功分支額外還原）。
+  const triggerBody = document.getElementById('receiptScanTriggerBody');
+  const originalTriggerBody = triggerBody ? triggerBody.innerHTML : '';
+  if (triggerBody){
+    triggerBody.innerHTML = `
+      <span class="receipt-scan-ic"><span class="spinner" style="border-color:var(--card-line); border-top-color:var(--ink);"></span></span>
+      <span class="receipt-scan-txt">
+        <span class="title">辨識中，請稍候…</span>
+        <span class="sub">正在讀取帳單內容，請不要關閉頁面</span>
+      </span>`;
+  }
 
   try{
     const dataUrl = await fileToResizedDataUrl(file);
@@ -309,7 +328,7 @@ async function handleReceiptUpload(evt){
     });
     if (!items.length){
       toast('沒有辨識出任何品項，請確認照片清楚、光線充足，或改用「新增一筆支出」手動輸入', 'error');
-      uploadZone.innerHTML = original;
+      if (triggerBody) triggerBody.innerHTML = originalTriggerBody;
       return;
     }
     receiptState = {
@@ -343,9 +362,20 @@ async function handleReceiptUpload(evt){
     pushReceiptSessionToServer();
   }catch(err){
     toast('辨識失敗：' + err.message, 'error');
-    uploadZone.innerHTML = original;
+    if (triggerBody) triggerBody.innerHTML = originalTriggerBody;
   }
 }
+
+// 🆕 觸發列（icon＋標題＋說明＋箭頭）的預設內容抽成常數，receiptResetUpload()
+// 與初始 HTML（index.html 的 #receiptScanTriggerBody）共用同一段結構，
+// 避免兩處各自寫一份、之後改文案或版面要記得同步兩邊。
+const RECEIPT_SCAN_TRIGGER_DEFAULT_HTML = `
+  <span class="receipt-scan-ic">🧾</span>
+  <span class="receipt-scan-txt">
+    <span class="title">點擊上傳帳單照片</span>
+    <span class="sub">或把照片拖曳到這個頁面，放開即可自動辨識（僅接受圖片格式）</span>
+  </span>
+  <span class="receipt-scan-arrow" aria-hidden="true">→</span>`;
 
 function receiptResetUpload(){
   receiptState = null;
@@ -355,13 +385,10 @@ function receiptResetUpload(){
   receiptSessionPushDirty = false;   // 🆕
   document.getElementById('receiptWorkArea').style.display = 'none';
   document.getElementById('receiptWorkArea').innerHTML = '';
-  document.getElementById('receiptUploadZone').style.display = '';
-  document.getElementById('receiptUploadZone').innerHTML = `
-    <label class="receipt-upload" for="receiptFileInput">
-      <div class="ic">🧾</div>
-      <div>點這裡上傳帳單照片（或用手機拍照）</div>
-      <input type="file" id="receiptFileInput" accept="image/*" onchange="handleReceiptUpload(event)">
-    </label>`;
+  const trigger = document.getElementById('receiptScanTrigger');
+  const triggerBody = document.getElementById('receiptScanTriggerBody');
+  if (trigger) trigger.style.display = '';
+  if (triggerBody) triggerBody.innerHTML = RECEIPT_SCAN_TRIGGER_DEFAULT_HTML;
 }
 
 // 🆕 [多人協作] 明確「結束（放棄）」這次認領：不建立任何支出，直接把整場
@@ -502,7 +529,8 @@ function buildReceiptSummaryHtml(){
 
 function renderReceiptWorkArea(){
   receiptDraftDirty = true; // 🆕 內容有變動，交給週期性儲存在下一輪把最新草稿寫進 sessionStorage
-  document.getElementById('receiptUploadZone').style.display = 'none';
+  const trigger = document.getElementById('receiptScanTrigger');
+  if (trigger) trigger.style.display = 'none';
   const area = document.getElementById('receiptWorkArea');
   area.style.display = 'block';
 
@@ -674,3 +702,104 @@ async function finalizeReceiptExpense(){
   if (wasJoined) clearReceiptSessionOnServer('finalized'); // 🆕 這筆帳單已經正式記入支出，通知所有協作者這次認領已經結束
 }
 
+/* =====================================================================
+   🆕 [帳單辨識收斂] 拖放上傳帳單照片
+   ---------------------------------------------------------------------
+   監聽範圍限定在 #panel-expenses（支出記帳分頁）本身，不是整個網站全域
+   監聽：.panel 未啟用時是 display:none，瀏覽器不會對隱藏元素觸發拖放
+   事件，所以只要監聽器掛在這個元素上，天生就只會在使用者停留在「支出
+   記帳」分頁時生效，不需要另外判斷目前在哪個分頁。
+
+   用 receiptDragCounter 而不是單純在 dragenter/dragleave 各自切換遮罩：
+   拖曳游標經過分頁內任何子元素（卡片、輸入框…）都會各自觸發一次
+   enter/leave，次數並不對稱，只用布林值切換會在游標移到子元素上方時
+   誤判成「已經離開整個分頁」而讓遮罩提早消失、又在移回時重新閃一次。
+   改成計數：enter+1、leave-1，只有真正歸零才代表游標離開了整個分頁。
+===================================================================== */
+let receiptDragCounter = 0;
+
+function isDraggingFiles(e){
+  return !!(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'));
+}
+
+// 唯讀分享連結：#receiptScanCard 本身已經用 data-write-only 隱藏整塊卡片，
+// 這裡在 JS 端再確認一次權限，雙重保險——避免有人繞過 CSS 直接把檔案拖
+// 進頁面時，仍然觸發到上傳／辨識邏輯。
+function canUseReceiptScan(){
+  return !shareMode || shareMode.permission === 'write';
+}
+
+function initReceiptDropZone(){
+  const zone = document.getElementById('panel-expenses');
+  const overlay = document.getElementById('receiptDropOverlay');
+  if (!zone || !overlay) return;
+
+  zone.addEventListener('dragenter', (e)=>{
+    if (!canUseReceiptScan() || !isDraggingFiles(e)) return;
+    e.preventDefault();
+    receiptDragCounter++;
+    overlay.style.display = 'flex';
+  });
+  zone.addEventListener('dragover', (e)=>{
+    if (!canUseReceiptScan() || !isDraggingFiles(e)) return;
+    e.preventDefault(); // 一定要擋掉，否則瀏覽器預設行為是直接開啟該圖片、不會觸發 drop
+  });
+  zone.addEventListener('dragleave', (e)=>{
+    if (!canUseReceiptScan() || !isDraggingFiles(e)) return;
+    receiptDragCounter = Math.max(0, receiptDragCounter - 1);
+    if (receiptDragCounter === 0) overlay.style.display = 'none';
+  });
+  zone.addEventListener('drop', async (e)=>{
+    if (!isDraggingFiles(e)) return;
+    e.preventDefault();
+    receiptDragCounter = 0;
+    overlay.style.display = 'none';
+    if (!canUseReceiptScan()) return;
+    await handleReceiptDrop(e.dataTransfer.files);
+  });
+}
+
+// 拖放放開後的處理：檔案數量／格式檢查 → （視情況）二次確認 → 交給
+// handleReceiptUpload() 走跟「點圖示選檔案」完全相同的辨識流程。
+// 點擊選檔已經跳過一次系統選檔視窗，算是使用者自己明確的一次確認，
+// 所以維持原本「選完就直接上傳」；只有拖放這個比較容易手滑誤觸的路徑，
+// 才會在這裡另外跳出確認彈窗。
+async function handleReceiptDrop(fileList){
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+
+  if (files.length > 1){
+    toast('一次只能上傳一張帳單照片，請拖曳單一檔案', 'error');
+    return;
+  }
+
+  const file = files[0];
+  if (!file.type.startsWith('image/')){
+    await alertModal('這不是圖片格式，無法上傳。請改拖曳照片或截圖格式的帳單檔案。', { title: '無法上傳' });
+    return;
+  }
+
+  // 🆕 若目前已經有一份認領到一半的帳單，直接用「要不要放棄並改用這張新
+  // 照片」當作這次拖放上傳的二次確認，不再另外多問一次「確定要上傳嗎」；
+  // 沒有進行中的認領時，才單獨跳出「確定要用這張照片辨識」的確認。
+  if (receiptState && Array.isArray(receiptState.items) && receiptState.items.length){
+    const proceed = await confirmModal(
+      `目前有一筆帳單辨識的認領還沒完成（${receiptState.items.length} 個項目），要放棄並改用這張新照片嗎？`,
+      { title: '放棄目前的認領？', confirmText: '放棄並使用新照片', cancelText: '取消', danger: true }
+    );
+    if (!proceed) return;
+    const wasJoined = receiptSessionJoined;
+    receiptResetUpload();
+    if (wasJoined) await clearReceiptSessionOnServer('abandoned');
+  } else {
+    const proceed = await confirmModal(
+      '偵測到你拖曳了一張圖片，要用它自動辨識帳單內容並建立支出嗎？',
+      { title: '用這張照片辨識帳單？', confirmText: '開始辨識' }
+    );
+    if (!proceed) return;
+  }
+
+  await handleReceiptUpload(file);
+}
+
+document.addEventListener('DOMContentLoaded', initReceiptDropZone);
