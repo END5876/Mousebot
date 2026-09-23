@@ -60,6 +60,8 @@ async function importJson(){
 
   trip = repairTrip(candidateTrip);
   editingExpenseId = null; editingDepositId = null;
+  expandedExpenseIds.clear(); expandedDepositIds.clear();
+  resetListFilters();
   resetOverviewSectionCurrencyState();
   toast(`已匯入行程「${trip.name}」（成員 ${trip.members.length} 人、支出 ${trip.expenses.length} 筆）`, 'success');
   renderAll();
@@ -70,6 +72,8 @@ async function confirmNewTrip(){
   const snapshot = trip;
   trip = defaultTrip();
   editingExpenseId = null; editingDepositId = null;
+  expandedExpenseIds.clear(); expandedDepositIds.clear();
+  resetListFilters();
   resetOverviewSectionCurrencyState();
   localFileHandle = null;
   updateLocalFileStatus();
