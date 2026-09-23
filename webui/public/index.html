@@ -205,9 +205,11 @@
       <h2 class="section-title">支出明細 <span class="n" id="expenseCount"></span>
       </h2>
       <div class="filter-bar">
-        <input type="text" id="expenseFilterText" class="filter-input" placeholder="🔍 搜尋項目說明…" oninput="onExpenseFilterChange()">
-        <select id="expenseFilterMember" class="filter-select" onchange="onExpenseFilterChange()"></select>
-        <button type="button" class="btn btn-ghost btn-sm filter-clear-btn" id="expenseFilterClearBtn" onclick="clearExpenseFilter()" style="display:none;">清除篩選</button>
+        <div class="filter-bar-row">
+          <input type="text" id="expenseFilterText" class="filter-input" placeholder="🔍 搜尋項目說明…" oninput="onExpenseFilterChange()">
+          <button type="button" class="btn btn-ghost btn-sm filter-clear-btn" id="expenseFilterClearBtn" onclick="clearExpenseFilter()" style="display:none;">清除篩選</button>
+        </div>
+        <div class="filter-member-chips" id="expenseFilterMemberChips"></div>
       </div>
       <div id="expenseList"></div>
     </div>
@@ -257,9 +259,11 @@
       <h2 class="section-title">轉帳明細 <span class="n" id="depositCount"></span>
       </h2>
       <div class="filter-bar">
-        <input type="text" id="depositFilterText" class="filter-input" placeholder="🔍 搜尋備註…" oninput="onDepositFilterChange()">
-        <select id="depositFilterMember" class="filter-select" onchange="onDepositFilterChange()"></select>
-        <button type="button" class="btn btn-ghost btn-sm filter-clear-btn" id="depositFilterClearBtn" onclick="clearDepositFilter()" style="display:none;">清除篩選</button>
+        <div class="filter-bar-row">
+          <input type="text" id="depositFilterText" class="filter-input" placeholder="🔍 搜尋備註…" oninput="onDepositFilterChange()">
+          <button type="button" class="btn btn-ghost btn-sm filter-clear-btn" id="depositFilterClearBtn" onclick="clearDepositFilter()" style="display:none;">清除篩選</button>
+        </div>
+        <div class="filter-member-chips" id="depositFilterMemberChips"></div>
       </div>
       <div id="depositList"></div>
     </div>

@@ -98,29 +98,36 @@ function renderDateGroupedList(items, rowRenderer){
     </div>`).join('');
 }
 
-// 🆕 [篩選／搜尋] 成員篩選下拉選單的選項；共用給支出／轉帳兩個篩選列。
-function memberFilterOptions(selected){
-  return '<option value="">全部成員</option>' + trip.members.map(m=>
-    `<option value="${m.id}" ${m.id===selected?'selected':''}>${escapeHtml(m.name)}</option>`
-  ).join('');
+// 🆕 [篩選／搜尋] 成員篩選改為複選 chip：把成員清單畫成可各自切換的按鈕，
+// 沿用帳單辨識既有的 .claim-chip 樣式（開/關兩態視覺語彙一致）。
+// toggleFnName 是點擊時要呼叫的全域函式名稱字串（見下方
+// toggleExpenseFilterMember/toggleDepositFilterMember）。
+function renderFilterMemberChips(selectedIds, toggleFnName){
+  if (!trip.members.length) return '';
+  return trip.members.map(m=>{
+    const on = selectedIds.has(m.id);
+    return `<button type="button" class="claim-chip ${on?'on':''}" onclick="${toggleFnName}('${m.id}')">${escapeHtml(m.name)}</button>`;
+  }).join('');
 }
 
-// 依目前的篩選條件（關鍵字＋成員）過濾支出／轉帳清單。
-// 支出的「成員」比對代墊人與分攤人；轉帳的「成員」比對付款人與收款人。
+// 依目前的篩選條件（關鍵字＋複選成員）過濾支出／轉帳清單。
+// 成員篩選為「符合任一位已勾選成員」即算命中（OR 邏輯），沒有勾選任何
+// 成員時視為不篩選成員。支出的「成員」比對代墊人與分攤人；轉帳的「成員」
+// 比對付款人與收款人。
 function filterExpenses(list){
   const text = expenseFilterText.trim().toLowerCase();
-  const memberId = expenseFilterMember;
+  const ids = expenseFilterMemberIds;
   return list.filter(e=>{
-    if (memberId && !e.payers.some(p=>p.userId===memberId) && !e.participants.some(s=>s.userId===memberId)) return false;
+    if (ids.size && !e.payers.some(p=>ids.has(p.userId)) && !e.participants.some(s=>ids.has(s.userId))) return false;
     if (text && !(e.description||'').toLowerCase().includes(text)) return false;
     return true;
   });
 }
 function filterDeposits(list){
   const text = depositFilterText.trim().toLowerCase();
-  const memberId = depositFilterMember;
+  const ids = depositFilterMemberIds;
   return list.filter(d=>{
-    if (memberId && d.payerId !== memberId && d.collectorId !== memberId) return false;
+    if (ids.size && !ids.has(d.payerId) && !ids.has(d.collectorId)) return false;
     if (text && !(d.note||'').toLowerCase().includes(text)) return false;
     return true;
   });
@@ -132,29 +139,36 @@ function filterDeposits(list){
 // 所以重繪不會讓使用者正在打的字或游標位置跑掉。
 function onExpenseFilterChange(){
   expenseFilterText = document.getElementById('expenseFilterText').value;
-  expenseFilterMember = document.getElementById('expenseFilterMember').value;
   renderAll();
 }
 function onDepositFilterChange(){
   depositFilterText = document.getElementById('depositFilterText').value;
-  depositFilterMember = document.getElementById('depositFilterMember').value;
+  renderAll();
+}
+// 🆕 成員 chip 點擊：切換該成員是否在篩選集合中，可同時勾選多位。
+function toggleExpenseFilterMember(id){
+  if (expenseFilterMemberIds.has(id)) expenseFilterMemberIds.delete(id); else expenseFilterMemberIds.add(id);
+  renderAll();
+}
+function toggleDepositFilterMember(id){
+  if (depositFilterMemberIds.has(id)) depositFilterMemberIds.delete(id); else depositFilterMemberIds.add(id);
   renderAll();
 }
 function clearExpenseFilter(){
-  expenseFilterText = ''; expenseFilterMember = '';
+  expenseFilterText = ''; expenseFilterMemberIds.clear();
   document.getElementById('expenseFilterText').value = '';
   renderAll();
 }
 function clearDepositFilter(){
-  depositFilterText = ''; depositFilterMember = '';
+  depositFilterText = ''; depositFilterMemberIds.clear();
   document.getElementById('depositFilterText').value = '';
   renderAll();
 }
 // 🆕 換行程（載入／匯入／清空重開／進入分享模式）時呼叫：清空篩選條件，
 // 避免用舊行程篩出來的成員 id、關鍵字誤套用到新行程上。
 function resetListFilters(){
-  expenseFilterText = ''; expenseFilterMember = '';
-  depositFilterText = ''; depositFilterMember = '';
+  expenseFilterText = ''; expenseFilterMemberIds.clear();
+  depositFilterText = ''; depositFilterMemberIds.clear();
   const et = document.getElementById('expenseFilterText'); if (et) et.value = '';
   const dt = document.getElementById('depositFilterText'); if (dt) dt.value = '';
 }
@@ -192,10 +206,10 @@ function renderAll(){
 
   // expense list（🆕 依日期分組＋預設收合明細＋篩選／搜尋）
   {
-    document.getElementById('expenseFilterMember').innerHTML = memberFilterOptions(expenseFilterMember);
+    document.getElementById('expenseFilterMemberChips').innerHTML = renderFilterMemberChips(expenseFilterMemberIds, 'toggleExpenseFilterMember');
     const allExpenses = trip.expenses.slice().sort((a,b)=>b.createdAt-a.createdAt);
     const filteredExpenses = filterExpenses(allExpenses);
-    const filterActive = !!(expenseFilterText.trim() || expenseFilterMember);
+    const filterActive = !!(expenseFilterText.trim() || expenseFilterMemberIds.size);
     document.getElementById('expenseCount').textContent = filterActive
       ? `(${filteredExpenses.length}/${allExpenses.length})`
       : `(${allExpenses.length})`;
@@ -218,10 +232,10 @@ function renderAll(){
     }
   }
   {
-    document.getElementById('depositFilterMember').innerHTML = memberFilterOptions(depositFilterMember);
+    document.getElementById('depositFilterMemberChips').innerHTML = renderFilterMemberChips(depositFilterMemberIds, 'toggleDepositFilterMember');
     const allDeposits = trip.deposits.slice().sort((a,b)=>b.createdAt-a.createdAt);
     const filteredDeposits = filterDeposits(allDeposits);
-    const filterActive = !!(depositFilterText.trim() || depositFilterMember);
+    const filterActive = !!(depositFilterText.trim() || depositFilterMemberIds.size);
     document.getElementById('depositCount').textContent = filterActive
       ? `(${filteredDeposits.length}/${allDeposits.length})`
       : `(${allDeposits.length})`;
