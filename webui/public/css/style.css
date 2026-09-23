@@ -658,6 +658,49 @@
   }
   .ledger-actions{display:flex; gap:6px; margin-top:9px;}
 
+  /* 🆕 [日期分組＋收合明細] 支出／轉帳明細改依日期分組，並預設收合每筆的
+     詳細內容（代墊/分攤明細、編輯/刪除按鈕），只保留「日期標題 + 一行
+     摘要」，筆數一多也能快速掃視；點擊該列標題即可展開/收合單筆明細。 */
+  .ledger-date-group{ margin-bottom:4px; }
+  .ledger-date-head{
+    display:flex; justify-content:space-between; align-items:baseline;
+    padding:10px 0 6px; margin-top:6px;
+    font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-soft);
+    border-bottom:1px solid var(--card-line);
+  }
+  .ledger-date-group:first-child .ledger-date-head{ margin-top:0; }
+  .ledger-date-label{ font-weight:700; letter-spacing:.03em; }
+  .ledger-date-subtotal{ font-weight:600; }
+  /* 收合列改用 column 排列：上排（可點擊標題列）永遠顯示，下面的
+     .ledger-detail 只有展開時才存在於 DOM 裡（見 render.js）。 */
+  .ledger-row-collapsible{ flex-direction:column; align-items:stretch; }
+  .ledger-row-head{
+    display:flex; justify-content:space-between; align-items:flex-start;
+    gap:12px; cursor:pointer; user-select:none;
+  }
+  .ledger-row-head:hover .ledger-title{ color:var(--brass); }
+  .ledger-toggle-ic{
+    display:inline-block; width:13px; color:var(--ink-soft); font-size:11px;
+  }
+  .ledger-detail{ padding-top:8px; padding-left:21px; }
+
+  /* 🆕 [篩選／搜尋] 支出／轉帳明細上方的篩選列：關鍵字搜尋框＋成員下拉，
+     純前端 .filter() 篩選，不影響 trip 資料本身。兩個輸入變動時共用
+     renderAll() 重繪整頁，跟收合/展開走同一套模式。 */
+  .filter-bar{
+    display:flex; gap:8px; flex-wrap:wrap; align-items:center;
+    margin:-2px 0 10px;
+  }
+  .filter-input{
+    flex:1; min-width:140px; width:auto;
+    padding:8px 10px; font-size:13.5px;
+  }
+  .filter-select{
+    width:auto; max-width:140px; flex-shrink:0;
+    padding:8px 10px; font-size:13px;
+  }
+  .filter-clear-btn{ flex-shrink:0; }
+
   /* 🆕 分享連結列表：沿用跟支出/轉帳明細一致的 .ledger-row 版面（而不是獨立卡片），
      權限改用跟「換算幣別」小選單一致的 .convert-select 樣式（寬度固定縮小、inline
      顯示在到期日期旁邊），維持整體介面語彙一致、也不會把一整排撐得過長。 */

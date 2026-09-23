@@ -20,6 +20,145 @@ function emptyState(icon, text, ctaLabel, ctaOnclick){
   </div>`;
 }
 
+// 🆕 [日期分組＋收合明細] 展開/收合單一筆支出／轉帳的詳細內容。
+// 直接呼叫 renderAll() 重繪整頁——跟 editExpense() 等既有操作走同一套模式，
+// 筆數量級下（數百筆內）效能沒有問題，也不用另外維護局部更新的邏輯。
+function toggleExpenseExpand(id){
+  if (expandedExpenseIds.has(id)) expandedExpenseIds.delete(id); else expandedExpenseIds.add(id);
+  renderAll();
+}
+function toggleDepositExpand(id){
+  if (expandedDepositIds.has(id)) expandedDepositIds.delete(id); else expandedDepositIds.add(id);
+  renderAll();
+}
+
+// 單筆支出列：收合時只顯示「▸ 說明 + 時間」與金額；展開後才顯示代墊/分攤
+// 明細與編輯/刪除按鈕，避免筆數一多，畫面被大量明細撐開難以掃視。
+function renderExpenseRow(e){
+  const expanded = expandedExpenseIds.has(e.id);
+  const detailHtml = expanded ? `
+      <div class="ledger-detail">
+        <div class="ledger-sub">
+          代墊：${e.payers.map(p=>`${escapeHtml(memberName(p.userId))} ${fmtMoney(p.amount,e.currency)}`).join('、')}<br>
+          分攤：${e.participants.map(s=>`${escapeHtml(memberName(s.userId))} ${fmtMoney(s.amount,e.currency)}`).join('、')}
+        </div>
+        <div class="ledger-actions" data-write-only>
+          <button class="btn btn-ghost btn-sm" onclick="editExpense('${e.id}')">編輯</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteExpense('${e.id}')">刪除</button>
+        </div>
+      </div>` : '';
+  return `
+    <div class="ledger-row ledger-row-collapsible">
+      <div class="ledger-row-head" onclick="toggleExpenseExpand('${e.id}')">
+        <div class="ledger-main">
+          <div class="ledger-title"><span class="ledger-toggle-ic">${expanded?'▾':'▸'}</span>${escapeHtml(e.description)}</div>
+          <div class="ledger-sub"><span class="ledger-time">${fmtTime(e.createdAt)}</span></div>
+        </div>
+        <div class="ledger-amt">${fmtMoney(e.amount, e.currency)} <span style="font-size:11px;color:var(--ink-soft);">${e.currency}</span></div>
+      </div>
+      ${detailHtml}
+    </div>`;
+}
+
+// 單筆轉帳列：同上邏輯，收合時只留「付款人 → 收款人 + 時間」與金額。
+function renderDepositRow(d){
+  const expanded = expandedDepositIds.has(d.id);
+  const detailHtml = expanded ? `
+      <div class="ledger-detail">
+        <div class="ledger-sub">${d.note ? escapeHtml(d.note) : '（無備註）'}</div>
+        <div class="ledger-actions" data-write-only>
+          <button class="btn btn-ghost btn-sm" onclick="editDeposit('${d.id}')">編輯</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteDeposit('${d.id}')">刪除</button>
+        </div>
+      </div>` : '';
+  return `
+    <div class="ledger-row ledger-row-collapsible">
+      <div class="ledger-row-head" onclick="toggleDepositExpand('${d.id}')">
+        <div class="ledger-main">
+          <div class="ledger-title"><span class="ledger-toggle-ic">${expanded?'▾':'▸'}</span>${escapeHtml(memberName(d.payerId))} → ${escapeHtml(memberName(d.collectorId))}</div>
+          <div class="ledger-sub"><span class="ledger-time">${fmtTime(d.createdAt)}</span></div>
+        </div>
+        <div class="ledger-amt">${fmtMoney(d.amount, d.currency)} <span style="font-size:11px;color:var(--ink-soft);">${d.currency}</span></div>
+      </div>
+      ${detailHtml}
+    </div>`;
+}
+
+// 🆕 把一組已排序好的帳目依日期分組渲染成 HTML：每組一個 sticky 風格標題
+// （日期 + 該組小計），底下接著該日期所有項目（用 rowRenderer 渲染單筆）。
+function renderDateGroupedList(items, rowRenderer){
+  const groups = groupItemsByDate(items);
+  return groups.map(g=>`
+    <div class="ledger-date-group">
+      <div class="ledger-date-head">
+        <span class="ledger-date-label">${escapeHtml(g.label)}</span>
+        <span class="ledger-date-subtotal">${fmtMoney(g.subtotal, trip.baseCurrency)} ${trip.baseCurrency}</span>
+      </div>
+      ${g.items.map(rowRenderer).join('')}
+    </div>`).join('');
+}
+
+// 🆕 [篩選／搜尋] 成員篩選下拉選單的選項；共用給支出／轉帳兩個篩選列。
+function memberFilterOptions(selected){
+  return '<option value="">全部成員</option>' + trip.members.map(m=>
+    `<option value="${m.id}" ${m.id===selected?'selected':''}>${escapeHtml(m.name)}</option>`
+  ).join('');
+}
+
+// 依目前的篩選條件（關鍵字＋成員）過濾支出／轉帳清單。
+// 支出的「成員」比對代墊人與分攤人；轉帳的「成員」比對付款人與收款人。
+function filterExpenses(list){
+  const text = expenseFilterText.trim().toLowerCase();
+  const memberId = expenseFilterMember;
+  return list.filter(e=>{
+    if (memberId && !e.payers.some(p=>p.userId===memberId) && !e.participants.some(s=>s.userId===memberId)) return false;
+    if (text && !(e.description||'').toLowerCase().includes(text)) return false;
+    return true;
+  });
+}
+function filterDeposits(list){
+  const text = depositFilterText.trim().toLowerCase();
+  const memberId = depositFilterMember;
+  return list.filter(d=>{
+    if (memberId && d.payerId !== memberId && d.collectorId !== memberId) return false;
+    if (text && !(d.note||'').toLowerCase().includes(text)) return false;
+    return true;
+  });
+}
+
+// 篩選列輸入變動時呼叫：把 DOM 上的值同步回全域篩選狀態，再重繪整頁。
+// 跟 toggleExpenseExpand() 等既有操作一樣直接 renderAll()，篩選文字輸入框
+// 本身是 index.html 裡的靜態元素、不會被 renderAll() 的 innerHTML 覆寫，
+// 所以重繪不會讓使用者正在打的字或游標位置跑掉。
+function onExpenseFilterChange(){
+  expenseFilterText = document.getElementById('expenseFilterText').value;
+  expenseFilterMember = document.getElementById('expenseFilterMember').value;
+  renderAll();
+}
+function onDepositFilterChange(){
+  depositFilterText = document.getElementById('depositFilterText').value;
+  depositFilterMember = document.getElementById('depositFilterMember').value;
+  renderAll();
+}
+function clearExpenseFilter(){
+  expenseFilterText = ''; expenseFilterMember = '';
+  document.getElementById('expenseFilterText').value = '';
+  renderAll();
+}
+function clearDepositFilter(){
+  depositFilterText = ''; depositFilterMember = '';
+  document.getElementById('depositFilterText').value = '';
+  renderAll();
+}
+// 🆕 換行程（載入／匯入／清空重開／進入分享模式）時呼叫：清空篩選條件，
+// 避免用舊行程篩出來的成員 id、關鍵字誤套用到新行程上。
+function resetListFilters(){
+  expenseFilterText = ''; expenseFilterMember = '';
+  depositFilterText = ''; depositFilterMember = '';
+  const et = document.getElementById('expenseFilterText'); if (et) et.value = '';
+  const dt = document.getElementById('depositFilterText'); if (dt) dt.value = '';
+}
+
 function renderAll(){
   // cover
   document.getElementById('tripName').value = trip.name;
@@ -51,24 +190,22 @@ function renderAll(){
   if (!hasUnsavedExpenseFormContent()) { buildChips('payerChips','payer'); buildChips('participantChips','participant'); }
   renderExpenseHint();
 
-  // expense list
-  document.getElementById('expenseCount').textContent = `(${trip.expenses.length})`;
-  document.getElementById('expenseList').innerHTML = trip.expenses.slice().sort((a,b)=>b.createdAt-a.createdAt).map(e=>`
-    <div class="ledger-row">
-      <div class="ledger-main">
-        <div class="ledger-title">${escapeHtml(e.description)}</div>
-        <div class="ledger-sub">
-          <span class="ledger-time">${fmtDateTime(e.createdAt)}</span><br>
-          代墊：${e.payers.map(p=>`${escapeHtml(memberName(p.userId))} ${fmtMoney(p.amount,e.currency)}`).join('、')}<br>
-          分攤：${e.participants.map(s=>`${escapeHtml(memberName(s.userId))} ${fmtMoney(s.amount,e.currency)}`).join('、')}
-        </div>
-        <div class="ledger-actions" data-write-only>
-          <button class="btn btn-ghost btn-sm" onclick="editExpense('${e.id}')">編輯</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteExpense('${e.id}')">刪除</button>
-        </div>
-      </div>
-      <div class="ledger-amt">${fmtMoney(e.amount, e.currency)} <span style="font-size:11px;color:var(--ink-soft);">${e.currency}</span></div>
-    </div>`).join('') || emptyState('🧾', '還沒有任何支出', '新增第一筆 →', "showMainTab('expenses'); document.getElementById('expDesc').focus();");
+  // expense list（🆕 依日期分組＋預設收合明細＋篩選／搜尋）
+  {
+    document.getElementById('expenseFilterMember').innerHTML = memberFilterOptions(expenseFilterMember);
+    const allExpenses = trip.expenses.slice().sort((a,b)=>b.createdAt-a.createdAt);
+    const filteredExpenses = filterExpenses(allExpenses);
+    const filterActive = !!(expenseFilterText.trim() || expenseFilterMember);
+    document.getElementById('expenseCount').textContent = filterActive
+      ? `(${filteredExpenses.length}/${allExpenses.length})`
+      : `(${allExpenses.length})`;
+    document.getElementById('expenseFilterClearBtn').style.display = filterActive ? '' : 'none';
+    document.getElementById('expenseList').innerHTML = filteredExpenses.length
+      ? renderDateGroupedList(filteredExpenses, renderExpenseRow)
+      : (allExpenses.length
+          ? emptyState('🔍', '沒有符合篩選條件的支出', '清除篩選 →', "clearExpenseFilter()")
+          : emptyState('🧾', '還沒有任何支出', '新增第一筆 →', "showMainTab('expenses'); document.getElementById('expDesc').focus();"));
+  }
 
   // deposit form selects
   renderDepositSelects();
@@ -80,22 +217,21 @@ function renderAll(){
       document.getElementById('depCurrency').innerHTML = currencyOptions(dep.currency);
     }
   }
-  document.getElementById('depositCount').textContent = `(${trip.deposits.length})`;
-  document.getElementById('depositList').innerHTML = trip.deposits.slice().sort((a,b)=>b.createdAt-a.createdAt).map(d=>`
-    <div class="ledger-row">
-      <div class="ledger-main">
-        <div class="ledger-title">${escapeHtml(memberName(d.payerId))} → ${escapeHtml(memberName(d.collectorId))}</div>
-        <div class="ledger-sub">
-          <span class="ledger-time">${fmtDateTime(d.createdAt)}</span><br>
-          ${d.note ? escapeHtml(d.note) : '（無備註）'}
-        </div>
-        <div class="ledger-actions" data-write-only>
-          <button class="btn btn-ghost btn-sm" onclick="editDeposit('${d.id}')">編輯</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteDeposit('${d.id}')">刪除</button>
-        </div>
-      </div>
-      <div class="ledger-amt">${fmtMoney(d.amount, d.currency)} <span style="font-size:11px;color:var(--ink-soft);">${d.currency}</span></div>
-    </div>`).join('') || emptyState('💸', '還沒有任何轉帳／預收紀錄', '新增第一筆 →', "showMainTab('deposits'); document.getElementById('depPayer').focus();");
+  {
+    document.getElementById('depositFilterMember').innerHTML = memberFilterOptions(depositFilterMember);
+    const allDeposits = trip.deposits.slice().sort((a,b)=>b.createdAt-a.createdAt);
+    const filteredDeposits = filterDeposits(allDeposits);
+    const filterActive = !!(depositFilterText.trim() || depositFilterMember);
+    document.getElementById('depositCount').textContent = filterActive
+      ? `(${filteredDeposits.length}/${allDeposits.length})`
+      : `(${allDeposits.length})`;
+    document.getElementById('depositFilterClearBtn').style.display = filterActive ? '' : 'none';
+    document.getElementById('depositList').innerHTML = filteredDeposits.length
+      ? renderDateGroupedList(filteredDeposits, renderDepositRow)
+      : (allDeposits.length
+          ? emptyState('🔍', '沒有符合篩選條件的轉帳／預收紀錄', '清除篩選 →', "clearDepositFilter()")
+          : emptyState('💸', '還沒有任何轉帳／預收紀錄', '新增第一筆 →', "showMainTab('deposits'); document.getElementById('depPayer').focus();"));
+  }
 
   // overview
   document.getElementById('kvMembers').textContent = trip.members.length;

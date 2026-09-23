@@ -107,6 +107,8 @@ async function initShareMode(token){
     shareMode = { token, permission: data.permission === 'write' ? 'write' : 'read' };
     applyShareModeUI();
     editingExpenseId = null; editingDepositId = null;
+    expandedExpenseIds.clear(); expandedDepositIds.clear();
+    resetListFilters();
     renderAll();
     connectTripEventStream();
     if (shareMode.permission === 'write') checkReceiptSessionAvailability(); // 🆕 [多人協作] 唯讀訪客不需要看到「加入認領」的提示

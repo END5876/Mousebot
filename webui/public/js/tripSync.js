@@ -14,6 +14,8 @@ async function loadTripFromApi(){
     trip = repairTrip(data);
     lastSyncedTripJSON = JSON.stringify(trip);
     editingExpenseId = null; editingDepositId = null;
+    expandedExpenseIds.clear(); expandedDepositIds.clear();
+    resetListFilters();
     resetOverviewSectionCurrencyState();
     toast(`已載入「${trip.name}」（成員 ${trip.members.length} 人、支出 ${trip.expenses.length} 筆）`, 'success');
     updateBotStatusPill(true, trip.name);
