@@ -9,13 +9,14 @@ let editingDepositId = null;
 let expandedExpenseIds = new Set();
 let expandedDepositIds = new Set();
 // 🆕 [篩選／搜尋] 支出／轉帳明細各自獨立的篩選條件：關鍵字（支出比對說明、
-// 轉帳比對備註）與成員（支出比對代墊人/分攤人、轉帳比對付款人/收款人）。
+// 轉帳比對備註）與成員（可複選；支出比對代墊人/分攤人、轉帳比對付款人/
+// 收款人，符合「任一位」已勾選成員即算命中）。
 // 換行程（載入／匯入／清空重開／進入分享模式）時應重置，見各呼叫端的
 // resetListFilters()（定義於 render.js）。
 let expenseFilterText = '';
-let expenseFilterMember = '';
+let expenseFilterMemberIds = new Set();
 let depositFilterText = '';
-let depositFilterMember = '';
+let depositFilterMemberIds = new Set();
 // 🆕 [分享連結] null＝目前是擁有者模式（用真正的 SPLITBILL_API_KEY 操作）；
 // 有值時代表這個分頁是透過分享連結打開的：{ token, permission:'read'|'write' }。
 // 一旦進入分享模式就不會再切回擁有者模式（同一個分頁不混用兩種身分），
