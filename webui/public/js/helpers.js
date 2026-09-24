@@ -51,6 +51,7 @@ function fmtTime(ts){
 function fmtDateKey(d){
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 }
+const WEEKDAY_LABELS = ['日','一','二','三','四','五','六'];
 function groupItemsByDate(items){
   const groups = [];
   const now = new Date();
@@ -65,8 +66,8 @@ function groupItemsByDate(items){
       currentKey = key;
       const label = key === todayKey ? '今天'
         : key === yestKey ? '昨天'
-        : d.getFullYear() === now.getFullYear() ? `${d.getMonth()+1}/${d.getDate()}`
-        : `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`;
+        : d.getFullYear() === now.getFullYear() ? `${d.getMonth()+1}/${d.getDate()} · 週${WEEKDAY_LABELS[d.getDay()]}`
+        : `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} · 週${WEEKDAY_LABELS[d.getDay()]}`;
       currentGroup = { label, items: [], subtotal: 0 };
       groups.push(currentGroup);
     }

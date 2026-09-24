@@ -32,12 +32,13 @@ function toggleDepositExpand(id){
   renderAll();
 }
 
-// 單筆支出列：收合時只顯示「▸ 說明 + 時間」與金額；展開後才顯示代墊/分攤
-// 明細與編輯/刪除按鈕，避免筆數一多，畫面被大量明細撐開難以掃視。
+// 單筆支出列：收合時顯示「時間徽章 + 說明 + 代墊/分攤人數預覽」與金額；
+// 展開後才顯示完整代墊/分攤明細與編輯/刪除按鈕，避免筆數一多畫面被撐開。
 function renderExpenseRow(e){
   const expanded = expandedExpenseIds.has(e.id);
+  const teaser = `${e.payers.length} 人代墊・${e.participants.length} 人分攤`;
   const detailHtml = expanded ? `
-      <div class="ledger-detail">
+      <div class="ledger-entry-detail">
         <div class="ledger-sub">
           代墊：${e.payers.map(p=>`${escapeHtml(memberName(p.userId))} ${fmtMoney(p.amount,e.currency)}`).join('、')}<br>
           分攤：${e.participants.map(s=>`${escapeHtml(memberName(s.userId))} ${fmtMoney(s.amount,e.currency)}`).join('、')}
@@ -48,23 +49,27 @@ function renderExpenseRow(e){
         </div>
       </div>` : '';
   return `
-    <div class="ledger-row ledger-row-collapsible">
-      <div class="ledger-row-head" onclick="toggleExpenseExpand('${e.id}')">
-        <div class="ledger-main">
-          <div class="ledger-title"><span class="ledger-toggle-ic">${expanded?'▾':'▸'}</span>${escapeHtml(e.description)}</div>
-          <div class="ledger-sub"><span class="ledger-time">${fmtTime(e.createdAt)}</span></div>
-        </div>
-        <div class="ledger-amt">${fmtMoney(e.amount, e.currency)} <span style="font-size:11px;color:var(--ink-soft);">${e.currency}</span></div>
-      </div>
+    <div class="ledger-entry ${expanded?'open':''}">
+      <button type="button" class="ledger-entry-row" onclick="toggleExpenseExpand('${e.id}')">
+        <span class="ledger-entry-time">${fmtTime(e.createdAt)}</span>
+        <span class="ledger-entry-main">
+          <span class="ledger-entry-title">${escapeHtml(e.description)}</span>
+          <span class="ledger-entry-teaser">${teaser}</span>
+        </span>
+        <span class="ledger-entry-amt">${fmtMoney(e.amount, e.currency)} <span class="cur">${e.currency}</span></span>
+        <span class="ledger-entry-chevron">▾</span>
+      </button>
       ${detailHtml}
     </div>`;
 }
 
-// 單筆轉帳列：同上邏輯，收合時只留「付款人 → 收款人 + 時間」與金額。
+// 單筆轉帳列：同上邏輯，收合時預覽「付款人 → 收款人」與備註（無備註時顯示
+// 淡化的提示文字），展開後才顯示編輯/刪除按鈕。
 function renderDepositRow(d){
   const expanded = expandedDepositIds.has(d.id);
+  const teaser = d.note ? escapeHtml(d.note) : '（無備註）';
   const detailHtml = expanded ? `
-      <div class="ledger-detail">
+      <div class="ledger-entry-detail">
         <div class="ledger-sub">${d.note ? escapeHtml(d.note) : '（無備註）'}</div>
         <div class="ledger-actions" data-write-only>
           <button class="btn btn-ghost btn-sm" onclick="editDeposit('${d.id}')">編輯</button>
@@ -72,27 +77,29 @@ function renderDepositRow(d){
         </div>
       </div>` : '';
   return `
-    <div class="ledger-row ledger-row-collapsible">
-      <div class="ledger-row-head" onclick="toggleDepositExpand('${d.id}')">
-        <div class="ledger-main">
-          <div class="ledger-title"><span class="ledger-toggle-ic">${expanded?'▾':'▸'}</span>${escapeHtml(memberName(d.payerId))} → ${escapeHtml(memberName(d.collectorId))}</div>
-          <div class="ledger-sub"><span class="ledger-time">${fmtTime(d.createdAt)}</span></div>
-        </div>
-        <div class="ledger-amt">${fmtMoney(d.amount, d.currency)} <span style="font-size:11px;color:var(--ink-soft);">${d.currency}</span></div>
-      </div>
+    <div class="ledger-entry ${expanded?'open':''}">
+      <button type="button" class="ledger-entry-row" onclick="toggleDepositExpand('${d.id}')">
+        <span class="ledger-entry-time">${fmtTime(d.createdAt)}</span>
+        <span class="ledger-entry-main">
+          <span class="ledger-entry-title">${escapeHtml(memberName(d.payerId))} → ${escapeHtml(memberName(d.collectorId))}</span>
+          <span class="ledger-entry-teaser">${teaser}</span>
+        </span>
+        <span class="ledger-entry-amt">${fmtMoney(d.amount, d.currency)} <span class="cur">${d.currency}</span></span>
+        <span class="ledger-entry-chevron">▾</span>
+      </button>
       ${detailHtml}
     </div>`;
 }
 
-// 🆕 把一組已排序好的帳目依日期分組渲染成 HTML：每組一個 sticky 風格標題
+// 🆕 把一組已排序好的帳目依日期分組渲染成 HTML：每組一個「日期徽章」標頭
 // （日期 + 該組小計），底下接著該日期所有項目（用 rowRenderer 渲染單筆）。
 function renderDateGroupedList(items, rowRenderer){
   const groups = groupItemsByDate(items);
   return groups.map(g=>`
-    <div class="ledger-date-group">
-      <div class="ledger-date-head">
-        <span class="ledger-date-label">${escapeHtml(g.label)}</span>
-        <span class="ledger-date-subtotal">${fmtMoney(g.subtotal, trip.baseCurrency)} ${trip.baseCurrency}</span>
+    <div class="ledger-day">
+      <div class="ledger-day-head">
+        <span class="ledger-day-badge">${escapeHtml(g.label)}</span>
+        <span class="ledger-day-subtotal">${fmtMoney(g.subtotal, trip.baseCurrency)} ${trip.baseCurrency}</span>
       </div>
       ${g.items.map(rowRenderer).join('')}
     </div>`).join('');
@@ -204,16 +211,22 @@ function renderAll(){
   if (!hasUnsavedExpenseFormContent()) { buildChips('payerChips','payer'); buildChips('participantChips','participant'); }
   renderExpenseHint();
 
-  // expense list（🆕 依日期分組＋預設收合明細＋篩選／搜尋）
+  // expense list（🆕 依日期分組＋預設收合明細＋篩選／搜尋，完整重新設計版面）
   {
     document.getElementById('expenseFilterMemberChips').innerHTML = renderFilterMemberChips(expenseFilterMemberIds, 'toggleExpenseFilterMember');
     const allExpenses = trip.expenses.slice().sort((a,b)=>b.createdAt-a.createdAt);
     const filteredExpenses = filterExpenses(allExpenses);
     const filterActive = !!(expenseFilterText.trim() || expenseFilterMemberIds.size);
-    document.getElementById('expenseCount').textContent = filterActive
-      ? `(${filteredExpenses.length}/${allExpenses.length})`
-      : `(${allExpenses.length})`;
+    document.getElementById('expenseCount').textContent = `(${allExpenses.length})`;
     document.getElementById('expenseFilterClearBtn').style.display = filterActive ? '' : 'none';
+    const expSummaryEl = document.getElementById('expenseFilterSummary');
+    if (filterActive){
+      const filteredSubtotal = round2(filteredExpenses.reduce((s,e)=>s+(typeof e.amountInBase==='number'?e.amountInBase:(e.amount||0)),0));
+      expSummaryEl.style.display = '';
+      expSummaryEl.textContent = `顯示 ${filteredExpenses.length} / ${allExpenses.length} 筆・小計 ${fmtMoney(filteredSubtotal, trip.baseCurrency)} ${trip.baseCurrency}`;
+    } else {
+      expSummaryEl.style.display = 'none';
+    }
     document.getElementById('expenseList').innerHTML = filteredExpenses.length
       ? renderDateGroupedList(filteredExpenses, renderExpenseRow)
       : (allExpenses.length
@@ -236,10 +249,16 @@ function renderAll(){
     const allDeposits = trip.deposits.slice().sort((a,b)=>b.createdAt-a.createdAt);
     const filteredDeposits = filterDeposits(allDeposits);
     const filterActive = !!(depositFilterText.trim() || depositFilterMemberIds.size);
-    document.getElementById('depositCount').textContent = filterActive
-      ? `(${filteredDeposits.length}/${allDeposits.length})`
-      : `(${allDeposits.length})`;
+    document.getElementById('depositCount').textContent = `(${allDeposits.length})`;
     document.getElementById('depositFilterClearBtn').style.display = filterActive ? '' : 'none';
+    const depSummaryEl = document.getElementById('depositFilterSummary');
+    if (filterActive){
+      const filteredSubtotal = round2(filteredDeposits.reduce((s,d)=>s+(typeof d.amountInBase==='number'?d.amountInBase:(d.amount||0)),0));
+      depSummaryEl.style.display = '';
+      depSummaryEl.textContent = `顯示 ${filteredDeposits.length} / ${allDeposits.length} 筆・小計 ${fmtMoney(filteredSubtotal, trip.baseCurrency)} ${trip.baseCurrency}`;
+    } else {
+      depSummaryEl.style.display = 'none';
+    }
     document.getElementById('depositList').innerHTML = filteredDeposits.length
       ? renderDateGroupedList(filteredDeposits, renderDepositRow)
       : (allDeposits.length
