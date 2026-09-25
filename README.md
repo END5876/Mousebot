@@ -1,6 +1,6 @@
 # 🐭 Mousebot
 
-一個功能豐富的私人 Discord 機器人，整合 AI 角色扮演對話、語音喚醒詞互動、TTS/STT、線上與本地音樂播放、多人分帳系統、遊戲限免通知、整點報時等多項功能。以 Node.js 為主體，搭配 Python 撰寫的 OpenWakeWord 喚醒詞偵測服務，透過 Docker + supervisord 容器化部署。
+一個功能豐富的私人 Discord 機器人，整合 AI 角色扮演對話、語音喚醒詞互動、TTS/STT、線上與本地音樂播放、**含網頁介面的多人分帳系統（即時同步、分享連結、AI 帳單辨識）**、遊戲限免通知、整點報時等多項功能。以 Node.js 為主體，搭配 Python 撰寫的 OpenWakeWord 喚醒詞偵測服務，並內建 Express 網頁伺服器，透過 Docker + supervisord 容器化部署。
 
 ---
 
@@ -8,24 +8,25 @@
 
 | 功能模組 | 說明 |
 |---|---|
-| **AI 對話** | 整合 Google Gemini API，支援 9 種角色扮演人格、圖片輸入、每頻道隨機插話、AI 回覆自動朗讀 |
+| **AI 對話** | 整合 Google Gemini API（`gemini-3.1-flash-lite`），支援 8 種角色扮演人格、圖片輸入、每頻道隨機插話、AI 回覆自動朗讀 |
 | **文字轉語音（TTS）** | 主力使用 GPT-SoVITS，離線時自動 fallback 至 Edge-TTS，附排隊系統、多模型切換、LRU 快取 |
 | **語音轉文字（STT）** | 搭配 OpenWakeWord 喚醒詞偵測 + Groq Whisper，支援語音指令觸發與手動錄音按鈕 |
-| **線上音樂播放** | 支援 YouTube / Bilibili 串流播放與搜尋，含循環模式、佇列管理、隨機連播、響度正規化、閒置自動停止 |
+| **線上音樂播放** | 支援 YouTube / Bilibili 串流播放、搜尋與播放清單匯入，含循環模式、佇列管理、隨機連播、響度正規化、閒置自動停止 |
 | **本地音樂播放** | 播放 `data/music` 內的音訊檔案（mp3/wav/ogg/flac/m4a/aac），附播放次數統計與排序 |
-| **分帳系統（Splitbill）** | 多行程、多幣別記帳與結算，支援面板與快速指令兩種操作方式，內建交叉債務抵銷演算法 |
+| **分帳系統（Splitbill）** | 多行程、多幣別記帳與結算，支援面板／快速指令／**免建行程的⚡快速分帳**三種操作方式，內建預收訂金抵銷與交叉債務簡化演算法，**並附一個獨立的網頁記帳介面** |
+| **分帳網頁介面（Web UI）** | 與 Bot 共用同一份資料，支援**即時同步（SSE）**、**可設定唯讀／可編輯權限與到期時間的分享連結**、**AI 帳單照片辨識自動記帳（含多人協作認領進度同步）**、即時匯率換算 |
 | **遊戲限免通知** | 每 30 分鐘輪詢並推播 Steam / Epic Games 限時免費遊戲資訊 |
 | **整點報時** | 整點播放對應的語音音效（24 小時制，需自備 .wav 音效檔） |
 | **自訂回應** | 針對特定訊息（完全匹配或包含關鍵字）自動回應，支援多則回覆隨機挑選 |
 | **自動加入語音頻道** | 可設定 Bot 自動加入指定語音頻道，並支援防踢靜音播放 |
-| **咕咕嘎嘎生成器** | 依主題生成「咕咕嘎嘎體」文章 |
+| **咕咕嘎嘎生成器** | 依主題生成「咕咕嘎嘎體」文章（已併入 `/ai gugu`） |
 | **Slash 指令** | 全指令皆以 Discord Slash Command（`/`）介面提供 |
 
 ---
 
 ## AI 對話模式
 
-Mousebot 支援 9 種 AI 角色扮演人格，可透過 `/ai mode` 依情境切換：
+Mousebot 支援 8 種 AI 角色扮演人格，可透過 `/ai mode` 依情境切換：
 
 | 模式鍵值 | 說明 |
 |---|---|
@@ -37,7 +38,6 @@ Mousebot 支援 9 種 AI 角色扮演人格，可透過 `/ai mode` 依情境切�
 | `mambaMentor` | 「牢大」風格導師模式 |
 | `mesugaki` | 嘴賤愛挑釁但被誇獎就破防的傲嬌雌小鬼人設 |
 | `mygo` | MyGO!!!!! 動畫相關風格模式 |
-| `china` | 滿嘴貼吧／B 站熱梗的抽象乐子人，主打阴阳怪气與发疯解构 |
 
 > `developer` 模式另可依 `DEVELOPER_MODE_USER_IDS` 限制可設定的使用者。
 > 模式設定持久化儲存於 `data/userModes.json`。
@@ -63,21 +63,19 @@ Mousebot 支援 9 種 AI 角色扮演人格，可透過 `/ai mode` 依情境切�
 git clone https://github.com/END5876/Mousebot.git
 cd Mousebot
 
-# 設定環境變數（見下方說明）
-cp .env.example .env
-# 編輯 .env 填入必要的 Token 與 API 金鑰
+# 建立 .env 檔案並填入必要的 Token 與 API 金鑰（見下方「環境變數設定」）
 
 # 建置並啟動容器
 docker build -t mousebot .
-docker run -d --env-file .env --name mousebot mousebot
+docker run -d --env-file .env -p 3000:3000 --name mousebot mousebot
 ```
 
-Docker image 以 `node:22-slim` 為基底，已透過 **supervisord** 同時管理 Node.js 主程式與 Python OWW 服務，並自動安裝 `edge-tts`、`yt-dlp` 等執行期工具，無需額外設定。
+Docker image 以 `node:22-slim` 為基底，已透過 **supervisord** 同時管理 Node.js 主程式（含分帳網頁介面）與 Python OWW 服務，並自動安裝 `edge-tts`、`yt-dlp` 等執行期工具，無需額外設定。容器對外開放 `3000` port 供分帳網頁介面使用（可用 `PORT` 或 `SPLITBILL_WEB_PORT` 調整）。
 
 ### 方法二：本機直接執行
 
 ```bash
-# 安裝 Node.js 依賴
+# 安裝 Node.js 依賴（含分帳網頁介面所需的 express）
 npm install
 
 # 建立 Python 虛擬環境並安裝 OWW 依賴
@@ -91,7 +89,7 @@ pip install edge-tts yt-dlp
 # 啟動 OWW 伺服器（另開終端機）
 python3 oww-server/server.py
 
-# 啟動 Discord Bot
+# 啟動 Discord Bot（就緒後會自動一併啟動分帳網頁介面）
 node index.js
 ```
 
@@ -107,6 +105,7 @@ DISCORD_TOKEN=your_discord_bot_token
 CLIENT_ID=your_discord_application_id
 
 # ── Google Gemini AI（必填） ────────────────────────────────────────
+# 同時供 /ai 對話與分帳系統的帳單照片辨識使用
 GEMINI_API_KEY=your_gemini_api_key
 
 # ── Groq 語音轉文字 STT（選填） ─────────────────────────────────────
@@ -179,6 +178,11 @@ BILIBILI_DEDEUSERID=
 YOUTUBE_PO_TOKEN=
 YOUTUBE_VISITOR_INFO=
 YOUTUBE_SESSION_ID=
+
+# ── 分帳網頁介面（Web UI，選填但強烈建議設定） ─────────────────────────
+SPLITBILL_API_KEY=                        # 保護網頁 API 的金鑰；不設定則任何連得到這個 port 的人都能讀寫帳本資料
+SPLITBILL_WEB_PORT=3000                   # 監聽埠號；PaaS
+# PORT=3000                               # 由 PaaS 平台自動注入，通常不需自行設定
 ```
 
 ---
@@ -197,8 +201,7 @@ Mousebot/
 │   │   │   ├── mygoMode.js           # mygo 人格
 │   │   │   ├── inmuMode.js           # inmu 人格
 │   │   │   ├── loverMode.js          # lover 人格
-│   │   │   ├── mesugakiMode.js       # mesugaki 人格
-│   │   │   └── chinaMode.js          # china 人格
+│   │   │   └── mesugakiMode.js       # mesugaki 人格
 │   │   ├── aiChance.js               # 隨機插話機率控制，持久化至 data/replyChance.json
 │   │   ├── aiCore.js                 # Gemini API 核心（gemini-3.1-flash-lite），MODE_MAP 映射
 │   │   ├── aiHandler.js              # /ai 指令主處理器（ask/clear/tts/mode/chance/gugu）
@@ -211,7 +214,13 @@ Mousebot/
 │   │   │   ├── index.js              # 對外進入點（彙整子模組，保持 API 介面一致）
 │   │   │   ├── state.js              # 共用狀態 Maps 與引擎注入（registerEngine）
 │   │   │   ├── playback.js           # 播放器生命週期、佇列播放、控制面板更新
-│   │   │   ├── search.js             # /play 核心、YouTube 搜尋、本地搜尋、Autocomplete
+│   │   │   ├── search/                # /play 核心、搜尋與播放清單匯入
+│   │   │   │   ├── index.js
+│   │   │   │   ├── onlineSearch.js    # YouTube / Bilibili 搜尋
+│   │   │   │   ├── local.js           # 本地音樂搜尋
+│   │   │   │   ├── playlist.js        # 播放清單匯入
+│   │   │   │   ├── autocomplete.js    # Slash Command Autocomplete
+│   │   │   │   └── urlUtils.js
 │   │   │   └── commands.js           # Slash Commands 註冊、控制面板按鈕互動、閒置監控指令
 │   │   ├── localMusicHandler.js      # 本地音樂引擎，支援 mp3/wav/ogg/flac/m4a/aac，播放次數統計
 │   │   ├── musicAntiBot.js           # YouTube/Bilibili 防爬蟲 Headers、Cookies、yt-dlp 參數
@@ -223,8 +232,17 @@ Mousebot/
 │   │   ├── sttConfig.js              # STT 環境變數、常數、Semaphore 並發控制、工具函式
 │   │   ├── sttHandler.js             # 喚醒詞偵測 → 錄音 → Groq Whisper → AI 回覆主流程
 │   │   ├── sttSession.js             # Guild/User 狀態管理、音訊訂閱（prism-media）、閒置清理
-│   │   ├── stttwakeupvoice.wav       # 喚醒成功音效
-│   │   └── ttsHandler.js             # GPT-SoVITS 主力 + Edge-TTS fallback，健康探測，LRU 快取
+│   │   ├── sttwakeupvoice.wav        # 喚醒成功音效
+│   │   └── ttsHandler/               # GPT-SoVITS 主力 + Edge-TTS fallback
+│   │       ├── index.js
+│   │       ├── sovitsClient.js       # SoVITS API 客戶端與健康探測
+│   │       ├── edgeTTS.js            # Edge-TTS fallback
+│   │       ├── generate.js           # 合成流程整合
+│   │       ├── queue.js              # 播放排隊系統
+│   │       ├── cache.js              # LRU 快取
+│   │       ├── models.js             # 多模型設定解析
+│   │       ├── textSplitter.js       # 長文分段
+│   │       └── commands.js           # /tts 指令
 │   ├── notice/
 │   │   ├── epicFreeHandler.js        # Epic 限免：官方 API（TW 區），取得及篩選當前免費遊戲
 │   │   ├── noticeHandler.js          # /notify 指令，30 分鐘輪詢，合併管理 Steam & Epic
@@ -236,22 +254,52 @@ Mousebot/
 │   │   │   ├── splitbill.js          # /splitbill 主控台面板（引導式操作）
 │   │   │   └── splitbillQuick.js     # /splitbill-quick 一行快速記帳指令
 │   │   ├── interactions/
-│   │   │   ├── expenseUI.js          # 記帳 UI（新增、編輯、刪除花費）
+│   │   │   ├── expenseUI/            # 記帳 UI（新增、編輯、刪除花費、帳單照片辨識）
+│   │   │   │   ├── index.js
+│   │   │   │   ├── billScan.js       # 帳單照片辨識（呼叫 utils/billScanner.js）
+│   │   │   │   ├── billScanFlow.js   # 辨識結果確認流程
+│   │   │   │   ├── buttonHandler.js
+│   │   │   │   ├── modalHandler.js
+│   │   │   │   ├── selectMenuHandler.js
+│   │   │   │   ├── expenseCompletion.js
+│   │   │   │   ├── ledger.js
+│   │   │   │   └── helpers.js
 │   │   │   ├── memberUI.js           # 成員 UI（新增、移除成員）
-│   │   │   ├── settleUI.js           # 結算 UI（計算債務、交叉抵銷）
-│   │   │   └── tripUI.js             # 行程 UI（建立、切換、封存行程，設定幣別與匯率）
+│   │   │   ├── settleUI.js           # 結算 UI（計算債務、交叉抵銷、預收訂金）
+│   │   │   ├── tripUI.js             # 行程 UI（建立、切換、封存行程，設定幣別與匯率）
+│   │   │   └── quickSplitUI.js       # ⚡ 快速分帳：不需建立行程、不落地寫入資料，算完即丟
 │   │   ├── utils/
-│   │   │   ├── calculator.js         # 金額計算：round2、toBase、equalSplit、fetchRealTimeRate
+│   │   │   ├── calculator.js         # 金額計算：round2、toBase、equalSplit、parseMoneyInput 等
+│   │   │   ├── settlement.js         # 貪心演算法：最少筆數交叉債務簡化
+│   │   │   ├── deposit.js            # 預收訂金：記錄、與實際花費互相抵銷
+│   │   │   ├── billScanner.js        # 帳單照片辨識（Gemini Vision，結構化 JSON 輸出）
+│   │   │   ├── rateLimiter.js        # 滑動視窗節流器，保護帳單辨識等外部 API 呼叫
 │   │   │   ├── parse.js              # parsePayerField、parseSplitField（解析代墊/分攤語法）
 │   │   │   ├── stateCache.js         # 跨面板操作狀態快取（TTL 15 分鐘，自動清除過期項目）
-│   │   │   ├── storage.js            # 資料持久化（data/splitbill.json），含 Trip/Guild 預設結構
+│   │   │   ├── storage.js            # 資料持久化（data/splitbill.json），含 Trip/Guild 預設結構、分享連結
 │   │   │   └── tripHelper.js         # resolveTrip、memberDisplay、ensureMembersExist
-│   │   └── index.js                  # setupSplitbillCommands，統一攔截 Button/Modal/SelectMenu
+│   │   └── index.js                  # setupSplitbillCommands，統一攔截 Button/Modal/SelectMenu，行程成員權限管控
 │   ├── audioManager.js               # 音頻優先級排程（SILENCE=0 < MUSIC=1 < TTS=2）
 │   ├── autoJoinHandler.js            # 自動加入目標語音頻道（10 秒輪詢），整合 voiceActivityMonitor
 │   ├── commandHandler.js             # /ping、/serverinfo、/say、/nh；「有什麼了不起」被動回應
 │   ├── responseHandler.js            # 自訂關鍵字自動回應（data/responses.json）
 │   └── voiceHandler.js               # /voice 指令群：join/leave/status/stt/silence/record-button
+├── webui/                            # 🆕 分帳系統網頁記帳介面（與 Bot 同一個 Node process 共用資料快取）
+│   ├── server.js                     # 組裝 Express app、掛載中介層與各 router、監聽埠號
+│   ├── lib/
+│   │   ├── auth.js                   # API Key 中介層、分享連結權限判斷（requireOwner、authorizeTripAccess）
+│   │   ├── fxRates.js                # 即時匯率查詢與快取
+│   │   ├── sse.js                    # SSE 訂閱表、換票機制、事件廣播
+│   │   ├── receiptScan.js            # 帳單照片辨識（Gemini），供網頁介面使用
+│   │   └── receiptSessions.js        # 帳單辨識多人協作認領進度（記憶體內，不落地）
+│   ├── routes/
+│   │   ├── trips.js                  # GET /api/guilds、GET/PUT /api/trip/:guildId/:tripId
+│   │   ├── shareLinks.js             # 分享連結建立／列出／修改／撤銷（僅擁有者）
+│   │   ├── sharedTrip.js             # 分享連結持有者的讀寫端點（憑 token，免額外登入）
+│   │   ├── sse.js                    # SSE 換票（/api/sse-ticket）與事件串流端點
+│   │   ├── utility.js                # 即時匯率、帳單照片辨識端點
+│   │   └── receiptSession.js         # 帳單辨識認領進度的讀取／更新／即時同步
+│   └── public/                       # 前端靜態頁面（index.html + css/js）
 ├── oww-server/
 │   ├── models/                       # OWW ONNX 模型檔案（需自行放置）
 │   ├── requirements.txt              # Python 依賴（見下方）
@@ -263,7 +311,7 @@ Mousebot/
 │   ├── music/
 │   │   └── cache/                    # 線上音樂下載快取
 │   ├── timeAnnouncer/                # 整點報時音效（需自備 24 個 .wav 檔）
-│   ├── splitbill.json                # 分帳資料（行程、成員、花費、訂金）
+│   ├── splitbill.json                # 分帳資料（行程、成員、花費、訂金、分享連結）
 │   ├── userModes.json                # 使用者 AI 人格模式設定
 │   ├── responses.json                # 自訂關鍵字回應規則
 │   ├── replyChance.json              # 各伺服器 AI 隨機插話機率
@@ -274,7 +322,7 @@ Mousebot/
 ├── temp/                             # STT 暫存 .wav 檔（已列入 .gitignore）
 ├── .gitignore
 ├── Dockerfile
-├── index.js                          # 主程式入口，初始化 Discord Client 並載入所有模組
+├── index.js                          # 主程式入口，初始化 Discord Client、載入所有模組並啟動分帳網頁介面
 └── package.json
 ```
 
@@ -300,7 +348,7 @@ Mousebot/
 
 | 指令 | 說明 |
 |---|---|
-| `/play <input> [shuffle]` | 播放 YouTube / Bilibili 網址、關鍵字搜尋，或本地音訊檔名；`shuffle` 可一次打亂加入全部本地音樂 |
+| `/play <input> [shuffle]` | 播放 YouTube / Bilibili 網址（含播放清單）、關鍵字搜尋，或本地音訊檔名；`shuffle` 可一次打亂加入全部本地音樂 |
 
 ### `/music` — 音樂控制
 
@@ -324,7 +372,7 @@ Mousebot/
 | `/ai clear` | 清除你與 AI 的對話記憶 |
 | `/ai tts` | 切換 AI 回覆是否自動朗讀 |
 | `/ai mode <target> <mode>` | 設定指定使用者的 AI 人格模式 |
-| `/ai chance set <chance>` | 設定本伺服器的 AI 隨機插話機率（0.0 ~ 1.0） |
+| `/ai chance set <chance>` | 設定本伺服器的 AI 隨機插話機率（0～100%） |
 | `/ai chance toggle` | 切換本頻道的 AI 隨機插話開關 |
 | `/ai gugu <topic>` | 依主題生成咕咕嘎嘎體文章 |
 
@@ -354,8 +402,10 @@ Mousebot/
 
 | 指令 | 說明 |
 |---|---|
-| `/splitbill` | 召喚分帳主控台面板（行程建立、成員管理、記帳、結算皆透過按鈕與選單操作） |
+| `/splitbill` | 召喚分帳主控台面板（行程建立、成員管理、記帳〔含帳單照片辨識〕、預收訂金、結算皆透過按鈕與選單操作；也可從面板取得網頁介面的分享連結） |
 | `/splitbill-quick` | 一行快速記帳，免開面板（支援單一/多人代墊、全體平分、部分成員分攤、自訂金額語法） |
+
+> 面板中還有「⚡ 快速分帳」按鈕：完全不綑綁任何行程、不寫入持久化資料，適合臨時一筆帳單快速算完即丟的情境。
 
 ### 其他指令
 
@@ -370,6 +420,21 @@ Mousebot/
 
 ---
 
+## 分帳網頁介面（Web UI）
+
+分帳系統除了 Discord 面板，還內建一個 Express 網頁伺服器（`webui/`），與 Bot **在同一個 Node process** 執行、共用同一份 `data/splitbill.json` 快取，讓網頁前端可以直接讀寫 Bot 正在使用的帳本資料，不用手動複製貼上 JSON。
+
+主要特色：
+
+- **即時同步**：透過 SSE（Server-Sent Events），任何一端（Discord 面板或網頁）寫入資料後，所有開著同一個行程頁面的使用者都會立即看到最新狀態。
+- **分享連結**：擁有者可為單一行程建立「唯讀」或「可編輯」的分享連結，可設定到期時間、隨時個別撤銷；連結持有者無需另外登入或設定金鑰，也看不到其他無關的行程。
+- **AI 帳單照片辨識**：上傳帳單/收據照片，由 Gemini 自動判讀項目名稱、金額與幣別並代入表單，減少手動輸入；多人同時認領辨識結果的進度會即時同步給協作者。
+- **即時匯率換算**：非本位幣的支出會依即時匯率自動換算，供分享連結持有者（唯讀或可編輯皆可）查看正確金額。
+
+啟動後預設監聽 `3000` port（可用 `SPLITBILL_WEB_PORT` 調整；PaaS 平台注入的 `PORT` 優先權更高），並強烈建議設定 `SPLITBILL_API_KEY`，否則任何能連到這個 port 的人都能讀寫帳本資料。
+
+---
+
 ## 技術架構
 
 ### 雙服務容器架構
@@ -380,8 +445,9 @@ Docker Container (node:22-slim)
 │     ├── 端點：/health、/detect、/pause、/resume、/reset
 │     ├── Session TTL 自動清除（預設 120 秒）
 │     └── Rate Limiting（預設每秒最多 10 次 /detect）
-└── [Node.js] Discord Bot         ← 延後啟動（priority=10，等待 OWW 就緒）
-      └── 透過 HTTP 與 OWW Server 通訊（OWW_HTTP_URL）
+└── [Node.js] Discord Bot + 分帳網頁介面   ← 延後啟動（priority=10，等待 OWW 就緒）
+      ├── 透過 HTTP 與 OWW Server 通訊（OWW_HTTP_URL）
+      └── Bot Ready 後於同一 process 啟動 Express 網頁伺服器（預設 port 3000）
 ```
 
 ### 音頻優先級排程
@@ -398,7 +464,7 @@ audioManager.js
 ```
 /tts say 或 AI 回覆自動朗讀
   ↓
-ttsHandler.js
+ttsHandler/generate.js
   ├── 檢查 LRU 快取（命中 → 直接播放）
   ├── 探測 SoVITS 健康狀態（每 30 秒一次，TCP 逾時 3 秒）
   ├── [健康] GPT-SoVITS HTTP API → 合成音訊
@@ -419,6 +485,15 @@ sttHandler.js → OWW Server /detect（HTTP）
   └── [喚醒] 播放提示音 → Groq Whisper STT → Gemini AI 回覆 → TTS 播放
 ```
 
+### 分帳網頁介面資料流
+
+```
+Discord 面板 ──┐
+               ├─→ handlers/splitbill/utils/storage.js（記憶體快取 + data/splitbill.json）
+webui/routes/* ┘         │
+                          └─→ 任一端寫入後 touchTrip() → webui/lib/sse.js 廣播 → 所有訂閱該行程的 SSE 連線即時更新
+```
+
 ### 主要技術依賴
 
 **Node.js 套件（package.json）**
@@ -428,8 +503,9 @@ sttHandler.js → OWW Server /detect（HTTP）
 | `discord.js` | ^14.25 | Discord API 主框架 |
 | `@discordjs/voice` | ^0.19 | 語音頻道串流管理 |
 | `@discordjs/opus` | ^0.10 | Opus 音訊編碼 |
-| `@google/generative-ai` | ^0.24 | Google Gemini AI API |
+| `@google/generative-ai` | ^0.24 | Google Gemini AI API（對話、帳單照片辨識） |
 | `groq-sdk` | ^1.1 | Groq Whisper 語音轉文字 |
+| `express` | ^4.22 | 分帳系統網頁記帳介面（webui/） |
 | `play-dl` | ^1.9 | YouTube / Bilibili 串流（備用） |
 | `ytdl-core` | ^4.11 | YouTube 下載（備用） |
 | `fluent-ffmpeg` | ^2.1 | 音訊格式轉換 |
@@ -467,6 +543,8 @@ sttHandler.js → OWW Server /detect（HTTP）
 - OWW 模型檔案（`.onnx`）需自行放置於 `oww-server/models/` 資料夾。
 - 整點報時功能需自行準備 24 個對應小時的 `.wav` 音效檔，放置於 `data/timeAnnouncer/` 資料夾。
 - GPT-SoVITS 為外部服務，需自行部署並透過 `SOVITS_HOST` / `SOVITS_PORT` 連線；未部署時 TTS 自動 fallback 為 Edge-TTS。
+- 分帳網頁介面預設未設定金鑰時**任何連得到該 port 的人都能讀寫帳本資料**，正式使用請務必設定 `SPLITBILL_API_KEY`，或僅在內網／VPN 環境開放。
+- 分享連結的安全性由高熵亂數 token（192 bits）與可個別撤銷／設定過期時間保證；請勿將可編輯權限的分享連結公開分享給不信任的對象。
 
 ---
 
