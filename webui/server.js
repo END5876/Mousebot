@@ -24,7 +24,7 @@
  *
  * 環境變數：
  *   SPLITBILL_API_KEY   （建議設定）保護 API 的簡單金鑰，前端要填相同的值
- *   PORT                部分 PaaS（如 Zeabur）會自動注入這個變數指定監聽埠，
+ *   PORT                部分 PaaS會自動注入這個變數指定監聽埠，
  *                       優先權高於 SPLITBILL_WEB_PORT
  *   SPLITBILL_WEB_PORT  監聽的埠號，沒有 PORT 時使用，預設 3000
  *   GEMINI_API_KEY      帳單照片辨識功能需要，見 lib/receiptScan.js

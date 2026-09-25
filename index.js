@@ -129,7 +129,7 @@ client.once('clientReady', async () => {
   await registerSlashCommands();
 
   // ── 啟動分帳系統的網頁記帳介面 ──────────────────────────
-  // 注意：Zeabur 等 PaaS 會用 $PORT 環境變數指定要監聽的埠，
+  // PaaS 會用 $PORT 環境變數指定要監聽的埠，
   // 所以 $PORT 優先權要在 SPLITBILL_WEB_PORT 之上。
   const webPort = process.env.PORT || process.env.SPLITBILL_WEB_PORT || 3000;
   try {
