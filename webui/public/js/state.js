@@ -56,11 +56,6 @@ function syncAdvDetailsState(){
 
 /* ===================== cover fields ===================== */
 document.getElementById('tripName').addEventListener('input', e=>{ trip.name = e.target.value; scheduleAutoSave(); });
-document.getElementById('baseCurrency').addEventListener('change', e=>{
-  trip.baseCurrency = e.target.value;
-  trip.rates[trip.baseCurrency] = 1;
-  renderAll();
-});
 document.addEventListener('DOMContentLoaded', ()=>{
   const details = document.getElementById('advFileDetails');
   if (details) details.addEventListener('toggle', ()=>{ details.dataset.userToggled = '1'; });

@@ -44,7 +44,6 @@ function applyShareModeUI(){
   // 這裡純粹是不要讓介面看起來「可以改」造成誤會）。
   if (shareMode.permission !== 'write'){
     document.getElementById('tripName').readOnly = true;
-    document.getElementById('baseCurrency').disabled = true;
   }
 }
 
@@ -121,16 +120,23 @@ async function initShareMode(token){
 
 // 把目前的連線設定（API 位址／金鑰／伺服器／行程）組成一個網址，
 // 存成瀏覽器書籤後，之後點一下就能自動帶入並直接載入該行程。
+// 🔒 [安全性修正] 金鑰改放進 URL 的 hash（# 之後）而不是 query string
+// （? 之後）：query string 會被送到伺服器、留在瀏覽器歷史紀錄裡、也可能
+// 被 Referrer 帶到第三方（例如頁面內建的 Google Fonts、即時匯率 API）。
+// hash 完全不會被送出去，跟 buildShareUrl() 對分享連結 token 的處理方式
+// 保持一致（見該函式註解）。
 function buildBookmarkUrl(){
   const apiKey = document.getElementById('apiKey').value.trim();
   const apiBaseVal = document.getElementById('apiBase').value.trim();
   const guildId = document.getElementById('guildSelect').value;
   const tripId = document.getElementById('tripSelect').value;
   const url = new URL(apiBaseVal || location.href);
-  url.hash = '';
-  if (apiKey) url.searchParams.set('apiKey', apiKey);
-  if (guildId) url.searchParams.set('guild', guildId);
-  if (tripId) url.searchParams.set('trip', tripId);
+  url.search = '';
+  const hashParams = new URLSearchParams();
+  if (apiKey) hashParams.set('apiKey', apiKey);
+  if (guildId) hashParams.set('guild', guildId);
+  if (tripId) hashParams.set('trip', tripId);
+  url.hash = hashParams.toString();
   return url.toString();
 }
 function copyBookmarkUrl(){
@@ -141,14 +147,20 @@ function copyBookmarkUrl(){
     .then(()=>toast('已複製書籤網址！存成瀏覽器書籤，之後點它就會自動連線並載入行程。（網址裡含金鑰，請只存在自己的書籤，不要公開分享）', 'success'))
     .catch(()=>toast('複製失敗，這是網址（請手動複製）：' + url, 'error'));
 }
-// 頁面載入時，若網址帶有 ?apiKey=...，自動帶入並連線、（若也帶 guild/trip）直接載入該行程
+// 頁面載入時，若網址帶有 #apiKey=...，自動帶入並連線、（若也帶 guild/trip）直接載入該行程。
+// 🔒 [安全性修正] 改讀 hash 而不是 query string（理由同 buildBookmarkUrl()），
+// 讀到後立刻用 history.replaceState() 清掉網址列的 hash，避免金鑰繼續留在
+// 網址列／瀏覽器歷史紀錄裡——做法跟 detectShareTokenFromUrl() 一致。
+// 兩者用的 hash 格式不同（這裡是 apiKey=...&guild=...，分享連結是
+// #share=<token>），不會互相誤判，bootstrap.js 既有的判斷順序不需要調整。
 async function applyUrlParams(){
-  const params = new URLSearchParams(location.search);
-  const key = params.get('apiKey');
-  const base = params.get('apiBase');
-  const guildId = params.get('guild');
-  const tripId = params.get('trip');
+  const hashParams = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+  const key = hashParams.get('apiKey');
+  const base = hashParams.get('apiBase');
+  const guildId = hashParams.get('guild');
+  const tripId = hashParams.get('trip');
   if (!key) return false;
+  history.replaceState(null, '', location.pathname + location.search);
   document.getElementById('apiKey').value = key;
   if (base) document.getElementById('apiBase').value = base;
   await refreshGuildList();
