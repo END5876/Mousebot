@@ -184,7 +184,7 @@ function renderAll(){
   // cover
   document.getElementById('tripName').value = trip.name;
   document.getElementById('tripId').value = trip.id;
-  document.getElementById('baseCurrency').innerHTML = currencyOptions(trip.baseCurrency);
+  document.getElementById('baseCurrencyLabel').textContent = trip.baseCurrency;
   document.getElementById('baseLabel').textContent = trip.baseCurrency;
 
   // members tab

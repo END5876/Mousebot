@@ -132,7 +132,8 @@
   .header-currency{
     background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.22);
     color:#F3EEDD; padding:6px 8px; border-radius:8px; font-size:12.5px;
-    font-family:'IBM Plex Mono',monospace; max-width:92px; flex-shrink:0;
+    font-family:'IBM Plex Mono',monospace; flex-shrink:0;
+    white-space:nowrap; display:inline-flex; align-items:center;
   }
   /* 🆕 這行原本只設定文字色，假設展開清單背景永遠是瀏覽器預設的淺色；
      現在全站 select option 統一補上背景色（見下方 select option 規則），
