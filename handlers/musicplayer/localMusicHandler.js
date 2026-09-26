@@ -16,18 +16,28 @@ const path = require('path');
 
 const { registerEngine, handleAutocomplete } = require('./unifiedQueue');
 const logger = require('../../utils/logger');
+const libraryClient = require('./musicLibraryClient');
 
 // ── 音樂資料夾路徑 ────────────────────────────────────────
+// 多 Bot 共用音樂庫模式下，這裡是「本地小快取磁碟」的路徑，不再是音樂庫
+// 本身——真正的音樂庫由 library-service/ 統一管理。沒有設定 MUSIC_LIB_URL
+// 時（例如單一 Bot 部署 / 本機開發），維持過去「這裡就是音樂庫本身」的行為。
 const MUSIC_DIR = path.join(__dirname, '..', '..', 'data', 'music');
 
 // ── 支援的音訊格式 ────────────────────────────────────────
 const SUPPORTED_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac'];
 
+// ── 共用音樂庫模式下，本地清單快取的刷新頻率 ──────────────
+const LIBRARY_LIST_REFRESH_MS = 20_000;
+
 // ════════════════════════════════════════════════════════
-//  播放次數持久化（用 filename 當 key，跨伺服器共用同一份統計）
+//  播放次數持久化（僅在「未設定共用音樂庫」時使用的 fallback）
 //  ── 每次本地曲目被實際播放時 +1，清單依此由高到低排序 ──
 //  ⚠️ 循環重播（單曲循環 / 列表循環繞圈）不計入，由呼叫端
 //     （unifiedQueue/playback.js）透過 countPlay 參數控制。
+//  ★ 設定了 MUSIC_LIB_URL 之後，播放次數改由 library-service 集中管理
+//    （見 libraryClient.incrementPlayCount()），這裡的 JSON 檔就不會再
+//    被寫入，避免多台 Bot 各自累積出不一致的次數。
 // ════════════════════════════════════════════════════════
 const PLAYCOUNT_PATH = path.join(__dirname, '..', '..', 'data', 'musicPlayCount.json');
 
@@ -122,7 +132,8 @@ function walkFiles(dir) {
   return out;
 }
 
-function getMusicFiles() {
+// 未設定共用音樂庫時的舊行為：直接掃描本地 data/music。
+function _getMusicFilesLocalWalk() {
   try {
     if (!fs.existsSync(MUSIC_DIR)) {
       console.warn('⚠️ data/music 資料夾不存在，嘗試建立...');
@@ -150,11 +161,10 @@ function getMusicFiles() {
           name: cleanLocalTitle(displayNameRaw),        // 給 UI 顯示的乾淨名稱
           filename,                                     // 真正辨識用（保留副檔名）
           filePath,                                     // 實體路徑
-          playCount: getPlayCount(filename),            // 🆕 播放次數，供排序 / 顯示使用
+          playCount: getPlayCount(filename),            // 播放次數，供排序 / 顯示使用
         };
       });
 
-    // 🆕 依播放次數由高到低排序；次數相同則依名稱排序，維持穩定、好預期的順序
     files.sort((a, b) => {
       if (b.playCount !== a.playCount) return b.playCount - a.playCount;
       return a.name.localeCompare(b.name, 'zh-Hant');
@@ -165,6 +175,50 @@ function getMusicFiles() {
     console.error('❌ 讀取 data/music 資料夾失敗:', err);
     return [];
   }
+}
+
+// ════════════════════════════════════════════════════════
+//  共用音樂庫模式：本地維護一份定期刷新的清單快取，讓
+//  getMusicFiles() 保持同步呼叫介面（autocomplete 等呼叫端
+//  不用改成 async），實際內容則來自 library-service 的 /list。
+// ════════════════════════════════════════════════════════
+let _libraryListCache = [];
+let _libraryListRefreshTimer = null;
+let _libraryListRefreshInFlight = null;
+
+function _libraryFileToLocalEntry(f) {
+  const parts = f.filename.split('/');
+  return {
+    name: f.name,
+    filename: f.filename,
+    filePath: path.join(MUSIC_DIR, ...parts), // 本地鏡像路徑，播放時若不存在會即時向共用音樂庫下載
+    playCount: f.playCount,
+  };
+}
+
+async function _refreshLibraryList() {
+  if (!libraryClient.isConfigured()) return;
+  if (_libraryListRefreshInFlight) return _libraryListRefreshInFlight;
+
+  _libraryListRefreshInFlight = libraryClient.fetchList()
+    .then((files) => {
+      _libraryListCache = files;
+    })
+    .catch((err) => {
+      logger.warn('LocalMusic', `向共用音樂庫取得清單失敗，暫時沿用舊清單：${err.message}`);
+    })
+    .finally(() => {
+      _libraryListRefreshInFlight = null;
+    });
+
+  return _libraryListRefreshInFlight;
+}
+
+function getMusicFiles() {
+  if (!libraryClient.isConfigured()) {
+    return _getMusicFilesLocalWalk();
+  }
+  return _libraryListCache.map(_libraryFileToLocalEntry);
 }
 
 function getFileSize(filePath) {
@@ -192,12 +246,27 @@ function getTrackInfo(filename) {
 
 // ════════════════════════════════════════════════════════
 //  playStream（由 unifiedQueue 呼叫）
+//  ★ 共用音樂庫模式：本地沒有這個檔案時（例如這台 Bot 剛啟動、
+//    本地快取還是空的，或是曲目是別台 Bot 下載的），先向
+//    library-service 下載一份到本地小快取磁碟，再播放。
+//    playback.js 呼叫這裡時本來就有 await，所以改成 async 不影響呼叫端。
 // ════════════════════════════════════════════════════════
-function playStream(guildId, item, player, { silent = false, countPlay = true } = {}) {
+async function playStream(guildId, item, player, { silent = false, countPlay = true } = {}) {
   if (!fs.existsSync(item.filePath)) {
-    console.error(`❌ [LocalMusic] 找不到檔案: ${item.filePath}`);
-    player.emit('error', new Error(`找不到檔案: ${item.filename}`));
-    return;
+    if (libraryClient.isConfigured()) {
+      try {
+        if (!silent) console.log(`⬇️ [LocalMusic] 本地無此檔案，向共用音樂庫下載: ${item.filename}`);
+        await libraryClient.downloadToFile(item.filename, item.filePath);
+      } catch (err) {
+        console.error(`❌ [LocalMusic] 向共用音樂庫下載失敗: ${item.filename} (${err.message})`);
+        player.emit('error', new Error(`找不到檔案: ${item.filename}`));
+        return;
+      }
+    } else {
+      console.error(`❌ [LocalMusic] 找不到檔案: ${item.filePath}`);
+      player.emit('error', new Error(`找不到檔案: ${item.filename}`));
+      return;
+    }
   }
 
   const resource = createAudioResource(item.filePath, {
@@ -206,9 +275,21 @@ function playStream(guildId, item, player, { silent = false, countPlay = true } 
   });
   player.play(resource);
 
-  // 🆕 只有「真正輪到的新播放」才計入次數；單曲/列表循環的重複播放（由呼叫端
-  //    透過 countPlay: false 標記）不計，避免開著循環放整晚把次數洗爆
-  if (item.filename && countPlay) incrementPlayCount(item.filename);
+  // 只有「真正輪到的新播放」才計入次數；單曲/列表循環的重複播放（由呼叫端
+  // 透過 countPlay: false 標記）不計，避免開著循環放整晚把次數洗爆
+  if (item.filename && countPlay) {
+    if (libraryClient.isConfigured()) {
+      libraryClient.incrementPlayCount(item.filename).catch((err) => {
+        logger.warn('LocalMusic', `播放次數同步至共用音樂庫失敗（不影響播放）：${err.message}`);
+      });
+      // 樂觀更新本地清單快取，讓 /music local list 不用等下一輪 20 秒刷新
+      // 就能看到最新次數；下一輪刷新會用 library-service 的權威數字覆蓋回來。
+      const cached = _libraryListCache.find(f => f.filename === item.filename);
+      if (cached) cached.playCount += 1;
+    } else {
+      incrementPlayCount(item.filename);
+    }
+  }
 
   if (!silent) {
     console.log(`🎵 [LocalMusic] 播放: ${item.title} (${guildId})`);
@@ -255,6 +336,17 @@ function setupLocalMusicEngine(client) {
     getTrackInfo,
     getMusicFiles,
   });
+
+  if (libraryClient.isConfigured()) {
+    // 立即抓一次（不 await，避免拖慢啟動流程；剛開機的極短時間內
+    // getMusicFiles() 可能還是空陣列，屬於可接受的暫時性狀態），
+    // 之後每 20 秒背景刷新一次。
+    _refreshLibraryList();
+    _libraryListRefreshTimer = setInterval(_refreshLibraryList, LIBRARY_LIST_REFRESH_MS);
+    logger.debug('LocalMusic', `已啟用共用音樂庫模式（${process.env.MUSIC_LIB_URL}），本地清單每 ${LIBRARY_LIST_REFRESH_MS / 1000} 秒刷新一次`);
+  } else {
+    logger.debug('LocalMusic', '未設定 MUSIC_LIB_URL，使用原本的本地磁碟音樂庫模式');
+  }
 
   // ── Autocomplete ──────────────────────────────────────
   client.on('interactionCreate', async interaction => {
