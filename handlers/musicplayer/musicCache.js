@@ -6,6 +6,7 @@ const { spawn } = require('child_process');
 const fs   = require('fs');
 const path = require('path');
 const logger = require('../../utils/logger');
+const libraryClient = require('./musicLibraryClient');
 
 const ytdlpPath = 'yt-dlp';
 
@@ -49,12 +50,51 @@ function getCacheFilename(url, title) {
 
 // ════════════════════════════════════════════════════════
 //  檢查快取是否存在，回傳路徑或 null
+//  ★ 多 Bot 共用音樂庫模式：本地沒有時，會先問共用音樂庫服務
+//    （見 musicLibraryClient.js）有沒有其他 Bot 已經下載＋正規化過
+//    同一首歌，有的話直接下載下來當本地快取用，不用重新跑一次 yt-dlp。
+//    沒有設定 MUSIC_LIB_URL 時，行為跟過去完全一樣（純本地判斷）。
 // ════════════════════════════════════════════════════════
-function getCachedPath(url, title) {
+async function getCachedPath(url, title) {
   ensureCacheDir();
   const filename = getCacheFilename(url, title);
   const filePath = path.join(CACHE_DIR, filename);
-  return fs.existsSync(filePath) ? filePath : null;
+
+  if (fs.existsSync(filePath)) return filePath;
+
+  if (libraryClient.isConfigured()) {
+    try {
+      const remoteRelPath = `cache/${filename}`;
+      const info = await libraryClient.checkExists(remoteRelPath);
+      if (info && info.exists) {
+        evictCacheIfNeeded();
+        await libraryClient.downloadToFile(remoteRelPath, filePath);
+        logger.debug('Cache', `已從共用音樂庫下載快取: ${filename}`);
+        return filePath;
+      }
+    } catch (err) {
+      logger.warn('Cache', `查詢／下載共用音樂庫失敗，視為快取未命中：${err.message}`);
+    }
+  }
+
+  return null;
+}
+
+// ════════════════════════════════════════════════════════
+//  把本地已經下載＋正規化完成的快取檔，推播給共用音樂庫服務，
+//  讓其他 Bot 不用重新下載一次同一首歌。
+//  失敗只記警告、不拋出——上傳失敗不該影響本地播放。
+// ════════════════════════════════════════════════════════
+async function pushToSharedLibrary(filePath, filename) {
+  if (!libraryClient.isConfigured()) return false;
+  try {
+    await libraryClient.uploadFile(`cache/${filename}`, filePath);
+    logger.debug('Cache', `已上傳至共用音樂庫: ${filename}`);
+    return true;
+  } catch (err) {
+    logger.warn('Cache', `上傳共用音樂庫失敗（不影響本地播放）：${err.message}`);
+    return false;
+  }
 }
 
 // ════════════════════════════════════════════════════════
@@ -161,4 +201,5 @@ module.exports = {
   getCachedPath,
   evictCacheIfNeeded,
   downloadAndCache,
+  pushToSharedLibrary,
 };

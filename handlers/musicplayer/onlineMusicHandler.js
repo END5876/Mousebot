@@ -339,7 +339,7 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
   const tooLongToCache = !item.durationSec || item.durationSec > MAX_CACHE_DURATION_SEC;
 
   try {
-    const cachedPath = cache.getCachedPath(item.url, item.title);
+    const cachedPath = await cache.getCachedPath(item.url, item.title);
 
     if (cachedPath) {
       if (!silent) console.log(`✅ [Cache] 快取命中，直接播放: ${path.basename(cachedPath)}`);
@@ -393,6 +393,12 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
             })
             .catch((err) => {
               if (!silent) console.warn(`⚠️ [Normalizer] 正規化失敗（略過，原檔仍可正常播放）: ${err.message}`);
+            })
+            .finally(() => {
+              // 不論正規化成功與否，都把目前這份檔案同步上傳到共用音樂庫，
+              // 讓其他 Bot 也能直接取用，不必重新下載一次。
+              // 未設定 MUSIC_LIB_URL 時 pushToSharedLibrary() 會直接是 no-op。
+              cache.pushToSharedLibrary(filePath, path.basename(filePath));
             });
         })
         .catch((err) => {
