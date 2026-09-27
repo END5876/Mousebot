@@ -31,13 +31,14 @@ const SUPPORTED_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac'];
 const LIBRARY_LIST_REFRESH_MS = 20_000;
 
 // ════════════════════════════════════════════════════════
-//  播放次數持久化（僅在「未設定共用音樂庫」時使用的 fallback）
+//  播放次數持久化（每台 Bot 各自獨立計算、各自的 musicPlayCount.json）
 //  ── 每次本地曲目被實際播放時 +1，清單依此由高到低排序 ──
 //  ⚠️ 循環重播（單曲循環 / 列表循環繞圈）不計入，由呼叫端
 //     （unifiedQueue/playback.js）透過 countPlay 參數控制。
-//  ★ 設定了 MUSIC_LIB_URL 之後，播放次數改由 library-service 集中管理
-//    （見 libraryClient.incrementPlayCount()），這裡的 JSON 檔就不會再
-//    被寫入，避免多台 Bot 各自累積出不一致的次數。
+//  ★ 共用音樂庫模式下，清單本身（filename / name / size）來自
+//    library-service，但播放次數刻意不集中管理：每台 Bot 只計算
+//    自己實際播放過的次數，以這台 Bot 自己的 musicPlayCount.json
+//    為準，不受其他 Bot 播放行為影響，排序結果每台 Bot 也會不同。
 // ════════════════════════════════════════════════════════
 const PLAYCOUNT_PATH = path.join(__dirname, '..', '..', 'data', 'musicPlayCount.json');
 
@@ -180,7 +181,10 @@ function _getMusicFilesLocalWalk() {
 // ════════════════════════════════════════════════════════
 //  共用音樂庫模式：本地維護一份定期刷新的清單快取，讓
 //  getMusicFiles() 保持同步呼叫介面（autocomplete 等呼叫端
-//  不用改成 async），實際內容則來自 library-service 的 /list。
+//  不用改成 async），內容（filename / name / size）來自
+//  library-service 的 /list，但播放次數一律用這台 Bot 自己
+//  的 getPlayCount()，不採用遠端數字（library-service 也不
+//  提供播放次數，見 musicLibraryClient.js / library-service）。
 // ════════════════════════════════════════════════════════
 let _libraryListCache = [];
 let _libraryListRefreshTimer = null;
@@ -192,7 +196,7 @@ function _libraryFileToLocalEntry(f) {
     name: f.name,
     filename: f.filename,
     filePath: path.join(MUSIC_DIR, ...parts), // 本地鏡像路徑，播放時若不存在會即時向共用音樂庫下載
-    playCount: f.playCount,
+    playCount: getPlayCount(f.filename),      // 這台 Bot 自己的播放次數，不是遠端的
   };
 }
 
@@ -218,7 +222,18 @@ function getMusicFiles() {
   if (!libraryClient.isConfigured()) {
     return _getMusicFilesLocalWalk();
   }
-  return _libraryListCache.map(_libraryFileToLocalEntry);
+
+  const files = _libraryListCache.map(_libraryFileToLocalEntry);
+
+  // 播放次數是這台 Bot 自己的，遠端清單的順序不能直接沿用，
+  // 一律在這裡依（自己的）播放次數重新排序，跟 _getMusicFilesLocalWalk()
+  // 的排序規則保持一致。
+  files.sort((a, b) => {
+    if (b.playCount !== a.playCount) return b.playCount - a.playCount;
+    return a.name.localeCompare(b.name, 'zh-Hant');
+  });
+
+  return files;
 }
 
 function getFileSize(filePath) {
@@ -277,18 +292,11 @@ async function playStream(guildId, item, player, { silent = false, countPlay = t
 
   // 只有「真正輪到的新播放」才計入次數；單曲/列表循環的重複播放（由呼叫端
   // 透過 countPlay: false 標記）不計，避免開著循環放整晚把次數洗爆
+  // 播放次數一律記在這台 Bot 自己的 musicPlayCount.json，不論是否設定
+  // 了共用音樂庫，都不會跟其他 Bot 共用或同步——每台 Bot 的清單排序
+  // 因此會反映「這台 Bot 自己」被播放的次數。
   if (item.filename && countPlay) {
-    if (libraryClient.isConfigured()) {
-      libraryClient.incrementPlayCount(item.filename).catch((err) => {
-        logger.warn('LocalMusic', `播放次數同步至共用音樂庫失敗（不影響播放）：${err.message}`);
-      });
-      // 樂觀更新本地清單快取，讓 /music local list 不用等下一輪 20 秒刷新
-      // 就能看到最新次數；下一輪刷新會用 library-service 的權威數字覆蓋回來。
-      const cached = _libraryListCache.find(f => f.filename === item.filename);
-      if (cached) cached.playCount += 1;
-    } else {
-      incrementPlayCount(item.filename);
-    }
+    incrementPlayCount(item.filename);
   }
 
   if (!silent) {
