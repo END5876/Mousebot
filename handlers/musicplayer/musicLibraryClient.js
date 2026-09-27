@@ -112,17 +112,13 @@ async function uploadFile(relPath, localFilePath) {
 }
 
 // ════════════════════════════════════════════════════════
-//  播放次數（集中式）
+//  播放次數
+//  ★ 刻意不集中管理：每台 Bot 只計算自己實際播放過的次數，各自
+//    存在自己的 data/musicPlayCount.json，不透過 Library Service
+//    同步或共用。因此這個 client 不提供播放次數相關的方法，播放
+//    次數完全是 localMusicHandler.js 自己的 incrementPlayCount() /
+//    getPlayCount() 在處理。
 // ════════════════════════════════════════════════════════
-async function incrementPlayCount(relPath) {
-  if (!isConfigured()) return null;
-  const { data } = await axios.post(`${LIB_URL}/api/music/playcount/increment`, null, {
-    headers: _headers(),
-    timeout: REQUEST_TIMEOUT_MS,
-    params: { filename: relPath },
-  });
-  return data?.playCount ?? null;
-}
 
 if (isConfigured()) {
   logger.debug('MusicLibraryClient', `共用音樂庫服務位址: ${LIB_URL}`);
@@ -134,5 +130,4 @@ module.exports = {
   checkExists,
   downloadToFile,
   uploadFile,
-  incrementPlayCount,
 };
