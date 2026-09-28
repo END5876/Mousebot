@@ -10,8 +10,8 @@ const settleUI = require('./interactions/settleUI');
 const tripUI = require('./interactions/tripUI');
 const quickSplitUI = require('./interactions/quickSplitUI');
 const { StateCache } = require('./utils/stateCache');
-const storage = require('./utils/storage');
-const { resolveTrip, isTripMember } = require('./utils/tripHelper');
+const splitbillClient = require('./utils/splitbillClient');
+const { isTripMember } = require('./utils/tripHelper');
 
 // ────────────────────────────────────────────────────────────────
 // 🔒 行程操作權限管控：行程一旦建立，只有「行程內的成員」才能對該行程
@@ -51,13 +51,12 @@ function isTripScopedCustomId(customId) {
  * (trip_select_switch) 是唯一的例外：它操作的是使用者選單裡選中的目標行程，
  * 而不是目前作用中的行程，所以要單獨處理。
  */
-function resolveTargetTrip(interaction) {
+async function resolveTargetTrip(interaction) {
   const { customId, guildId, user } = interaction;
 
   if (customId === 'trip_select_switch') {
-    const guild = storage.getGuild(guildId);
     const targetTripId = interaction.values && interaction.values[0];
-    return targetTripId ? guild.trips[targetTripId] || null : null;
+    return targetTripId ? splitbillClient.resolveTripById(guildId, targetTripId) : null;
   }
 
   // 🔒 [修正：race condition] 若這個互動的 customId 帶有「::<tripId>」鎖定後綴
@@ -67,13 +66,13 @@ function resolveTargetTrip(interaction) {
   // 這裡驗證到的就會是錯的行程。
   if (customId.includes('::')) {
     const pinnedTripId = customId.split('::')[1];
-    const guild = storage.getGuild(guildId);
-    return guild.trips[pinnedTripId] || null;
+    return splitbillClient.resolveTripById(guildId, pinnedTripId);
   }
 
   // 🔒 [修正：切換行程影響全體] 一般情況下改以「發起互動的使用者」自己的作用
   // 行程來源，每個人彼此獨立，不再共用同一個全伺服器指標。
-  const { trip } = resolveTrip(guildId, null, user.id);
+  // 🌐 [service 拆分] 行程資料來自獨立部署的 splitbill-service，這裡改打 API。
+  const { trip } = await splitbillClient.resolveTrip(guildId, null, user.id);
   return trip;
 }
 
@@ -85,7 +84,7 @@ async function enforceTripPermission(interaction) {
   const { customId, user } = interaction;
   if (!isTripScopedCustomId(customId)) return true;
 
-  const targetTrip = resolveTargetTrip(interaction);
+  const targetTrip = await resolveTargetTrip(interaction);
   // 找不到行程（例如行程已被刪除、或尚未建立）時，交給原本的 handler 處理對應的錯誤訊息，
   // 這裡不重複攔截，避免蓋掉更精準的錯誤提示。
   if (!targetTrip) return true;
@@ -137,7 +136,11 @@ function setupSplitbillCommands(client) {
     }
   });
 
-  bootSummary.report('分帳系統 (/splitbill, /splitbill-quick)', 'ok', '多行程/多幣別記帳與結算，支援面板與快速指令兩種操作方式');
+  if (splitbillClient.isConfigured()) {
+    bootSummary.report('分帳系統 (/splitbill, /splitbill-quick)', 'ok', '資料來自獨立的 splitbill-service（SPLITBILL_SERVICE_URL）');
+  } else {
+    bootSummary.report('分帳系統 (/splitbill, /splitbill-quick)', 'off', '未設定 SPLITBILL_SERVICE_URL，分帳指令將無法使用');
+  }
 }
 
 /**

@@ -1,14 +1,14 @@
 'use strict';
 
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, UserSelectMenuBuilder, StringSelectMenuBuilder, MessageFlags } = require('discord.js');
-const storage = require('../utils/storage');
-const { resolveTrip, wouldLeaveTripNonEmpty } = require('../utils/tripHelper');
+const splitbillClient = require('../utils/splitbillClient');
+const { wouldLeaveTripNonEmpty } = require('../utils/tripHelper');
 const { showMainMenu } = require('../commands/splitbill');
 
 module.exports = {
   async handleButton(interaction) {
     const { customId, guildId, user } = interaction;
-    const { trip } = resolveTrip(guildId, null, user.id);
+    const { trip } = await splitbillClient.resolveTrip(guildId, null, user.id);
     
     if (customId === 'nav_main') return showMainMenu(interaction);
 
@@ -80,7 +80,7 @@ module.exports = {
 
   async handleSelectMenu(interaction) {
     const { customId, guildId, values, user } = interaction;
-    const { trip } = resolveTrip(guildId, null, user.id);
+    const { trip } = await splitbillClient.resolveTrip(guildId, null, user.id);
 
     if (customId === 'mem_select_add') {
       let addedCount = 0;
@@ -93,8 +93,7 @@ module.exports = {
         }
       }
       if (addedCount > 0) {
-        storage.touchTrip(trip);
-        storage.persist();
+        await splitbillClient.saveTrip(guildId, trip.id, trip);
       }
       return showMainMenu(interaction, `✅ 成功將 ${addedCount} 位成員新增至行程「${trip.name}」！`);
     }
@@ -129,9 +128,8 @@ module.exports = {
         e.participants.some(pt => targetUserIds.includes(pt.userId))
       );
 
-      storage.touchTrip(trip);
-      storage.persist();
-      
+      await splitbillClient.saveTrip(guildId, trip.id, trip);
+
       // 將所有被移除的成員 ID 轉為 Discord 提及格式
       const removedMentions = targetUserIds.map(id => `<@${id}>`).join(', ');
       let resContent = `🗑️ 已移出 ${removedCount} 位成員：${removedMentions}。`;

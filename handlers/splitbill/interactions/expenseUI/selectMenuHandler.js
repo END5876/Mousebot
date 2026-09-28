@@ -4,7 +4,8 @@ const {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, MessageFlags
 } = require('discord.js');
-const { resolveTrip, resolveTripById, memberDisplay } = require('../../utils/tripHelper');
+const { memberDisplay } = require('../../utils/tripHelper');
+const splitbillClient = require('../../utils/splitbillClient');
 const { formatAmountConversion, formatParticipantsList } = require('./helpers');
 const { parseScanItemSuffix, scanItemCacheUserId, buildScanResultView, SCAN_CURRENCY_CUSTOM_VALUE } = require('./billScan');
 const { renderSplitMethodUI, completeExpenseLogging } = require('./expenseCompletion');
@@ -12,7 +13,7 @@ const { renderSplitMethodUI, completeExpenseLogging } = require('./expenseComple
 async function handleSelectMenu(interaction, cache) {
     const { customId, guildId, values, user } = interaction;
     // 🔒 [修正：切換行程影響全體] 用發起互動的使用者自己的作用行程
-    const { trip } = resolveTrip(guildId, null, user.id);
+    const { trip } = await splitbillClient.resolveTrip(guildId, null, user.id);
 
     if (customId.startsWith('exp_select_scan_currency')) {
       const { batchId, index } = parseScanItemSuffix(customId, 'exp_select_scan_currency');
@@ -196,7 +197,7 @@ async function handleSelectMenu(interaction, cache) {
 
       // 🔒 [修正：race condition] 最終寫入時，優先使用流程一開始鎖定的 tripId，
       // 而不是這次互動當下重新查到的作用行程——避免中途漂移到別的行程。
-      const pinnedTrip = resolveTripById(guildId, state.tripId) || trip;
+      const pinnedTrip = (await splitbillClient.resolveTripById(guildId, state.tripId)) || trip;
       return completeExpenseLogging(interaction, pinnedTrip, state, participantIds, cache);
     }
 
