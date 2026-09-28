@@ -1,8 +1,8 @@
 'use strict';
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
-const storage = require('../utils/storage');
-const { resolveTrip, memberDisplay, ensureMembersExist, isTripMember } = require('../utils/tripHelper');
+const splitbillClient = require('../utils/splitbillClient');
+const { memberDisplay, ensureMembersExist, isTripMember } = require('../utils/tripHelper');
 const { equalSplit, fetchRealTimeRate, round2 } = require('../utils/calculator');
 const { parsePayerField, parseSplitField } = require('../utils/parse');
 
@@ -34,7 +34,7 @@ module.exports = {
   async execute(interaction) {
     const { guildId, user } = interaction;
     // 🔒 [修正：切換行程影響全體] 用發起指令的使用者自己的作用行程
-    const { trip, error } = resolveTrip(guildId, null, user.id);
+    const { trip, error } = await splitbillClient.resolveTrip(guildId, null, user.id);
 
     if (!trip) {
       return interaction.reply({
@@ -123,7 +123,7 @@ module.exports = {
       const amountInBase = round2(amount * exchangeRate);
 
       const newExpense = {
-        id: storage.genId('exp'),
+        id: splitbillClient.genId('exp'),
         description,
         amount,
         currency,
@@ -137,8 +137,7 @@ module.exports = {
       };
 
       trip.expenses.push(newExpense);
-      storage.touchTrip(trip);
-      storage.persist();
+      await splitbillClient.saveTrip(guildId, trip.id, trip);
 
       const payerText = payers.map(p => `${memberDisplay(trip, p.userId)}(${p.amount})`).join('、');
       const participantText = newExpense.participants.map(s => `${memberDisplay(trip, s.userId)}(${s.amount})`).join('、');

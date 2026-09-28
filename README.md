@@ -14,7 +14,7 @@
 | **線上音樂播放** | 支援 YouTube / Bilibili 串流播放、搜尋與播放清單匯入，含循環模式、佇列管理、隨機連播、響度正規化、閒置自動停止 |
 | **本地音樂播放** | 播放 `data/music` 內的音訊檔案（mp3/wav/ogg/flac/m4a/aac），附播放次數統計與排序 |
 | **分帳系統（Splitbill）** | 多行程、多幣別記帳與結算，支援面板／快速指令／**免建行程的⚡快速分帳**三種操作方式，內建預收訂金抵銷與交叉債務簡化演算法，**並附一個獨立的網頁記帳介面** |
-| **分帳網頁介面（Web UI）** | 與 Bot 共用同一份資料，支援**即時同步（SSE）**、**可設定唯讀／可編輯權限與到期時間的分享連結**、**AI 帳單照片辨識自動記帳（含多人協作認領進度同步）**、即時匯率換算 |
+| **分帳網頁介面（Web UI）** | 已拆成獨立部署的 **splitbill-service**（Bot 透過內部網路呼叫它讀寫資料），支援**即時同步（SSE）**、**可設定唯讀／可編輯權限與到期時間的分享連結**、**AI 帳單照片辨識自動記帳（含多人協作認領進度同步）**、即時匯率換算 |
 | **遊戲限免通知** | 每 30 分鐘輪詢並推播 Steam / Epic Games 限時免費遊戲資訊 |
 | **整點報時** | 整點播放對應的語音音效（24 小時制，需自備 .wav 音效檔） |
 | **自訂回應** | 針對特定訊息（完全匹配或包含關鍵字）自動回應，支援多則回覆隨機挑選 |
@@ -67,15 +67,15 @@ cd Mousebot
 
 # 建置並啟動容器
 docker build -t mousebot .
-docker run -d --env-file .env -p 3000:3000 --name mousebot mousebot
+docker run -d --env-file .env --name mousebot mousebot
 ```
 
-Docker image 以 `node:22-slim` 為基底，已透過 **supervisord** 同時管理 Node.js 主程式（含分帳網頁介面）與 Python OWW 服務，並自動安裝 `edge-tts`、`yt-dlp` 等執行期工具，無需額外設定。容器對外開放 `3000` port 供分帳網頁介面使用（可用 `PORT` 或 `SPLITBILL_WEB_PORT` 調整）。
+Docker image 以 `node:22-slim` 為基底，已透過 **supervisord** 同時管理 Node.js 主程式與 Python OWW 服務，並自動安裝 `edge-tts`、`yt-dlp` 等執行期工具，無需額外設定。分帳網頁介面已獨立成另一個專案與服務（splitbill-service），此容器不再對外開放網頁 port。
 
 ### 方法二：本機直接執行
 
 ```bash
-# 安裝 Node.js 依賴（含分帳網頁介面所需的 express）
+# 安裝 Node.js 依賴
 npm install
 
 # 建立 Python 虛擬環境並安裝 OWW 依賴
@@ -89,7 +89,7 @@ pip install edge-tts yt-dlp
 # 啟動 OWW 伺服器（另開終端機）
 python3 oww-server/server.py
 
-# 啟動 Discord Bot（就緒後會自動一併啟動分帳網頁介面）
+# 啟動 Discord Bot
 node index.js
 ```
 
@@ -179,10 +179,9 @@ YOUTUBE_PO_TOKEN=
 YOUTUBE_VISITOR_INFO=
 YOUTUBE_SESSION_ID=
 
-# ── 分帳網頁介面（Web UI，選填但強烈建議設定） ─────────────────────────
-SPLITBILL_API_KEY=                        # 保護網頁 API 的金鑰；不設定則任何連得到這個 port 的人都能讀寫帳本資料
-SPLITBILL_WEB_PORT=3000                   # 監聽埠號；PaaS
-# PORT=3000                               # 由 PaaS 平台自動注入，通常不需自行設定
+# ── 分帳系統（連到獨立部署的 splitbill-service，必填才能使用 /splitbill） ─────────
+SPLITBILL_SERVICE_URL=                    # 例如 http://<service-name>.zeabur.internal:3000（Zeabur 內部網路位址）
+SPLITBILL_SERVICE_KEY=                    # 與 splitbill-service 的 SPLITBILL_API_KEY 相同的共用金鑰
 ```
 
 ---
@@ -284,7 +283,6 @@ Mousebot/
 │   ├── commandHandler.js             # /ping、/serverinfo、/say、/nh；「有什麼了不起」被動回應
 │   ├── responseHandler.js            # 自訂關鍵字自動回應（data/responses.json）
 │   └── voiceHandler.js               # /voice 指令群：join/leave/status/stt/silence/record-button
-├── webui/                            # 🆕 分帳系統網頁記帳介面（與 Bot 同一個 Node process 共用資料快取）
 │   ├── server.js                     # 組裝 Express app、掛載中介層與各 router、監聽埠號
 │   ├── lib/
 │   │   ├── auth.js                   # API Key 中介層、分享連結權限判斷（requireOwner、authorizeTripAccess）
@@ -322,7 +320,7 @@ Mousebot/
 ├── temp/                             # STT 暫存 .wav 檔（已列入 .gitignore）
 ├── .gitignore
 ├── Dockerfile
-├── index.js                          # 主程式入口，初始化 Discord Client、載入所有模組並啟動分帳網頁介面
+├── index.js                          # 主程式入口，初始化 Discord Client、載入所有模組
 └── package.json
 ```
 
@@ -422,16 +420,9 @@ Mousebot/
 
 ## 分帳網頁介面（Web UI）
 
-分帳系統除了 Discord 面板，還內建一個 Express 網頁伺服器（`webui/`），與 Bot **在同一個 Node process** 執行、共用同一份 `data/splitbill.json` 快取，讓網頁前端可以直接讀寫 Bot 正在使用的帳本資料，不用手動複製貼上 JSON。
+分帳系統的網頁記帳介面、REST API、SSE 即時同步與帳本資料，已拆分成**獨立的專案與服務（splitbill-service）**，獨立部署、獨立維護。Bot 這邊只保留 Discord 面板／指令的呈現層，透過 Zeabur 內部網路（`SPLITBILL_SERVICE_URL`）呼叫 service 讀寫帳本（`handlers/splitbill/utils/splitbillClient.js`）。網頁版是主要使用入口，Discord 面板為輔助。
 
-主要特色：
-
-- **即時同步**：透過 SSE（Server-Sent Events），任何一端（Discord 面板或網頁）寫入資料後，所有開著同一個行程頁面的使用者都會立即看到最新狀態。
-- **分享連結**：擁有者可為單一行程建立「唯讀」或「可編輯」的分享連結，可設定到期時間、隨時個別撤銷；連結持有者無需另外登入或設定金鑰，也看不到其他無關的行程。
-- **AI 帳單照片辨識**：上傳帳單/收據照片，由 Gemini 自動判讀項目名稱、金額與幣別並代入表單，減少手動輸入；多人同時認領辨識結果的進度會即時同步給協作者。
-- **即時匯率換算**：非本位幣的支出會依即時匯率自動換算，供分享連結持有者（唯讀或可編輯皆可）查看正確金額。
-
-啟動後預設監聽 `3000` port（可用 `SPLITBILL_WEB_PORT` 調整；PaaS 平台注入的 `PORT` 優先權更高），並強烈建議設定 `SPLITBILL_API_KEY`，否則任何能連到這個 port 的人都能讀寫帳本資料。
+網頁版的功能（即時同步、分享連結、AI 帳單辨識、即時匯率換算等）說明請見 splitbill-service 專案。Bot 寫入時沿用與網頁版相同的樂觀鎖機制（`expectedUpdatedAt` + 409 版本衝突處理），且因為兩邊寫入的是同一個 service，Bot 端的變更同樣會即時推播到已開啟的網頁分頁。
 
 ---
 
@@ -445,9 +436,8 @@ Docker Container (node:22-slim)
 │     ├── 端點：/health、/detect、/pause、/resume、/reset
 │     ├── Session TTL 自動清除（預設 120 秒）
 │     └── Rate Limiting（預設每秒最多 10 次 /detect）
-└── [Node.js] Discord Bot + 分帳網頁介面   ← 延後啟動（priority=10，等待 OWW 就緒）
+└── [Node.js] Discord Bot   ← 延後啟動（priority=10，等待 OWW 就緒）
       ├── 透過 HTTP 與 OWW Server 通訊（OWW_HTTP_URL）
-      └── Bot Ready 後於同一 process 啟動 Express 網頁伺服器（預設 port 3000）
 ```
 
 ### 音頻優先級排程
@@ -485,13 +475,13 @@ sttHandler.js → OWW Server /detect（HTTP）
   └── [喚醒] 播放提示音 → Groq Whisper STT → Gemini AI 回覆 → TTS 播放
 ```
 
-### 分帳網頁介面資料流
+### 分帳資料流
 
 ```
-Discord 面板 ──┐
-               ├─→ handlers/splitbill/utils/storage.js（記憶體快取 + data/splitbill.json）
-webui/routes/* ┘         │
-                          └─→ 任一端寫入後 touchTrip() → webui/lib/sse.js 廣播 → 所有訂閱該行程的 SSE 連線即時更新
+Discord 面板 ──→ splitbillClient.js ──(內部網路 HTTP)──┐
+                                                       ├─→ splitbill-service（資料：JSON 檔）
+網頁前端 ─────────────────────────────────────────────┘         │
+                                                                └─→ 任一端寫入後 SSE 廣播 → 所有訂閱該行程的網頁分頁即時更新
 ```
 
 ### 主要技術依賴
@@ -505,7 +495,6 @@ webui/routes/* ┘         │
 | `@discordjs/opus` | ^0.10 | Opus 音訊編碼 |
 | `@google/generative-ai` | ^0.24 | Google Gemini AI API（對話、帳單照片辨識） |
 | `groq-sdk` | ^1.1 | Groq Whisper 語音轉文字 |
-| `express` | ^4.22 | 分帳系統網頁記帳介面（webui/） |
 | `play-dl` | ^1.9 | YouTube / Bilibili 串流（備用） |
 | `ytdl-core` | ^4.11 | YouTube 下載（備用） |
 | `fluent-ffmpeg` | ^2.1 | 音訊格式轉換 |
@@ -543,8 +532,7 @@ webui/routes/* ┘         │
 - OWW 模型檔案（`.onnx`）需自行放置於 `oww-server/models/` 資料夾。
 - 整點報時功能需自行準備 24 個對應小時的 `.wav` 音效檔，放置於 `data/timeAnnouncer/` 資料夾。
 - GPT-SoVITS 為外部服務，需自行部署並透過 `SOVITS_HOST` / `SOVITS_PORT` 連線；未部署時 TTS 自動 fallback 為 Edge-TTS。
-- 分帳網頁介面預設未設定金鑰時**任何連得到該 port 的人都能讀寫帳本資料**，正式使用請務必設定 `SPLITBILL_API_KEY`，或僅在內網／VPN 環境開放。
-- 分享連結的安全性由高熵亂數 token（192 bits）與可個別撤銷／設定過期時間保證；請勿將可編輯權限的分享連結公開分享給不信任的對象。
+- 分帳資料存放在獨立的 splitbill-service；Bot 未設定 `SPLITBILL_SERVICE_URL`／`SPLITBILL_SERVICE_KEY` 時，分帳面板與指令會無法使用（快速分帳 `⚡` 不受影響，因為它不存取行程資料）。
 
 ---
 

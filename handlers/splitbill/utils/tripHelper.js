@@ -1,78 +1,9 @@
 'use strict';
 
-const storage = require('./storage');
-
-/**
- * 依名稱（可省略）取得行程物件；若未指定名稱，改用「該使用者」自己的作用中行程。
- *
- * 🔒 [修正：切換行程影響全體 / race condition]
- * 舊版永遠讀取 guild.activeTripId（全伺服器共用一個指標），A 操作到一半時 B 切換
- * 行程，會讓 A 後續的動作套用到 B 選的行程上。現在每個使用者有自己的
- * activeTripByUser 指標，彼此獨立，只有在使用者「從未選過」時才退回伺服器預設行程。
- *
- * @param {string} guildId
- * @param {string|null|undefined} tripName 明確指定行程名稱/ID 時優先使用（現有語意不變）
- * @param {string|null|undefined} userId 發起操作的使用者 ID，用來查詢其個人作用行程
- * @returns {{ guild: object, trip: object|null, error: string|null }}
- */
-function resolveTrip(guildId, tripName, userId) {
-  const guild = storage.getGuild(guildId);
-
-  if (tripName) {
-    const found = Object.values(guild.trips).find(
-      (t) => t.name === tripName || t.id === tripName
-    );
-    if (!found) {
-      return { guild, trip: null, error: `找不到名為「${tripName}」的行程` };
-    }
-    return { guild, trip: found, error: null };
-  }
-
-  const personalTripId = userId ? guild.activeTripByUser[userId] : null;
-  if (personalTripId && guild.trips[personalTripId]) {
-    return { guild, trip: guild.trips[personalTripId], error: null };
-  }
-
-  // 使用者尚未自己選過行程 → 退回伺服器預設行程（例如剛建立的第一個行程）
-  if (!guild.defaultTripId || !guild.trips[guild.defaultTripId]) {
-    return {
-      guild,
-      trip: null,
-      error: '尚未指定行程。請先到「🧳 行程設定」建立或選擇你要使用的行程。',
-    };
-  }
-  return { guild, trip: guild.trips[guild.defaultTripId], error: null };
-}
-
-/**
- * 依 ID 直接取得行程（不做個人化/預設值回退），用於多步驟流程中途要「鎖定」
- * 使用開始當下那個行程、避免使用者中途切換自己的作用行程造成資料寫錯地方。
- * @returns {object|null}
- */
-function resolveTripById(guildId, tripId) {
-  if (!tripId) return null;
-  const guild = storage.getGuild(guildId);
-  return guild.trips[tripId] || null;
-}
-
-/**
- * 設定某使用者自己的作用中行程（僅影響該使用者，不影響其他人）。
- */
-function setUserActiveTrip(guildId, userId, tripId) {
-  const guild = storage.getGuild(guildId);
-  guild.activeTripByUser[userId] = tripId;
-  return guild;
-}
-
-function listTripChoices(guildId, query = '') {
-  const guild = storage.getGuild(guildId);
-  const q = query.toLowerCase();
-  return Object.values(guild.trips)
-    .filter((t) => !t.archived)
-    .filter((t) => t.name.toLowerCase().includes(q))
-    .slice(0, 25)
-    .map((t) => ({ name: t.name, value: t.name }));
-}
+// 🌐 [service 拆分] 行程資料的讀取／寫入（resolveTrip、resolveTripById、
+// setUserActiveTrip、listTripChoices）已搬到 ./splitbillClient.js，透過 API
+// 呼叫獨立部署的 splitbill-service。這個檔案只保留「拿到 trip 物件之後」的
+// 純函式判斷，不碰任何 I/O。
 
 function memberDisplay(trip, userId) {
   const m = trip.members.find((x) => x.id === userId);
@@ -110,10 +41,6 @@ function ensureMembersExist(trip, userIds) {
 }
 
 module.exports = {
-  resolveTrip,
-  resolveTripById,
-  setUserActiveTrip,
-  listTripChoices,
   memberDisplay,
   ensureMembersExist,
   isTripMember,

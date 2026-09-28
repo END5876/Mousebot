@@ -17,9 +17,6 @@ const { setupTimeAnnouncer }     = require('./handlers/notice/timeAnnouncer');
 // ── 導入分帳系統 ────────────────────────
 const { setupSplitbillCommands } = require('./handlers/splitbill/index');
 
-// ── 分帳系統的網頁記帳介面（與 Bot 同一個 process 共用資料快取）──
-const { startWebApi } = require('./webui/server');
-
 // ── 重構後的音樂模組 ───────────────────────────────────────
 const { setupUnifiedCommands }   = require('./handlers/musicplayer/unifiedQueue');
 const { setupOnlineMusicEngine } = require('./handlers/musicplayer/onlineMusicHandler');
@@ -127,18 +124,6 @@ client.once('clientReady', async () => {
   });
 
   await registerSlashCommands();
-
-  // ── 啟動分帳系統的網頁記帳介面 ──────────────────────────
-  // PaaS 會用 $PORT 環境變數指定要監聽的埠，
-  // 所以 $PORT 優先權要在 SPLITBILL_WEB_PORT 之上。
-  const webPort = process.env.PORT || process.env.SPLITBILL_WEB_PORT || 3000;
-  try {
-    startWebApi({ port: webPort });
-    bootSummary.report('分帳網頁介面 (webui)', 'ok', `監聽埠 ${webPort}`);
-  } catch (err) {
-    bootSummary.report('分帳網頁介面 (webui)', 'off', `啟動失敗: ${err.message}`);
-    console.error('❌ 分帳網頁介面啟動失敗:', err);
-  }
 
   // ── 所有模組都已回報狀態，統一印出開機摘要 ────────────
   bootSummary.print();
