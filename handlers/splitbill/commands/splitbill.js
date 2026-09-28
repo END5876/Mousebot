@@ -25,7 +25,7 @@ module.exports = {
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
       .setTitle('🧮 Splitbill 分帳主控面板')
-      .setDescription('歡迎使用分帳系統！您可以完全透過下方按鈕與選單搞定所有行程與記帳。')
+      .setDescription('歡迎使用分帳系統！您可以透過下方按鈕與選單搞定所有行程與記帳。')
       .setTimestamp();
 
     if (trip) {
@@ -48,7 +48,7 @@ module.exports = {
       // 剩下的「累計帳目」與「總花費」合併成一個滿版（非 inline）欄位，改用換行分開兩項資訊，
       // 避免手機寬度不夠時，長金額文字把整列擠爆或截斷。
       embed.addFields(
-        { name: '🧳 你的作用行程', value: `**${trip.name}**`, inline: true },
+        { name: '🧳 目前行程', value: `**${trip.name}**`, inline: true },
         { name: '🪙 基準幣別', value: `\`${trip.baseCurrency}\``, inline: true },
         { name: '👥 行程人數', value: `\`${trip.members.length} 人\``, inline: true },
         {
