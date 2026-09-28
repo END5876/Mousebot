@@ -4,8 +4,7 @@ const {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, 
   ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, MessageFlags 
 } = require('discord.js');
-const storage = require('../utils/storage');
-const { resolveTrip, resolveTripById, setUserActiveTrip } = require('../utils/tripHelper');
+const splitbillClient = require('../utils/splitbillClient');
 const { fetchRealTimeRate, parseMoneyInput } = require('../utils/calculator');
 const { showMainMenu } = require('../commands/splitbill');
 
@@ -19,10 +18,9 @@ const BASELINE_RATES = {
  */
 async function renderTripNav(interaction, alertMsg = null) {
   const guildId = interaction.guildId;
-  const guild = storage.getGuild(guildId);
   // 🔒 [修正：切換行程影響全體] 這裡一律代入 interaction.user.id，
   // 讓畫面顯示的「目前作用行程」永遠是「這個使用者自己的」，不受其他人切換影響。
-  const { trip } = resolveTrip(guildId, null, interaction.user.id);
+  const { guild, trip } = await splitbillClient.resolveTrip(guildId, null, interaction.user.id);
   const activeName = trip ? `**${trip.name}**` : '無';
   const trips = Object.values(guild.trips).filter(t => !t.archived);
 
@@ -73,8 +71,7 @@ async function renderTripNav(interaction, alertMsg = null) {
 module.exports = {
   async handleButton(interaction) {
     const { customId, guildId, user } = interaction;
-    const guild = storage.getGuild(guildId);
-    
+
     if (customId === 'nav_main') return showMainMenu(interaction);
 
     if (customId === 'trip_nav') {
@@ -92,7 +89,7 @@ module.exports = {
 
     // 🪙 新增幣別：讓行程支援 BASELINE_RATES 預設清單以外的幣別（例如 VND、SGD）
     if (customId === 'trip_btn_add_currency') {
-      const { trip } = resolveTrip(guildId, null, user.id);
+      const { trip } = await splitbillClient.resolveTrip(guildId, null, user.id);
       if (!trip) return interaction.reply({ content: '⚠️ 請先建立或選擇一個行程。', flags: MessageFlags.Ephemeral });
 
       // 🔒 [修正：race condition] 把「開啟這個 Modal 當下」鎖定的行程 ID 直接寫進
@@ -118,7 +115,7 @@ module.exports = {
     }
 
     if (customId === 'trip_btn_delete_ui') {
-      const { trip } = resolveTrip(guildId, null, user.id);
+      const { trip } = await splitbillClient.resolveTrip(guildId, null, user.id);
       const embed = new EmbedBuilder()
         .setColor(0xd35400)
         .setTitle(`⚠️ 警告：確定要刪除行程「${trip.name}」？`)
@@ -133,22 +130,12 @@ module.exports = {
     }
 
     if (customId === 'trip_btn_delete_confirm') {
-      const { trip } = resolveTrip(guildId, null, user.id);
+      const { trip } = await splitbillClient.resolveTrip(guildId, null, user.id);
 
-      if (guild.defaultTripId === trip.id) guild.defaultTripId = null;
-      // 🔒 [修正：切換行程影響全體 - 收尾] 行程被刪除後，順手清掉所有指向它的
-      // 個人指標，避免資料檔留下指向不存在行程的殘影（resolveTrip 本身雖已對此
-      // 做防呆，但清乾淨比較不容易日後踩到）。
-      for (const uid of Object.keys(guild.activeTripByUser)) {
-        if (guild.activeTripByUser[uid] === trip.id) delete guild.activeTripByUser[uid];
-      }
-      delete guild.trips[trip.id];
-      storage.persist();
-      // 🆕 [即時同步] 通知所有正在開著這個行程的 webui 分頁：行程已被刪除，
-      // 讓它們主動關閉連線、提醒使用者，而不是繼續對著一個已經不存在的
-      // 行程操作（例如按下「儲存回 Bot」會因為 tripId 找不到而被當成
-      // 建立新行程，見 webui/server.js 的 PUT /api/trip/:guildId/:tripId）。
-      storage.tripEvents.emit('trip-deleted', trip.id);
+      // 🌐 [service 拆分] 清 defaultTripId／activeTripByUser 殘影、廣播
+      // trip-deleted SSE 事件，全部收斂進 splitbill-service 的
+      // DELETE /api/trip/:guildId/:tripId 端點內部處理，這裡不需要再自己做。
+      await splitbillClient.deleteTrip(guildId, trip.id);
 
       return showMainMenu(interaction, `✅ 已徹底銷毀行程 \`${trip.name}\` 及其所有檔案。`);
     }
@@ -157,7 +144,6 @@ module.exports = {
   async handleModal(interaction) {
     if (interaction.customId === 'trip_modal_create') {
       const guildId = interaction.guildId;
-      const guild = storage.getGuild(guildId);
 
       const name = interaction.fields.getTextInputValue('name').trim();
       const baseCur = (interaction.fields.getTextInputValue('baseCur') || 'TWD').toUpperCase();
@@ -171,25 +157,23 @@ module.exports = {
       }
 
       const newTripId = `trip_${Date.now().toString(36)}`;
-      // 💡 統一透過 storage.repairTrip() 補齊預設欄位，避免手動兜物件漏掉
-      // DEFAULT_TRIP 未來新增的欄位（例如先前就漏過 deposits）
-      const newTrip = storage.repairTrip({
+      // 🌐 [service 拆分] 預設欄位（expenses/deposits/shareLinks/archived/
+      // createdAt...）交給 splitbill-service 的 PUT 端點內部
+      // storage.repairTrip() 補齊，這裡只送這個行程真正「有意義」的欄位。
+      // 「若伺服器還沒有預設行程就把這筆設為預設」也一併搬到同一個 PUT
+      // 端點的建立分支裡處理，理由相同：那裡才拿得到 guild 的最新狀態。
+      const newTrip = {
         id: newTripId,
         name,
         baseCurrency: baseCur,
         rates: autoRates,
         members: [{ id: interaction.user.id, name: interaction.user.globalName || interaction.user.username }],
-      });
+      };
 
-      guild.trips[newTripId] = newTrip;
+      await splitbillClient.saveTrip(guildId, newTripId, newTrip);
       // 🔒 [修正：切換行程影響全體] 新行程只切換「建立者自己」的作用行程，
       // 不會動到伺服器裡其他人正在使用的行程。
-      setUserActiveTrip(guildId, interaction.user.id, newTripId);
-      // 如果伺服器還沒有預設行程（例如這是第一個被建立的行程），順便設成預設值，
-      // 讓之後「從未選過行程」的新使用者有個合理的起點，而不是直接報錯。
-      if (!guild.defaultTripId) guild.defaultTripId = newTripId;
-      storage.touchTrip(newTrip);
-      storage.persist();
+      await splitbillClient.setUserActiveTrip(guildId, interaction.user.id, newTripId);
 
       return showMainMenu(interaction, `🎉 成功創立新行程！\n**名稱**：${name}\n**本位幣別**：${baseCur}\n已自動帶入常用多國匯率，並切換為你的作用行程！`);
     }
@@ -203,8 +187,8 @@ module.exports = {
       // 確保這筆幣別一定寫進「使用者當初按下按鈕時」看到的那個行程。
       const [, pinnedTripId] = interaction.customId.split('::');
       const trip = pinnedTripId
-        ? resolveTripById(guildId, pinnedTripId)
-        : resolveTrip(guildId, null, interaction.user.id).trip;
+        ? await splitbillClient.resolveTripById(guildId, pinnedTripId)
+        : (await splitbillClient.resolveTrip(guildId, null, interaction.user.id)).trip;
 
       if (!trip) {
         return interaction.reply({ content: '⚠️ 找不到行程（可能已被刪除），請重新操作。', flags: MessageFlags.Ephemeral });
@@ -244,8 +228,7 @@ module.exports = {
       }
 
       trip.rates[currency] = rate;
-      storage.touchTrip(trip);
-      storage.persist();
+      await splitbillClient.saveTrip(guildId, trip.id, trip);
 
       return renderTripNav(interaction, `✅ 已新增幣別 \`${currency}\`！匯率：1 ${currency} = ${rate} ${trip.baseCurrency}（${rateSource}），現在記帳/收訂金時就能選用這個幣別了。`);
     }
@@ -254,17 +237,16 @@ module.exports = {
   async handleSelectMenu(interaction) {
     if (interaction.customId === 'trip_select_switch') {
       const guildId = interaction.guildId;
-      const guild = storage.getGuild(guildId);
+      const { trips } = await splitbillClient.getGuild(guildId);
       const selectedTripId = interaction.values[0];
 
-      if (!guild.trips[selectedTripId]) return interaction.reply({ content: '⚠️ 選擇的行程不存在。', flags: MessageFlags.Ephemeral });
+      if (!trips[selectedTripId]) return interaction.reply({ content: '⚠️ 選擇的行程不存在。', flags: MessageFlags.Ephemeral });
 
       // 🔒 [修正：切換行程影響全體] 只設定「這個使用者自己」的作用行程指標，
       // 伺服器裡其他人的畫面與正在進行中的操作完全不受影響。
-      setUserActiveTrip(guildId, interaction.user.id, selectedTripId);
-      storage.persist();
+      await splitbillClient.setUserActiveTrip(guildId, interaction.user.id, selectedTripId);
 
-      return showMainMenu(interaction, `🔄 已將你自己的作用行程切換至：**${guild.trips[selectedTripId].name}**\n*(僅影響你自己，其他成員看到的行程不會被改變)*`);
+      return showMainMenu(interaction, `🔄 已將你自己的作用行程切換至：**${trips[selectedTripId].name}**\n*(僅影響你自己，其他成員看到的行程不會被改變)*`);
     }
   }
 };

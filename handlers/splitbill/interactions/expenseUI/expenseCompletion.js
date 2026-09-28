@@ -3,7 +3,7 @@
 const {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags
 } = require('discord.js');
-const storage = require('../../utils/storage');
+const splitbillClient = require('../../utils/splitbillClient');
 const { equalSplit } = require('../../utils/calculator');
 const { showMainMenu } = require('../../commands/splitbill');
 const { formatAmountConversion } = require('./helpers');
@@ -53,8 +53,7 @@ async function completeExpenseLogging(interaction, trip, state, participantIds, 
     };
 
     trip.expenses.push(newExpense);
-    storage.touchTrip(trip);
-    storage.persist();
+    await splitbillClient.saveTrip(interaction.guildId, trip.id, trip);
     cache.delete(interaction.guildId, interaction.user.id);
 
     const payerText = newExpense.payers.map(p => `<@${p.userId}>`).join(', ');
@@ -91,8 +90,7 @@ async function completeExpenseLogging(interaction, trip, state, participantIds, 
       };
 
       trip.expenses.push(newExpense);
-      storage.touchTrip(trip);
-      storage.persist();
+      await splitbillClient.saveTrip(interaction.guildId, trip.id, trip);
       cache.delete(interaction.guildId, interaction.user.id);
 
       const payerText = newExpense.payers.map(p => `<@${p.userId}>`).join(', ');

@@ -4,8 +4,7 @@ const {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, MessageFlags
 } = require('discord.js');
-const storage = require('../../utils/storage');
-const { resolveTrip, resolveTripById } = require('../../utils/tripHelper');
+const splitbillClient = require('../../utils/splitbillClient');
 const { validateCustomSplit, fetchRealTimeRate, round2, parseMoneyInput } = require('../../utils/calculator');
 const { addDeposit } = require('../../utils/deposit');
 const { showMainMenu } = require('../../commands/splitbill');
@@ -16,7 +15,7 @@ async function handleModal(interaction, cache) {
     if (interaction.customId.startsWith('exp_modal_scan_custom_currency')) {
       const { guildId, user } = interaction;
       // 🔒 [修正：切換行程影響全體] 改用發起者自己的作用行程
-      const { trip } = resolveTrip(guildId, null, user.id);
+      const { trip } = await splitbillClient.resolveTrip(guildId, null, user.id);
       const { batchId, index } = parseScanItemSuffix(interaction.customId, 'exp_modal_scan_custom_currency');
       const itemCacheUserId = scanItemCacheUserId(user.id, batchId, index);
       const state = cache.get(guildId, itemCacheUserId);
@@ -63,8 +62,7 @@ async function handleModal(interaction, cache) {
         }
 
         trip.rates[currency] = rate;
-        storage.touchTrip(trip);
-        storage.persist();
+        await splitbillClient.saveTrip(guildId, trip.id, trip);
         rateNote = `（已新增為此行程幣別，匯率 1 ${currency} = ${rate} ${trip.baseCurrency}，${rateSource}）`;
       }
 
@@ -88,7 +86,7 @@ async function handleModal(interaction, cache) {
       // 而不是重新查詢「現在」的作用行程，避免這幾步操作期間使用者切換了
       // 自己的作用行程，導致訂金被寫入錯誤的行程。找不到（例如行程已被刪除）
       // 就直接中止，不寫入任何資料。
-      const trip = resolveTripById(guildId, state.tripId);
+      const trip = await splitbillClient.resolveTripById(guildId, state.tripId);
       if (!trip) {
         cache.delete(guildId, user.id);
         return interaction.reply({ content: '⚠️ 找不到原本的行程（可能已被刪除），操作已取消，請重新開始。', flags: MessageFlags.Ephemeral });
@@ -126,8 +124,7 @@ async function handleModal(interaction, cache) {
           totalAmount += amount;
         }
         
-        storage.touchTrip(trip);
-        storage.persist();
+        await splitbillClient.saveTrip(guildId, trip.id, trip);
         cache.delete(guildId, user.id);
 
         const payerMentions = depositsAdded.map(d => `<@${d.payerId}>(${d.amount})`).join('、');
@@ -148,8 +145,8 @@ async function handleModal(interaction, cache) {
       // 現在的作用行程；沒有鎖定資訊時（理論上不會發生）才退回舊行為。
       const [rawId, pinnedTripId] = interaction.customId.split('::');
       const trip = pinnedTripId
-        ? resolveTripById(guildId, pinnedTripId)
-        : resolveTrip(guildId, null, user.id).trip;
+        ? await splitbillClient.resolveTripById(guildId, pinnedTripId)
+        : (await splitbillClient.resolveTrip(guildId, null, user.id)).trip;
 
       if (!trip) {
         return interaction.reply({ content: '⚠️ 找不到行程（可能已被刪除），請重新操作一次。', flags: MessageFlags.Ephemeral });
@@ -266,7 +263,7 @@ async function handleModal(interaction, cache) {
 
       // 🔒 [修正：race condition] 沿用「新增花費」流程一開始鎖定的 tripId，
       // 而不是重新查一次現在的作用行程，最終寫入時就不會跑到別的行程去。
-      const trip = resolveTripById(guildId, state.tripId);
+      const trip = await splitbillClient.resolveTripById(guildId, state.tripId);
       if (!trip) {
         cache.delete(guildId, user.id);
         return showMainMenu(interaction, '⚠️ **記帳已取消**：找不到原本的行程（可能已被刪除）。');

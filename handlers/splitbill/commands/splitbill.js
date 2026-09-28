@@ -1,7 +1,7 @@
 'use strict';
 
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const { resolveTrip } = require('../utils/tripHelper');
+const splitbillClient = require('../utils/splitbillClient');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -20,7 +20,7 @@ module.exports = {
   async showMainMenu(interaction, alertMsg = null) {
     const guildId = interaction.guildId;
     // 🔒 [修正：切換行程影響全體] 抓取「這個使用者自己」的作用行程，而非全伺服器共用一個
-    const { trip } = resolveTrip(guildId, null, interaction.user.id);
+    const { trip } = await splitbillClient.resolveTrip(guildId, null, interaction.user.id);
 
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)

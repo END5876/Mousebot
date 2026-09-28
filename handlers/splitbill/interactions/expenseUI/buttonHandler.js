@@ -4,8 +4,8 @@ const {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, MessageFlags
 } = require('discord.js');
-const storage = require('../../utils/storage');
-const { resolveTrip, resolveTripById, memberDisplay } = require('../../utils/tripHelper');
+const splitbillClient = require('../../utils/splitbillClient');
+const { memberDisplay } = require('../../utils/tripHelper');
 const { showMainMenu } = require('../../commands/splitbill');
 const { parseLedgerSuffix } = require('./helpers');
 const { stopActiveBillScan, parseScanItemSuffix, scanItemCacheUserId } = require('./billScan');
@@ -16,7 +16,8 @@ const { completeExpenseLogging } = require('./expenseCompletion');
 async function handleButton(interaction, cache) {
     const { customId, guildId, user } = interaction;
     // 🔒 [修正：切換行程影響全體] 用發起互動的使用者自己的作用行程
-    const { trip } = resolveTrip(guildId, null, user.id);
+    // 🌐 [service 拆分] 行程資料現在來自獨立部署的 splitbill-service，這裡改打 API。
+    const { trip } = await splitbillClient.resolveTrip(guildId, null, user.id);
 
     // 除了「開始掃描」本身（它會在 startBillScan 內部自行處理舊 collector 的替換）之外，
     // 只要使用者點了任何其他按鈕，就視為離開了帳單掃描等待畫面，
@@ -188,8 +189,7 @@ async function handleButton(interaction, cache) {
           return renderLedgerPage(interaction, trip, page, '⚠️ 找不到此花費帳目，可能已被其他人刪除。', source);
         }
         const deleted = trip.expenses.splice(idx, 1)[0];
-        storage.touchTrip(trip);
-        storage.persist();
+        await splitbillClient.saveTrip(guildId, trip.id, trip);
         return renderLedgerPage(interaction, trip, page, `🗑️ 已成功刪除花費：**${deleted.description}** (${deleted.amount} ${deleted.currency})`, source);
       } else if (type === 'deposit') {
         const idx = trip.deposits.findIndex(d => d.id === realId);
@@ -197,8 +197,7 @@ async function handleButton(interaction, cache) {
           return renderLedgerPage(interaction, trip, page, '⚠️ 找不到此訂金紀錄，可能已被其他人刪除。', source);
         }
         const deleted = trip.deposits.splice(idx, 1)[0];
-        storage.touchTrip(trip);
-        storage.persist();
+        await splitbillClient.saveTrip(guildId, trip.id, trip);
         return renderLedgerPage(interaction, trip, page, `🗑️ 已成功刪除訂金紀錄：**${memberDisplay(trip, deleted.payerId)} 預付給 ${memberDisplay(trip, deleted.collectorId)}** (${deleted.amount} ${deleted.currency})`, source);
       }
     }
@@ -219,7 +218,7 @@ async function handleButton(interaction, cache) {
       if (!state) return interaction.reply({ content: '⚠️ 狀態過期，請重新操作。', flags: MessageFlags.Ephemeral });
       const allMemberIds = trip.members.map(m => m.id);
       // 🔒 [修正：race condition] 優先用流程一開始鎖定的 tripId 寫入，避免中途漂移
-      const pinnedTrip = resolveTripById(guildId, state.tripId) || trip;
+      const pinnedTrip = (await splitbillClient.resolveTripById(guildId, state.tripId)) || trip;
       return completeExpenseLogging(interaction, pinnedTrip, state, allMemberIds, cache);
     }
 
