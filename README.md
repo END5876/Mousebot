@@ -180,7 +180,7 @@ YOUTUBE_VISITOR_INFO=
 YOUTUBE_SESSION_ID=
 
 # ── 分帳系統（連到獨立部署的 splitbill-service，必填才能使用 /splitbill） ─────────
-SPLITBILL_SERVICE_URL=                    # 例如 http://<service-name>.zeabur.internal:3000（Zeabur 內部網路位址）
+SPLITBILL_SERVICE_URL=                    # 例如 http://<service-name>.internal:3000（內部網路位址）
 SPLITBILL_SERVICE_KEY=                    # 與 splitbill-service 的 SPLITBILL_API_KEY 相同的共用金鑰
 ```
 
@@ -420,7 +420,7 @@ Mousebot/
 
 ## 分帳網頁介面（Web UI）
 
-分帳系統的網頁記帳介面、REST API、SSE 即時同步與帳本資料，已拆分成**獨立的專案與服務（splitbill-service）**，獨立部署、獨立維護。Bot 這邊只保留 Discord 面板／指令的呈現層，透過 Zeabur 內部網路（`SPLITBILL_SERVICE_URL`）呼叫 service 讀寫帳本（`handlers/splitbill/utils/splitbillClient.js`）。網頁版是主要使用入口，Discord 面板為輔助。
+分帳系統的網頁記帳介面、REST API、SSE 即時同步與帳本資料，已拆分成**獨立的專案與服務（splitbill-service）**，獨立部署、獨立維護。Bot 這邊只保留 Discord 面板／指令的呈現層，透過內部網路（`SPLITBILL_SERVICE_URL`）呼叫 service 讀寫帳本（`handlers/splitbill/utils/splitbillClient.js`）。網頁版是主要使用入口，Discord 面板為輔助。
 
 網頁版的功能（即時同步、分享連結、AI 帳單辨識、即時匯率換算等）說明請見 splitbill-service 專案。Bot 寫入時沿用與網頁版相同的樂觀鎖機制（`expectedUpdatedAt` + 409 版本衝突處理），且因為兩邊寫入的是同一個 service，Bot 端的變更同樣會即時推播到已開啟的網頁分頁。
 
