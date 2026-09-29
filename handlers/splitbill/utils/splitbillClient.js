@@ -5,8 +5,8 @@
  * -----------------------------------------------------------------
  * 取代原本 handlers/splitbill/utils/storage.js 對本地 JSON 檔案的直接讀寫。
  * 所有分帳資料現在都存在獨立部署的 splitbill-service（見該專案），這裡透過
- * Zeabur Private Networking（SPLITBILL_SERVICE_URL，格式通常是
- * http://<service-name>.zeabur.internal:<port>）呼叫它的 REST API——跟
+ * Private Networking（SPLITBILL_SERVICE_URL，格式通常是
+ * http://<service-name>.internal:<port>）呼叫它的 REST API——跟
  * webui 前端打的是同一組端點，資料模型完全一致。
  *
  * 沒有本地 fallback：SPLITBILL_SERVICE_URL 未設定時直接拋錯，不會偷偷退回
