@@ -11,8 +11,8 @@ const libraryClient = require('./musicLibraryClient');
 const ytdlpPath = 'yt-dlp';
 
 // ── 快取資料夾 ────────────────────────────────────────────
-const MUSIC_DIR         = path.join(__dirname, '..', '..', 'data', 'music');
-const CACHE_DIR         = path.join(MUSIC_DIR, 'cache');
+const MUSIC_DIR = path.join(__dirname, '..', '..', 'data', 'music');
+const CACHE_DIR = MUSIC_DIR;
 const MAX_CACHE_SIZE_MB = parseInt(process.env.MAX_CACHE_SIZE_MB || '2048', 10);
 
 // ════════════════════════════════════════════════════════
