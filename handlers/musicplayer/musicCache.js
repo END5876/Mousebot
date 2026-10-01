@@ -15,6 +15,13 @@ const MUSIC_DIR = path.join(__dirname, '..', '..', 'data', 'music');
 const CACHE_DIR = MUSIC_DIR;
 const MAX_CACHE_SIZE_MB = parseInt(process.env.MAX_CACHE_SIZE_MB || '2048', 10);
 
+const SUPPORTED_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac'];
+
+// 下載中／正規化中／上傳中的暫存檔（xxx.tmp.mp3、xxx.norm_123.tmp.mp3、xxx.upload_*.tmp）
+function isTempName(name) {
+  return /\.tmp(\.[A-Za-z0-9]+)?$/i.test(name);
+}
+
 // ════════════════════════════════════════════════════════
 //  確保快取資料夾存在
 // ════════════════════════════════════════════════════════
@@ -51,9 +58,10 @@ function getCacheFilename(url, title) {
 // ════════════════════════════════════════════════════════
 //  檢查快取是否存在，回傳路徑或 null
 //  ★ 多 Bot 共用音樂庫模式：本地沒有時，會先問共用音樂庫服務
-//    （見 musicLibraryClient.js）有沒有其他 Bot 已經下載＋正規化過
-//    同一首歌，有的話直接下載下來當本地快取用，不用重新跑一次 yt-dlp。
+//    有沒有其他 Bot 已經下載＋正規化過同一首歌，有的話直接下載下來當本地快取用。
 //    沒有設定 MUSIC_LIB_URL 時，行為跟過去完全一樣（純本地判斷）。
+//  ★ 共用音樂庫的快取檔直接放在根目錄（無 cache/ 子資料夾），
+//    所以遠端相對路徑就是 filename 本身。
 // ════════════════════════════════════════════════════════
 async function getCachedPath(url, title) {
   ensureCacheDir();
@@ -64,7 +72,7 @@ async function getCachedPath(url, title) {
 
   if (libraryClient.isConfigured()) {
     try {
-      const remoteRelPath = `cache/${filename}`;
+      const remoteRelPath = filename;   // ← 原本是 `cache/${filename}`
       const info = await libraryClient.checkExists(remoteRelPath);
       if (info && info.exists) {
         evictCacheIfNeeded();
@@ -81,14 +89,13 @@ async function getCachedPath(url, title) {
 }
 
 // ════════════════════════════════════════════════════════
-//  把本地已經下載＋正規化完成的快取檔，推播給共用音樂庫服務，
-//  讓其他 Bot 不用重新下載一次同一首歌。
+//  把本地已經下載＋正規化完成的快取檔，推播給共用音樂庫服務。
 //  失敗只記警告、不拋出——上傳失敗不該影響本地播放。
 // ════════════════════════════════════════════════════════
 async function pushToSharedLibrary(filePath, filename) {
   if (!libraryClient.isConfigured()) return false;
   try {
-    await libraryClient.uploadFile(`cache/${filename}`, filePath);
+    await libraryClient.uploadFile(filename, filePath);   // ← 原本是 `cache/${filename}`
     logger.debug('Cache', `已上傳至共用音樂庫: ${filename}`);
     return true;
   } catch (err) {
@@ -99,12 +106,18 @@ async function pushToSharedLibrary(filePath, filename) {
 
 // ════════════════════════════════════════════════════════
 //  快取大小管理：超過上限時刪除最舊的檔案
+//  - 不遞迴：只處理第一層檔案，子資料夾完全不碰
+//  - 只處理音訊副檔名
+//  - 排除暫存檔，避免誤刪正在下載／正規化的檔案
 // ════════════════════════════════════════════════════════
 function evictCacheIfNeeded() {
   try {
-    const files = fs.readdirSync(CACHE_DIR)
-      .map(f => {
-        const fp   = path.join(CACHE_DIR, f);
+    const files = fs.readdirSync(CACHE_DIR, { withFileTypes: true })
+      .filter(d => d.isFile()
+                && !isTempName(d.name)
+                && SUPPORTED_EXTENSIONS.includes(path.extname(d.name).toLowerCase()))
+      .map(d => {
+        const fp   = path.join(CACHE_DIR, d.name);
         const stat = fs.statSync(fp);
         return { fp, mtime: stat.mtimeMs, size: stat.size };
       })
