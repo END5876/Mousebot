@@ -120,7 +120,7 @@ function createNoticeService({ label, notifiedFileName, channelFileName }) {
 async function fetchJson(url, { retries = 3, delayMs = 3000, label = 'Notice' } = {}) {
   for (let i = 0; i < retries; i++) {
     try {
-      const res = await fetch(url, { headers: { 'User-Agent': 'MouseBot/1.0' } });
+      const res = await fetch(url, { headers: { 'User-Agent': 'MouseBot/1.0' }, signal: AbortSignal.timeout(10_000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return await res.json();
     } catch (e) {

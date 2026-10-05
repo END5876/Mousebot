@@ -51,7 +51,10 @@ function resetAllRecordBuffers(state) {
 }
 
 /**
- * 將新 chunk 加入使用者的偵測滑動視窗，並同步維護 detectMergedBuffer。
+ * 將新 chunk 加入使用者的偵測滑動視窗。
+ * 只維護 chunk 陣列與位元組數；真正的 Buffer.concat 延後到 getDetectBuffer()
+ * （每 DETECT_INTERVAL_MS 才呼叫一次）。先前版本在「每個 20ms chunk」都重新
+ * concat 整個視窗（約 80KB），頻率是現在的數十倍，純粹浪費 CPU 與 GC。
  * @param {object} userState
  * @param {Buffer} chunk
  */
@@ -59,24 +62,20 @@ function pushDetectChunk(userState, chunk) {
   userState.detectChunks.push(chunk);
   userState.detectBytes += chunk.length;
 
-  // 裁切超出視窗的舊資料，同步從合併 Buffer 的頭部移除
   while (
     (userState.detectBytes > DETECT_MAX_BYTES || userState.detectChunks.length > MAX_DETECT_CHUNKS) &&
     userState.detectChunks.length > 0
   ) {
-    const dropped = userState.detectChunks.shift();
-    userState.detectBytes -= dropped.length;
-    // 從合併 Buffer 頭部截去已丟棄的位元組
-    if (userState.detectMergedBuffer.length >= dropped.length) {
-      userState.detectMergedBuffer = userState.detectMergedBuffer.slice(dropped.length);
-    } else {
-      // 防禦性重建（理論上不應發生）
-      userState.detectMergedBuffer = Buffer.concat(userState.detectChunks);
-    }
+    userState.detectBytes -= userState.detectChunks.shift().length;
   }
+}
 
-  // 增量追加新 chunk 到合併 Buffer
-  userState.detectMergedBuffer = Buffer.concat([userState.detectMergedBuffer, chunk]);
+/** 取得目前偵測視窗的合併 Buffer（僅在要送去偵測時才組合一次） */
+function getDetectBuffer(userState) {
+  const n = userState.detectChunks.length;
+  if (n === 0) return Buffer.alloc(0);
+  if (n === 1) return userState.detectChunks[0];
+  return Buffer.concat(userState.detectChunks, userState.detectBytes);
 }
 
 /**
@@ -84,9 +83,8 @@ function pushDetectChunk(userState, chunk) {
  * @param {object} userState
  */
 function clearDetectBuffer(userState) {
-  userState.detectChunks       = [];
-  userState.detectBytes        = 0;
-  userState.detectMergedBuffer = Buffer.alloc(0);
+  userState.detectChunks = [];
+  userState.detectBytes  = 0;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -110,8 +108,6 @@ function unsubscribeUser(guildId, userId) {
   userState.recordChunks       = [];
   userState.detectBytes        = 0;
   userState.recordBytes        = 0;
-  // 同步釋放合併 Buffer
-  userState.detectMergedBuffer = Buffer.alloc(0);
   userState._lastSilenceChunksLen = -1;
   userState._lastSilenceRMS       = 0;
 
@@ -173,8 +169,6 @@ function subscribeUser(guildId, userId, member) {
     member,
     detectChunks:  [],
     detectBytes:   0,
-    // 增量維護的合併 Buffer，避免每次 triggerDetection 重新 concat
-    detectMergedBuffer: Buffer.alloc(0),
     recordChunks:  [],
     recordBytes:   0,
     stream:        null,
@@ -290,6 +284,7 @@ module.exports = {
   resetAllRecordBuffers,
   pushDetectChunk,
   clearDetectBuffer,
+  getDetectBuffer,
   unsubscribeUser,
   subscribeUser,
   startUserIdleCleanup,
