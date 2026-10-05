@@ -202,6 +202,25 @@ async function playTTS(guildId, text) {
   };
 }
 
+// 程序被強制結束（SIGKILL / 當機）時，暫存的 TTS 音檔不會被刪除，長期累積會吃磁碟。
+// 啟動時與之後每 30 分鐘清掉超過 10 分鐘沒動過的殘留檔。
+const TTS_TEMP_DIR = path.join(__dirname, '../temp');
+function cleanupStaleTtsFiles(maxAgeMs = 10 * 60 * 1000) {
+  try {
+    if (!fs.existsSync(TTS_TEMP_DIR)) return;
+    const now = Date.now();
+    for (const f of fs.readdirSync(TTS_TEMP_DIR)) {
+      const fp = path.join(TTS_TEMP_DIR, f);
+      try {
+        const st = fs.statSync(fp);
+        if (st.isFile() && now - st.mtimeMs > maxAgeMs) fs.unlinkSync(fp);
+      } catch {}
+    }
+  } catch {}
+}
+cleanupStaleTtsFiles();
+setInterval(cleanupStaleTtsFiles, 30 * 60 * 1000).unref();
+
 function stopTTS(guildId) {
   if (ttsQueues.has(guildId)) {
     const items = ttsQueues.get(guildId);

@@ -39,8 +39,12 @@ const {
 
 const { generateGuguArticle, getGuguErrorMessage } = require('./gugugagaGenerator');
 const bootSummary = require('../../utils/bootSummary');
+const { isOwner } = require('../../utils/config');
 
-const SETMODE_ALLOWED_USER_ID = '598054316510806017';
+// 每則訊息都會跑一次的正規表示式：原本 `[^\s)\]>]+.*\.` 的兩段貪婪量詞在長訊息上會
+// 造成 O(n²) 回溯；改成單段非空白匹配，語意相同（網址中任一處出現圖片副檔名）。
+const LIKELY_IMAGE_LINK_RE = /https?:\/\/\S+\.(?:png|jpe?g|webp|heic|heif|gif)(?:\?\S*)?|cdn\.discordapp\.com\/attachments\//i;
+
 
 // ════════════════════════════════════════════════════════
 //  /ai 單一指令，底下掛 ask / clear / tts / mode / chance(group) / gugu
@@ -228,7 +232,7 @@ async function handleMode(interaction) {
         });
     }
 
-    if (interaction.user.id !== SETMODE_ALLOWED_USER_ID) {
+    if (!isOwner(interaction.user.id)) {
         return interaction.reply({
             content: '❌ 你沒有權限使用此指令。',
             flags: MessageFlags.Ephemeral,
@@ -368,7 +372,7 @@ function setupAICommands(client) {
         const hasAttachment = message.attachments.size > 0;
         const content = message.content?.trim() || '';
 
-        const hasLikelyImageLink = /(https?:\/\/[^\s)\]>]+.*\.(png|jpg|jpeg|webp|heic|heif|gif)(\?.*)?)|( cdn\.discordapp\.com\/attachments\/)/i.test(content);
+        const hasLikelyImageLink = LIKELY_IMAGE_LINK_RE.test(content);
         if (!content && !hasAttachment && !hasLikelyImageLink) return;
 
         const userId    = message.author.id;

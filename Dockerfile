@@ -15,6 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     supervisor \
     && rm -rf /var/lib/apt/lists/*
 
+# ── 非 root 執行帳號（Bot 與 OWW 都不需要 root 權限）─────
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin bot
+
 # ── Python 虛擬環境（避免 break-system-packages 問題） ──
 RUN python3 -m venv /opt/oww-env
 ENV PATH="/opt/oww-env/bin:$PATH"
@@ -52,6 +55,8 @@ autorestart=true\n\
 startretries=5\n\
 startsecs=5\n\
 priority=1\n\
+user=bot\n\
+environment=HOME="/home/bot",USER="bot"\n\
 stdout_logfile=/dev/stdout\n\
 stdout_logfile_maxbytes=0\n\
 stderr_logfile=/dev/stderr\n\
@@ -65,6 +70,8 @@ autorestart=true\n\
 startretries=5\n\
 startsecs=8\n\
 priority=10\n\
+user=bot\n\
+environment=HOME="/home/bot",USER="bot"\n\
 stdout_logfile=/dev/stdout\n\
 stdout_logfile_maxbytes=0\n\
 stderr_logfile=/dev/stderr\n\
@@ -82,4 +89,13 @@ RUN apt-get purge -y make g++ && apt-get autoremove -y && rm -rf /var/lib/apt/li
 COPY . .
 
 # ── 啟動 ────────────────────────────────────────────────
-CMD ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+# supervisord 以 root 啟動，只負責：①確保可寫目錄存在 ②把掛載的 Volume（常為 root 所有）
+# 交給 bot 帳號 ③讓 supervisord 把 oww-server 與 node-bot 兩個子程序降權成 bot 再執行。
+# chown 只動「不屬於 bot 的檔案」，Volume 很大時重啟也不會每次都全量改權限。
+RUN printf '#!/bin/sh\n\
+mkdir -p /app/data /app/temp /app/handlers/voice/temp\n\
+find /app/data /app/temp /app/handlers/voice/temp ! -user bot -exec chown bot:bot {} + 2>/dev/null || true\n\
+exec supervisord -c /etc/supervisor/conf.d/supervisord.conf\n\
+' > /usr/local/bin/docker-entrypoint.sh && chmod +x /usr/local/bin/docker-entrypoint.sh
+
+CMD ["/usr/local/bin/docker-entrypoint.sh"]

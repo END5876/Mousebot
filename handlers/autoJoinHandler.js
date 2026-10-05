@@ -21,6 +21,7 @@ const {
 
 const logger = require('../utils/logger');
 const bootSummary = require('../utils/bootSummary');
+const { isOwner } = require('../utils/config');
 const voiceMonitor = require('./musicplayer/voiceActivityMonitor');
 
 // 延後載入，避免模組載入順序造成耦合。
@@ -28,7 +29,6 @@ function getPlaybackModule() {
   return require('./musicplayer/unifiedQueue/playback');
 }
 
-const TARGET_CHANNEL_MANAGER_ID = '598054316510806017';
 const CHECK_INTERVAL_MS = 10_000;
 // 重新部署時，舊行程留下的語音狀態只會殘留約 30～60 秒，啟動後要盡快接手。
 const STARTUP_DELAY_MS = 1_000;
@@ -110,23 +110,11 @@ function saveConfig(nextConfig) {
   config = nextConfig;
 }
 
-// 全域保護：僅在主程式尚未註冊時才補上，避免重複監聽。
-// EventEmitter 發出 'error' 卻沒有監聽器時會直接丟例外，讓程序崩潰。
+// Client 層級保護：EventEmitter 發出 'error' 卻沒有監聽器時會直接丟例外，讓程序崩潰。
+// （process 層級的 unhandledRejection / uncaughtException 已集中到 utils/processGuards.js）
 function bindProcessGuards(client) {
   if (processGuardsBound) return;
   processGuardsBound = true;
-
-  if (process.listenerCount('unhandledRejection') === 0) {
-    process.on('unhandledRejection', reason => {
-      console.error('❌ unhandledRejection:', reason);
-    });
-  }
-
-  if (process.listenerCount('uncaughtException') === 0) {
-    process.on('uncaughtException', error => {
-      console.error('❌ uncaughtException:', error);
-    });
-  }
 
   if (client.listenerCount('error') === 0) {
     client.on('error', error => {
@@ -564,7 +552,7 @@ function buildAutoJoinMenu(userId) {
   ];
 
   // 只有指定使用者看得到變更頻道選項；實際提交時仍會再次驗證。
-  if (userId === TARGET_CHANNEL_MANAGER_ID) {
+  if (isOwner(userId)) {
     options.splice(
       1,
       0,
@@ -701,7 +689,7 @@ function setupAutoJoinCommands(client) {
       // 同時檢查「開啟選擇器」與「提交新頻道」，避免繞過選單。
       if (
         isChangingTarget &&
-        interaction.user.id !== TARGET_CHANNEL_MANAGER_ID
+        !isOwner(interaction.user.id)
       ) {
         await interaction.reply({
           content: '⛔ 只有指定使用者可以變更目標語音頻道。',

@@ -363,23 +363,48 @@ async function convertNetToSingleCurrency(netByCurrency, targetCurrency, trip) {
   return { converted, rates, failedCurrencies };
 }
 
+// 匯率表快取（以來源幣別為單位，1 小時）：同一輪操作（記帳、換算、新增幣別）
+// 會對同一個來源幣別重複查詢，免費 API 有頻率限制，也沒必要每次都重新抓整張匯率表。
+const FX_CACHE_TTL_MS = 60 * 60 * 1000;
+const FX_CACHE_MAX = 30;
+const fxCache = new Map(); // FROM -> { rates, ts }
+const fxInflight = new Map(); // FROM -> Promise<rates|null>
+
+async function loadRateTable(from) {
+  const hit = fxCache.get(from);
+  if (hit && Date.now() - hit.ts < FX_CACHE_TTL_MS) return hit.rates;
+  if (fxInflight.has(from)) return fxInflight.get(from);
+
+  const task = (async () => {
+    try {
+      const res = await fetch(`https://open.er-api.com/v6/latest/${encodeURIComponent(from)}`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) throw new Error(`API 狀態碼異常: ${res.status}`);
+      const data = await res.json();
+      if (!data || typeof data.rates !== 'object') return null;
+      if (fxCache.size >= FX_CACHE_MAX) fxCache.delete(fxCache.keys().next().value);
+      fxCache.set(from, { rates: data.rates, ts: Date.now() });
+      return data.rates;
+    } catch (error) {
+      console.error(`⚠️ 即時匯率抓取失敗 (${from}):`, error.message);
+      return hit ? hit.rates : null; // 抓取失敗時，寧可用過期的舊表也不要直接放棄
+    } finally {
+      fxInflight.delete(from);
+    }
+  })();
+  fxInflight.set(from, task);
+  return task;
+}
+
 async function fetchRealTimeRate(fromCurrency, toCurrency) {
   const from = fromCurrency.toUpperCase();
   const to = toCurrency.toUpperCase();
   if (from === to) return 1;
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch(`https://open.er-api.com/v6/latest/${from}`, { signal: controller.signal });
-    clearTimeout(timeoutId);
-    if (!res.ok) throw new Error(`API 狀態碼異常: ${res.status}`);
-    const data = await res.json();
-    if (data?.rates?.[to]) {
-      return Math.round((data.rates[to] + Number.EPSILON) * 10000) / 10000;
-    }
-  } catch (error) {
-    console.error(`⚠️ 即時匯率抓取失敗 (${from} -> ${to}):`, error.message);
+  const rates = await loadRateTable(from);
+  if (rates && rates[to]) {
+    return Math.round((rates[to] + Number.EPSILON) * 10000) / 10000;
   }
   return null;
 }

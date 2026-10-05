@@ -1,5 +1,7 @@
 const { playTTS } = require('../voice/ttsHandler');
 const sharp = require('sharp'); // 引入 sharp 進行圖片壓縮
+const dns = require('dns').promises;
+const net = require('net');
 
 // ════════════════════════════════════════════════════════
 //  設定常數
@@ -9,6 +11,9 @@ const TTS_MAX_LENGTH = 1000;
 const IMAGE_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_MODE_CACHE_SIZE = 1000;
 const HISTORY_CACHE_TTL_MS = 30 * 1000;
+const IMAGE_CACHE_MAX_ENTRIES = 40;          // 每筆最多約 1MB 級 base64，限制總量避免吃光記憶體
+const IMAGE_FETCH_TIMEOUT_MS = 10_000;
+const IMAGE_MAX_REDIRECTS = 3;
 
 // ════════════════════════════════════════════════════════
 //  快取
@@ -166,6 +171,76 @@ async function resolveDiscordImageUrl(url, client) {
     return null;
 }
 
+
+// ════════════════════════════════════════════════════════
+//  安全下載圖片（防 SSRF / 逾時 / 超大檔）
+//  使用者訊息裡的任何圖片網址都會被 Bot 伺服器端抓取，
+//  若不限制，攻擊者可讓 Bot 去連內網服務（例如同專案的
+//  *.internal 私有網路服務、雲端 metadata 位址）。
+// ════════════════════════════════════════════════════════
+function isPrivateIp(ip) {
+    if (net.isIPv4(ip)) {
+        const [a, b] = ip.split('.').map(Number);
+        return a === 10 || a === 127 || a === 0 ||
+            (a === 169 && b === 254) ||
+            (a === 172 && b >= 16 && b <= 31) ||
+            (a === 192 && b === 168) ||
+            (a === 100 && b >= 64 && b <= 127) || a >= 224;
+    }
+    if (net.isIPv6(ip)) {
+        const v = ip.toLowerCase();
+        if (v === '::1' || v === '::') return true;
+        if (v.startsWith('::ffff:')) return isPrivateIp(v.slice(7));
+        return v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe80');
+    }
+    return true;
+}
+
+async function assertPublicHttpUrl(rawUrl) {
+    let u;
+    try { u = new URL(rawUrl); } catch { throw new Error('網址格式錯誤'); }
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error('不支援的協定');
+    const host = u.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.internal') || host.endsWith('.local')) {
+        throw new Error('不允許的主機');
+    }
+    if (net.isIP(host)) {
+        if (isPrivateIp(host)) throw new Error('不允許的主機');
+        return u;
+    }
+    const addrs = await dns.lookup(host, { all: true });
+    if (!addrs.length || addrs.some(a => isPrivateIp(a.address))) throw new Error('不允許的主機');
+    return u;
+}
+
+// 回傳 { buffer, contentType }；超過 maxBytes 或逾時一律丟錯
+async function safeFetchBuffer(rawUrl, maxBytes) {
+    let current = rawUrl;
+    for (let hop = 0; hop <= IMAGE_MAX_REDIRECTS; hop++) {
+        const u = await assertPublicHttpUrl(current);
+        const res = await fetch(u, { redirect: 'manual', signal: AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS) });
+
+        if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
+            current = new URL(res.headers.get('location'), u).toString();
+            continue;
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const declared = Number(res.headers.get('content-length'));
+        if (declared && declared > maxBytes) throw new Error('檔案過大');
+
+        const chunks = [];
+        let total = 0;
+        for await (const chunk of res.body) {
+            total += chunk.length;
+            if (total > maxBytes) { try { res.body.cancel?.(); } catch {} throw new Error('檔案過大'); }
+            chunks.push(chunk);
+        }
+        return { buffer: Buffer.concat(chunks), contentType: res.headers.get('content-type') || '' };
+    }
+    throw new Error('重新導向次數過多');
+}
+
 // ════════════════════════════════════════════════════════
 //  圖片處理 (支援網址解析與靜態圖/GIF 壓縮邏輯)
 // ════════════════════════════════════════════════════════
@@ -177,20 +252,15 @@ async function fetchImageUrlAsBase64(url) {
     }
 
     try {
-        const response = await fetch(url);
-        if (!response.ok) return null;
+        const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
+        const { buffer: rawBuffer, contentType } = await safeFetchBuffer(url, sizeLimit);
 
-        const contentType = response.headers.get('content-type') || '';
         const supportedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif', 'image/gif'];
-        const originalMimeType = contentType.split(';')[0] || 'image/jpeg';
+        const originalMimeType = contentType.split(';')[0].trim() || 'image/jpeg';
 
         if (!supportedTypes.includes(originalMimeType)) return null;
 
-        const arrayBuffer = await response.arrayBuffer();
-        const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
-        if (arrayBuffer.byteLength > sizeLimit) return null;
-
-        let buffer = Buffer.from(arrayBuffer);
+        let buffer = rawBuffer;
         let finalMimeType = originalMimeType;
 
         if (originalMimeType === 'image/gif') {
@@ -208,6 +278,7 @@ async function fetchImageUrlAsBase64(url) {
         }
 
         const base64 = buffer.toString('base64');
+        if (imageCache.size >= IMAGE_CACHE_MAX_ENTRIES) imageCache.delete(imageCache.keys().next().value);
         imageCache.set(url, { base64, mimeType: finalMimeType, cachedAt: Date.now() });
         console.log(`[Image] 已下載並壓縮快取：${url.slice(0, 60)}...`);
         return { base64, mimeType: finalMimeType };
@@ -336,9 +407,11 @@ async function fetchAndCacheEmoji(url, mimeType, name, id) {
             console.log(`[Emoji] 快取命中：${name}`);
             return { mimeType: cached.mimeType, data: cached.base64 };
         } else {
-            const response = await fetch(url);
+            const response = await fetch(url, { signal: AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS) });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const buffer = await response.arrayBuffer();
             const base64 = Buffer.from(buffer).toString('base64');
+            if (imageCache.size >= IMAGE_CACHE_MAX_ENTRIES) imageCache.delete(imageCache.keys().next().value);
             imageCache.set(url, { base64, mimeType, cachedAt: Date.now() });
             console.log(`[Emoji] 已下載：${name} (${id})`);
             return { mimeType, data: base64 };

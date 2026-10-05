@@ -420,8 +420,12 @@ def detect():
     if not pcm_bytes:
         return jsonify({"error": "empty body"}), 400
 
+    # 超過上限時保留「最新」的音訊（尾端）。原本取開頭會把最近的音訊丟掉，
+    # 而喚醒詞通常就落在視窗尾端；同時對齊 int16（2 bytes），避免奇數長度讓 np.frombuffer 拋錯。
     if len(pcm_bytes) > MAX_DETECT_BYTES:
-        pcm_bytes = pcm_bytes[:MAX_DETECT_BYTES]
+        pcm_bytes = pcm_bytes[-MAX_DETECT_BYTES:]
+    if len(pcm_bytes) % 2:
+        pcm_bytes = pcm_bytes[1:]
 
     session = session_manager.get_or_create(session_id)
 
@@ -497,4 +501,6 @@ def detect():
 if __name__ == "__main__":
     # 開發環境：使用 threaded=True 允許並發請求（仍受 SHARED_MODEL_LOCK 串行化）
     # 生產環境：請使用上方 gunicorn 指令
-    app.run(host="0.0.0.0", port=HTTP_PORT, debug=False, use_reloader=False, threaded=True)
+    # 預設只綁 127.0.0.1：Node 與本服務同容器，不需要對外開放；
+    # /pause_all 等管理端點沒有任何驗證。若要跨容器使用請明確設定 OWW_HOST。
+    app.run(host=os.environ.get("OWW_HOST", "127.0.0.1"), port=HTTP_PORT, debug=False, use_reloader=False, threaded=True)

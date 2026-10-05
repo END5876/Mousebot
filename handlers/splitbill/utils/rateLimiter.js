@@ -18,6 +18,17 @@ class SlidingWindowRateLimiter {
     this.maxRequests = maxRequests;
     this.windowMs = windowMs;
     this.hits = new Map(); // key -> number[]（時間戳記陣列，由舊到新）
+
+    // 定期清掉已過期的 key：否則每個用過一次的 guild:user 都會永遠留在 Map 裡
+    const timer = setInterval(() => this.sweep(), Math.max(windowMs, 60_000));
+    if (typeof timer.unref === 'function') timer.unref();
+  }
+
+  sweep() {
+    const now = Date.now();
+    for (const [key, list] of this.hits) {
+      if (!list.length || now - list[list.length - 1] >= this.windowMs) this.hits.delete(key);
+    }
   }
 
   /**

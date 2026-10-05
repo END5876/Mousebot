@@ -7,6 +7,7 @@ const {
 const splitbillClient = require('../utils/splitbillClient');
 const { fetchRealTimeRate, parseMoneyInput } = require('../utils/calculator');
 const { showMainMenu } = require('../commands/splitbill');
+const { canDeleteTrip } = require('../utils/tripHelper');
 
 const BASELINE_RATES = {
   TWD: 1, JPY: 0.2, USD: 32, KRW: 0.024, EUR: 34.8, THB: 0.89, HKD: 4.1, GBP: 40.5
@@ -41,7 +42,7 @@ async function renderTripNav(interaction, alertMsg = null) {
   const btnRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('trip_btn_create_modal').setLabel('🆕 建立新行程').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('trip_btn_add_currency').setLabel('🪙 新增幣別').setStyle(ButtonStyle.Success).setDisabled(!trip),
-    new ButtonBuilder().setCustomId('trip_btn_delete_ui').setLabel('❌ 刪除此行程').setStyle(ButtonStyle.Danger).setDisabled(!trip),
+    new ButtonBuilder().setCustomId('trip_btn_delete_ui').setLabel('❌ 刪除此行程').setStyle(ButtonStyle.Danger).setDisabled(!trip || !canDeleteTrip(trip, interaction.user.id)),
     new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主控台').setStyle(ButtonStyle.Secondary)
   );
 
@@ -66,6 +67,13 @@ async function renderTripNav(interaction, alertMsg = null) {
   } else {
     return interaction.reply(payload);
   }
+}
+
+function replyNotAllowedToDelete(interaction, trip) {
+  const who = trip.ownerId
+    ? `只有行程建立者 <@${trip.ownerId}> 可以刪除行程「${trip.name}」。`
+    : `行程「${trip.name}」建立時沒有記錄建立者，僅 Bot 擁有者可以刪除。`;
+  return interaction.reply({ content: `❌ ${who}`, flags: MessageFlags.Ephemeral });
 }
 
 module.exports = {
@@ -116,21 +124,32 @@ module.exports = {
 
     if (customId === 'trip_btn_delete_ui') {
       const { trip } = await splitbillClient.resolveTrip(guildId, null, user.id);
+      if (!trip) return interaction.reply({ content: '⚠️ 找不到目前的行程。', flags: MessageFlags.Ephemeral });
+      if (!canDeleteTrip(trip, user.id)) return replyNotAllowedToDelete(interaction, trip);
+
       const embed = new EmbedBuilder()
         .setColor(0xd35400)
         .setTitle(`⚠️ 警告：確定要刪除行程「${trip.name}」？`)
         .setDescription('此操作將會清除所有歷史記帳與成員關聯，**無法復原**。確認刪除？');
 
       const btns = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('trip_btn_delete_confirm').setLabel('💥 確定全面刪除').setStyle(ButtonStyle.Danger),
+        // 把要刪除的行程 ID 鎖進 customId：確認畫面開著的期間若切換了作用行程，仍只會刪除「畫面上寫的那一個」
+        new ButtonBuilder().setCustomId(`trip_btn_delete_confirm::${trip.id}`).setLabel('💥 確定全面刪除').setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId('trip_nav').setLabel('🛡️ 取消安全返回').setStyle(ButtonStyle.Secondary)
       );
 
       return interaction.update({ embeds: [embed], components: [btns] });
     }
 
-    if (customId === 'trip_btn_delete_confirm') {
-      const { trip } = await splitbillClient.resolveTrip(guildId, null, user.id);
+    if (customId.startsWith('trip_btn_delete_confirm')) {
+      const [, pinnedTripId] = customId.split('::');
+      const trip = pinnedTripId
+        ? await splitbillClient.resolveTripById(guildId, pinnedTripId)
+        : (await splitbillClient.resolveTrip(guildId, null, user.id)).trip;
+      if (!trip) return interaction.reply({ content: '⚠️ 找不到要刪除的行程（可能已被刪除）。', flags: MessageFlags.Ephemeral });
+
+      // 再次驗證：確認訊息可能被別人點到，或權限在確認前已改變
+      if (!canDeleteTrip(trip, user.id)) return replyNotAllowedToDelete(interaction, trip);
 
       // 🌐 [service 拆分] 清 defaultTripId／activeTripByUser 殘影、廣播
       // trip-deleted SSE 事件，全部收斂進 splitbill-service 的
@@ -168,6 +187,8 @@ module.exports = {
         baseCurrency: baseCur,
         rates: autoRates,
         members: [{ id: interaction.user.id, name: interaction.user.globalName || interaction.user.username }],
+        // 行程建立者：只有建立者（與 Bot 擁有者）可以刪除這個行程
+        ownerId: interaction.user.id,
       };
 
       await splitbillClient.saveTrip(guildId, newTripId, newTrip);

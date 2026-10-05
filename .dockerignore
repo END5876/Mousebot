@@ -1,0 +1,13 @@
+.git
+.gitignore
+node_modules
+.env
+.env.*
+data
+temp
+handlers/voice/temp
+*.log
+start.bat
+README.md
+__pycache__
+*.pyc

@@ -2,24 +2,71 @@ const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const fs   = require('fs');
 const path = require('path');
 const bootSummary = require('../utils/bootSummary');
+const { isOwner } = require('../utils/config');
 
 // ── 常數 ────────────────────────────────────────────────
-const ALLOWED_USER_ID = '598054316510806017';
 const DATA_PATH = path.join(__dirname, '../data/responses.json');
 
 // ── 讀寫 JSON ────────────────────────────────────────────
-function loadResponses() {
-  const raw = fs.readFileSync(DATA_PATH, 'utf-8');
-  return JSON.parse(raw);
+// 記憶體快取：messageCreate 對「每一則訊息」都會呼叫 loadResponses()，
+// 原本每次都同步讀檔＋JSON.parse，會卡住事件迴圈。改成快取，
+// 並每 5 秒用 mtime 檢查一次檔案是否被外部手動修改。
+const CACHE_CHECK_MS = 5000;
+let cache = null;
+let cacheMtime = 0;
+let lastCheck = 0;
+
+function emptyResponses() {
+  return { exact: {}, contains: {} };
 }
 
+function loadResponses() {
+  const now = Date.now();
+  if (cache && now - lastCheck < CACHE_CHECK_MS) return cache;
+  lastCheck = now;
+
+  try {
+    const mtime = fs.statSync(DATA_PATH).mtimeMs;
+    if (cache && mtime === cacheMtime) return cache;
+    const parsed = JSON.parse(fs.readFileSync(DATA_PATH, 'utf-8'));
+    cache = {
+      exact: parsed.exact && typeof parsed.exact === 'object' ? parsed.exact : {},
+      contains: parsed.contains && typeof parsed.contains === 'object' ? parsed.contains : {},
+    };
+    cacheMtime = mtime;
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      cache = cache || emptyResponses();
+    } else if (!cache) {
+      throw err; // 第一次載入就壞掉：讓啟動摘要回報 warn
+    } else {
+      console.warn('⚠️ [Response] responses.json 讀取失敗，沿用記憶體中的舊版本:', err.message);
+    }
+  }
+  return cache;
+}
+
+// 原子寫入（暫存檔 + rename），避免寫到一半被讀到或程序中斷造成檔案損毀
 function saveResponses(data) {
-  fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  fs.mkdirSync(path.dirname(DATA_PATH), { recursive: true });
+  const tmp = `${DATA_PATH}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
+  fs.renameSync(tmp, DATA_PATH);
+  cache = data;
+  cacheMtime = fs.statSync(DATA_PATH).mtimeMs;
+  lastCheck = Date.now();
+}
+
+const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+
+async function sendResponse(channel, response) {
+  const list = Array.isArray(response) ? response : [response];
+  for (const msg of list) await channel.send(msg);
 }
 
 // ── 權限檢查 ─────────────────────────────────────────────
 function isAllowed(userId) {
-  return userId === ALLOWED_USER_ID;
+  return isOwner(userId);
 }
 
 // ── 設定 ─────────────────────────────────────────────────
@@ -30,29 +77,28 @@ function setupCustomResponses(client) {
     if (message.author.bot) return;
 
     const content = message.content;
-    const responses = loadResponses();
+    if (!content) return;
 
-    // 完全匹配
-    if (content in responses.exact) {
-      const response = responses.exact[content];
-      if (Array.isArray(response)) {
-        for (const msg of response) {
-          await message.channel.send(msg);
-        }
-      } else {
-        await message.channel.send(response);
-      }
-      console.log(`🎯 觸發完全匹配回應: "${content}"`);
-      return;
-    }
+    try {
+      const responses = loadResponses();
 
-    // 包含匹配
-    for (const [keyword, response] of Object.entries(responses.contains)) {
-      if (content.includes(keyword)) {
-        await message.channel.send(response);
-        console.log(`🎯 觸發包含匹配回應: "${keyword}"`);
+      // 完全匹配（用 hasOwn：避免訊息內容是 "constructor"、"toString" 等原型鏈屬性名時誤觸發）
+      if (hasOwn(responses.exact, content)) {
+        await sendResponse(message.channel, responses.exact[content]);
+        console.log(`🎯 觸發完全匹配回應: "${content}"`);
         return;
       }
+
+      // 包含匹配（值可能是用 | 分隔產生的陣列，需逐則送出）
+      for (const [keyword, response] of Object.entries(responses.contains)) {
+        if (content.includes(keyword)) {
+          await sendResponse(message.channel, response);
+          console.log(`🎯 觸發包含匹配回應: "${keyword}"`);
+          return;
+        }
+      }
+    } catch (err) {
+      console.error('❌ [Response] 自動回應處理失敗:', err.message);
     }
   });
 
@@ -168,10 +214,14 @@ function setupCustomResponses(client) {
         const keyword = interaction.options.getString('keyword');
         const rawResp = interaction.options.getString('response');
 
+        if (keyword === '__proto__') {
+          return interaction.reply({ content: '❌ 此關鍵字為保留字，無法使用。', flags: MessageFlags.Ephemeral });
+        }
+
         const parts = rawResp.split('|').map(s => s.trim()).filter(s => s.length > 0);
         const value = parts.length === 1 ? parts[0] : parts;
 
-        const isUpdate = keyword in responses[type];
+        const isUpdate = hasOwn(responses[type], keyword);
         responses[type][keyword] = value;
         saveResponses(responses);
 
@@ -194,7 +244,7 @@ function setupCustomResponses(client) {
         const type    = interaction.options.getString('type');
         const keyword = interaction.options.getString('keyword');
 
-        if (!(keyword in responses[type])) {
+        if (!hasOwn(responses[type], keyword)) {
           return interaction.reply({
             content: `❌ 找不到 **${type}** 中的關鍵字：\`${keyword}\``,
             flags: MessageFlags.Ephemeral

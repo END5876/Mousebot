@@ -115,6 +115,8 @@ GROQ_API_KEY=your_groq_api_key
 LOVER_MODE_USER_IDS=123456789012345678
 DEVELOPER_MODE_USER_IDS=123456789012345678
 SAY_AUTHORIZED_ID=123456789012345678      # /say 指令授權使用者
+OWNER_USER_ID=123456789012345678          # Bot 擁有者（可逗號分隔多人）：/ai mode、/response add|remove、/autojoin 變更頻道、可刪除舊版行程；未設定則這些功能全部拒絕
+EXIT_ON_UNCAUGHT=1                        # 未捕捉例外時結束程序交由 supervisord 重啟（設 0 = 只記錄不結束）
 
 # ── 自動加入語音頻道（選填） ─────────────────────────────────────────
 TARGET_VOICE_CHANNEL_ID=your_voice_channel_id

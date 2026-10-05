@@ -80,6 +80,7 @@ function incrementPlayCount(filename) {
   const key = normalizePath(filename);
   const next = (playCountMap.get(key) || 0) + 1;
   playCountMap.set(key, next);
+  _localWalkCache = null;
   savePlayCounts();
   logger.debug('LocalMusic', `播放次數 +1：${key} → ${next}`);
 }
@@ -134,7 +135,22 @@ function walkFiles(dir) {
 }
 
 // 未設定共用音樂庫時的舊行為：直接掃描本地 data/music。
+// autocomplete 每個按鍵都會呼叫 getMusicFiles()，原本每次都同步遞迴掃整個資料夾
+// 並阻塞事件迴圈（Discord 要求 3 秒內回應 autocomplete）。加 3 秒短快取，
+// 播放次數變動時立即失效，所以排序仍然即時。
+const LOCAL_WALK_TTL_MS = 3000;
+let _localWalkCache = null;
+let _localWalkAt = 0;
+
 function _getMusicFilesLocalWalk() {
+  if (_localWalkCache && Date.now() - _localWalkAt < LOCAL_WALK_TTL_MS) return _localWalkCache.slice();
+  const files = _scanMusicFilesLocalWalk();
+  _localWalkCache = files;
+  _localWalkAt = Date.now();
+  return files.slice();
+}
+
+function _scanMusicFilesLocalWalk() {
   try {
     if (!fs.existsSync(MUSIC_DIR)) {
       console.warn('⚠️ data/music 資料夾不存在，嘗試建立...');

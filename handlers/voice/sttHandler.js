@@ -26,6 +26,7 @@ const {
   getCachedRecentRMS,
   resetAllRecordBuffers,
   clearDetectBuffer,
+  getDetectBuffer,
   unsubscribeUser,
   subscribeUser,
   startUserIdleCleanup,
@@ -207,9 +208,8 @@ async function triggerDetection(guildId, userId) {
     const now = Date.now();
     if (now < userState.cooldownUntil) return;
 
-    // 直接使用增量維護的 detectMergedBuffer，
-    // 不再每次重新 Buffer.concat，消除高頻 GC 壓力
-    const pcmBuffer = userState.detectMergedBuffer;
+    // 只在送去偵測時才把 chunk 組合成一塊 Buffer
+    const pcmBuffer = getDetectBuffer(userState);
     if (!pcmBuffer || pcmBuffer.length === 0) return;
 
     if (calcRMS(pcmBuffer) < RMS_THRESHOLD) return;
@@ -220,7 +220,7 @@ async function triggerDetection(guildId, userId) {
     if (!result.detected) return;
 
     // 成功喚醒後，清空滑動視窗，避免剛退出錄音模式又立刻被舊聲音觸發
-    // 改用 clearDetectBuffer 同步清空 detectMergedBuffer
+    // 改用 clearDetectBuffer 清空偵測視窗
     clearDetectBuffer(userState);
 
     const name = userState.member?.displayName || userId;
