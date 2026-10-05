@@ -269,6 +269,20 @@ function cleanupGuild(guildId) {
 }
 
 // ════════════════════════════════════════════════════
+//  外部一次性播放（例如整點報時）結束後，把連線訂閱還原成目前應該在播的那一層。
+//  優先序：TTS > 音樂（未暫停）> 靜音。避免外部模組自行 connection.subscribe()
+//  之後，audioManager 的 activeLayer 與實際訂閱不一致、靜音防踢層被遺失。
+// ════════════════════════════════════════════════════
+function restoreActiveLayer(guildId) {
+  const state = guildStates.get(guildId);
+  if (!state) return;
+  const p = state.players;
+  if (state.activeLayer === 'tts' && p.tts) _subscribe(guildId, p.tts);
+  else if (state.activeLayer === 'music' && p.music && !state.musicPaused) _subscribe(guildId, p.music);
+  else if (p.silence) { _subscribe(guildId, p.silence); if (!state.activeLayer) state.activeLayer = 'silence'; }
+}
+
+// ════════════════════════════════════════════════════
 //  查詢
 // ════════════════════════════════════════════════════
 function getActiveLayer(guildId) {
@@ -290,6 +304,7 @@ module.exports = {
   playTTSSegment,
   exitTTSLayer,
   cleanupGuild,
+  restoreActiveLayer,
   getActiveLayer,
   hasMusicPlaying,
 };

@@ -15,6 +15,7 @@ const {
 const logger = require('../../utils/logger');
 const bootSummary = require('../../utils/bootSummary');
 const { nowPlaying } = require('../musicplayer/unifiedQueue/state');
+const { restoreActiveLayer } = require('../audioManager');
 
 const SOUND_DIR = path.join(__dirname, '../../data/timeAnnouncer');
 
@@ -172,9 +173,8 @@ function playHourlySound(hour) {
       const currentNp = nowPlaying.get(guildId);
       const musicPlayer = currentNp ? currentNp.player : null;
 
-      if (musicPlayer && musicPlayer.state.status === AudioPlayerStatus.Playing) {
-        musicPlayer.pause();
-      }
+      const wasPlaying = !!musicPlayer && musicPlayer.state.status === AudioPlayerStatus.Playing;
+      if (wasPlaying) musicPlayer.pause();
 
       // 2. 建立報時播放器
       const player = createAudioPlayer();
@@ -186,12 +186,17 @@ function playHourlySound(hour) {
       connection.subscribe(player);
       player.play(resource);
 
-      // 3. 建立恢復音樂的輔助函式
+      // 3. 建立還原的輔助函式（只會執行一次，error 與 idle 都可能觸發）
+      //    先請 audioManager 還原連線訂閱（音樂 / 靜音防踢層），
+      //    之前只在「有音樂在播」時還原，沒音樂時靜音防踢層會永遠被報時播放器取代。
+      let restored = false;
       const restoreMusic = () => {
+        if (restored) return;
+        restored = true;
+        restoreActiveLayer(guildId);
         const checkNp = nowPlaying.get(guildId);
         // 確保原本的音樂播放器仍存在，且期間沒有被使用者切歌或停止
-        if (musicPlayer && checkNp && checkNp.player === musicPlayer) {
-          connection.subscribe(musicPlayer);
+        if (wasPlaying && checkNp && checkNp.player === musicPlayer) {
           musicPlayer.unpause();
         }
       };

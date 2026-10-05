@@ -20,7 +20,7 @@ const KEY_GIVEAWAY_PATTERN = /key giveaway/i;
 // Steam」混為一談而誤殺真正的限免遊戲。
 async function getFinalUrl(url) {
   try {
-    const res = await fetch(url, { method: 'HEAD', headers: { 'User-Agent': 'MouseBot/1.0' } });
+    const res = await fetch(url, { method: 'HEAD', headers: { 'User-Agent': 'MouseBot/1.0' }, signal: AbortSignal.timeout(8_000) });
     return { finalUrl: res.url, resolved: true };
   } catch (e) {
     logger.debug(LABEL, `HEAD 請求失敗，暫時無法解析網址: ${url} (${e.message})`);

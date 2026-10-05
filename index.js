@@ -1,7 +1,11 @@
 require('dotenv').config();
+// 必須最早安裝：之後載入的任何模組在載入期間丟出的錯誤也要被接住
+const processGuards = require('./utils/processGuards');
+processGuards.install();
 const { Client, GatewayIntentBits, REST, Routes, Collection, MessageFlags } = require('discord.js');
 const logger = require('./utils/logger');
 const bootSummary = require('./utils/bootSummary');
+const { OWNER_USER_IDS } = require('./utils/config');
 
 // ── 導入所有處理器 ─────────────────────────────────────────
 const { setupVoiceCommands }     = require('./handlers/voiceHandler');
@@ -24,6 +28,8 @@ const { setupLocalMusicEngine }  = require('./handlers/musicplayer/localMusicHan
 
 // ── 創建客戶端 ─────────────────────────────────────────────
 const client = new Client({
+  // 預設只允許 @使用者；擋掉 @everyone / @here / 身分組提及。
+  allowedMentions: { parse: ['users'] },
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
@@ -32,6 +38,13 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
   ]
 });
+
+// 致命錯誤（uncaughtException）時，先讓 Discord 連線正常關閉再結束程序
+processGuards.setFatalHook(() => client.destroy());
+
+if (OWNER_USER_IDS.size === 0) {
+  bootSummary.report('擁有者權限', 'warn', '未設定 OWNER_USER_ID：/ai mode、/response add|remove、/autojoin 變更頻道將無人可用');
+}
 
 // ── Slash Command 集合 ─────────────────────────────────────
 client.commands = new Collection();
@@ -132,14 +145,6 @@ client.once('clientReady', async () => {
 // ── 錯誤處理 ──────────────────────────────────────────────
 client.on('error', error => {
   console.error('❌ Discord 客戶端錯誤：', error);
-});
-
-process.on('unhandledRejection', error => {
-  console.error('❌ 未處理的 Promise 拒絕：', error);
-});
-
-process.on('uncaughtException', error => {
-  console.error('❌ 未捕捉的例外：', error);
 });
 
 // ── 登入 ──────────────────────────────────────────────────

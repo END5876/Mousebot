@@ -1,5 +1,7 @@
 'use strict';
 
+const { isOwner } = require('../../../utils/config');
+
 // 🌐 [service 拆分] 行程資料的讀取／寫入（resolveTrip、resolveTripById、
 // setUserActiveTrip、listTripChoices）已搬到 ./splitbillClient.js，透過 API
 // 呼叫獨立部署的 splitbill-service。這個檔案只保留「拿到 trip 物件之後」的
@@ -30,6 +32,19 @@ function wouldLeaveTripNonEmpty(trip, removeUserIds) {
   return trip.members.some((m) => !removeSet.has(m.id));
 }
 
+/**
+ * 判斷某使用者是否可以刪除指定行程。
+ *  - 行程有 ownerId（建立者）：只有建立者本人，或 Bot 擁有者（OWNER_USER_ID）
+ *  - 舊版行程沒有 ownerId（建立當時尚未記錄建立者）：無法得知誰是建立者，
+ *    為了不讓任何成員都能刪，只開放 Bot 擁有者
+ * 這只是 Bot 端的檢查；真正的防線應在 splitbill-service 的 DELETE 端點也驗證。
+ */
+function canDeleteTrip(trip, userId) {
+  if (!trip || !userId) return false;
+  if (isOwner(userId)) return true;
+  return !!trip.ownerId && trip.ownerId === userId;
+}
+
 function ensureMembersExist(trip, userIds) {
   const memberIds = new Set(trip.members.map((m) => m.id));
   const missing = userIds.filter((id) => !memberIds.has(id));
@@ -41,6 +56,7 @@ function ensureMembersExist(trip, userIds) {
 }
 
 module.exports = {
+  canDeleteTrip,
   memberDisplay,
   ensureMembersExist,
   isTripMember,
