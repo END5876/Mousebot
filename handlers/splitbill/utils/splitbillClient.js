@@ -42,13 +42,14 @@ function assertConfigured() {
   }
 }
 
-async function request(method, path, body) {
+async function request(method, path, body, extraHeaders) {
   assertConfigured();
   const res = await fetch(`${SERVICE_URL}/api${path}`, {
     method,
     headers: Object.assign(
       { 'Content-Type': 'application/json' },
-      SERVICE_KEY ? { 'x-api-key': SERVICE_KEY } : {}
+      SERVICE_KEY ? { 'x-api-key': SERVICE_KEY } : {},
+      extraHeaders || {}
     ),
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
@@ -159,8 +160,15 @@ async function saveTrip(guildId, tripId, trip, mergeFn) {
   throw new Error('儲存失敗：版本衝突且重試次數已用完，請重新操作一次。');
 }
 
-async function deleteTrip(guildId, tripId) {
-  return request('DELETE', `/trip/${encodeURIComponent(guildId)}/${encodeURIComponent(tripId)}`);
+// actorId：實際按下刪除的 Discord 使用者。service 會再獨立驗證一次
+// 「是否為建立者或 OWNER_USER_ID」，不只依賴 Bot 端的檢查。
+async function deleteTrip(guildId, tripId, actorId) {
+  return request(
+    'DELETE',
+    `/trip/${encodeURIComponent(guildId)}/${encodeURIComponent(tripId)}`,
+    undefined,
+    actorId ? { 'x-actor-id': String(actorId) } : undefined
+  );
 }
 
 module.exports = {

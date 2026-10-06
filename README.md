@@ -184,6 +184,7 @@ YOUTUBE_SESSION_ID=
 # ── 分帳系統（連到獨立部署的 splitbill-service，必填才能使用 /splitbill） ─────────
 SPLITBILL_SERVICE_URL=                    # 例如 http://<service-name>.internal:3000（內部網路位址）
 SPLITBILL_SERVICE_KEY=                    # 與 splitbill-service 的 SPLITBILL_API_KEY 相同的共用金鑰
+# 注意：splitbill-service 也要設定相同的 OWNER_USER_ID，否則 Bot 擁有者刪除他人行程時會被 service 拒絕
 ```
 
 ---
