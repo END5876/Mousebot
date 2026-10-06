@@ -26,15 +26,23 @@ ENV PATH="/opt/oww-env/bin:$PATH"
 COPY oww-server/requirements.txt /tmp/oww-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/oww-requirements.txt
 
-# ── 安裝額外工具 ─────────────────────────────────────────
-RUN pip install --no-cache-dir edge-tts yt-dlp
-
 # ── 驗證安裝 + 預先下載 OWW 內建資源模型 ────────────────
 RUN python3 -c "import openwakeword; print('OWW OK')" && \
     python3 -c "import flask; print('Flask OK')" && \
     python3 -c "import websockets; print('Websockets OK')" && \
     ffmpeg -version | head -1 && \
     python3 -c "from openwakeword.utils import download_models; download_models(); print('OWW models OK')"
+
+# ── 安裝額外工具（edge-tts / yt-dlp 每次有新版就重新安裝）──
+# 放在 OWW 模型下載之後：快取失效時不必重新下載模型。
+# ADD 會檢查 PyPI JSON 是否變動；套件發新版時，下面的 RUN 快取就會失效，
+# 重新建置時因此能拿到當下最新版。
+ADD https://pypi.org/pypi/edge-tts/json /tmp/edge-tts-latest.json
+ADD https://pypi.org/pypi/yt-dlp/json /tmp/yt-dlp-latest.json
+RUN pip install --no-cache-dir -U edge-tts yt-dlp && \
+    echo "yt-dlp version: $(yt-dlp --version)" && \
+    pip show edge-tts | grep -E "^(Name|Version)" && \
+    rm -f /tmp/edge-tts-latest.json /tmp/yt-dlp-latest.json
 
 # ── 工作目錄 ────────────────────────────────────────────
 WORKDIR /app
