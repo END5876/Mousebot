@@ -154,7 +154,7 @@ module.exports = {
       // 🌐 [service 拆分] 清 defaultTripId／activeTripByUser 殘影、廣播
       // trip-deleted SSE 事件，全部收斂進 splitbill-service 的
       // DELETE /api/trip/:guildId/:tripId 端點內部處理，這裡不需要再自己做。
-      await splitbillClient.deleteTrip(guildId, trip.id);
+      await splitbillClient.deleteTrip(guildId, trip.id, user.id);
 
       return showMainMenu(interaction, `✅ 已徹底銷毀行程 \`${trip.name}\` 及其所有檔案。`);
     }
