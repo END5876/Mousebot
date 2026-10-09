@@ -542,15 +542,18 @@ async function setupOnlineMusicEngine() {
   antiBot.initCookies();
   cache.ensureCacheDir();
 
-  const [ytdlpOk, ffmpegOk] = await Promise.all([checkYtDlp(), checkFFmpeg()]);
+  const [ytdlpOk, ffmpegOk, potVersion] = await Promise.all([
+    checkYtDlp(), checkFFmpeg(), antiBot.checkPotProvider(),
+  ]);
 
   if (ytdlpOk && ffmpegOk) {
     const { bilibili, youtube, poToken } = antiBot.getCookieStatus();
     const cookieBits = [
       `Bilibili ${bilibili ? '✓' : '✗'}`,
       `YouTube ${youtube ? '✓' : '✗（無帳號模式）'}`,
-      `PO Token ${poToken ? '✓' : '✗'}`,
+      `PO Token ${potVersion ? `✓（bgutil ${potVersion}）` : poToken ? '✓（手動）' : '✗'}`,
     ].join('、');
+    if (!potVersion) logger.warn('OnlineMusic', 'bgutil PO Token 伺服器無回應，YouTube 較容易被判定為機器人');
     bootSummary.report('線上音樂 (YouTube/Bilibili)', 'ok', `yt-dlp + FFmpeg 就緒｜${cookieBits}`);
     logger.debug('OnlineMusic', `快取資料夾: ${cache.CACHE_DIR}（上限 ${cache.MAX_CACHE_SIZE_MB} MB）`);
   } else {
