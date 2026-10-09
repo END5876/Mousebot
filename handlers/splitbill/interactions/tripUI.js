@@ -28,7 +28,7 @@ async function renderTripNav(interaction, alertMsg = null) {
   const embed = new EmbedBuilder()
     .setColor(0xe74c3c)
     .setTitle('🧳 行程與外幣設定')
-    .setDescription(`你目前的作用行程：${activeName}\n*(每人各自獨立，切換行程不會影響其他成員看到的行程)*\n\n請直接由下方選單切換行程，或使用按鈕建立/刪除行程、新增幣別匯率。`);
+    .setDescription(`你目前的作用行程：${activeName}\n*(每人各自獨立，切換行程不會影響其他成員看到的行程)*\n\n請直接由下方選單切換行程，或使用按鈕建立/刪除行程、新增幣別匯率。\n\n🌐 在網頁上建立的行程，可以在網頁產生綁定碼後用 \`/splitbill-attach\` 綁定到這個伺服器。`);
 
   if (trip) {
     const rateLines = Object.entries(trip.rates)
@@ -175,26 +175,24 @@ module.exports = {
         }
       }
 
-      const newTripId = `trip_${Date.now().toString(36)}`;
-      // 🌐 [service 拆分] 預設欄位（expenses/deposits/shareLinks/archived/
-      // createdAt...）交給 splitbill-service 的 PUT 端點內部
-      // storage.repairTrip() 補齊，這裡只送這個行程真正「有意義」的欄位。
-      // 「若伺服器還沒有預設行程就把這筆設為預設」也一併搬到同一個 PUT
-      // 端點的建立分支裡處理，理由相同：那裡才拿得到 guild 的最新狀態。
-      const newTrip = {
-        id: newTripId,
+      if (!/^[A-Z]{2,6}$/.test(baseCur)) {
+        return interaction.reply({ content: '⚠️ 基準幣別格式錯誤，請輸入 2~6 個英文字母（例如：TWD）。', flags: MessageFlags.Ephemeral });
+      }
+
+      // 🆕 [行程獨立化] 由 service 產生 tripId、補齊預設欄位：建立者＝自己（只有
+      // 建立者與 Bot 擁有者可以刪除），同時成為第一位已連結的成員，並直接綁在
+      // 這個伺服器；伺服器還沒有預設行程時順便設成預設。
+      const memberName = (interaction.member && interaction.member.displayName)
+        || interaction.user.globalName || interaction.user.username;
+      const newTrip = await splitbillClient.createTrip(guildId, {
         name,
         baseCurrency: baseCur,
         rates: autoRates,
-        members: [{ id: interaction.user.id, name: interaction.user.globalName || interaction.user.username }],
-        // 行程建立者：只有建立者（與 Bot 擁有者）可以刪除這個行程
-        ownerId: interaction.user.id,
-      };
-
-      await splitbillClient.saveTrip(guildId, newTripId, newTrip);
+        memberName,
+      }, interaction.user.id);
       // 🔒 [修正：切換行程影響全體] 新行程只切換「建立者自己」的作用行程，
       // 不會動到伺服器裡其他人正在使用的行程。
-      await splitbillClient.setUserActiveTrip(guildId, interaction.user.id, newTripId);
+      await splitbillClient.setUserActiveTrip(guildId, interaction.user.id, newTrip.id);
 
       return showMainMenu(interaction, `🎉 成功創立新行程！\n**名稱**：${name}\n**本位幣別**：${baseCur}\n已自動帶入常用多國匯率，並切換為你的作用行程！`);
     }
@@ -249,7 +247,7 @@ module.exports = {
       }
 
       trip.rates[currency] = rate;
-      await splitbillClient.saveTrip(guildId, trip.id, trip);
+      await splitbillClient.saveTrip(guildId, trip.id, trip, { actorId: interaction.user.id });
 
       return renderTripNav(interaction, `✅ 已新增幣別 \`${currency}\`！匯率：1 ${currency} = ${rate} ${trip.baseCurrency}（${rateSource}），現在記帳/收訂金時就能選用這個幣別了。`);
     }

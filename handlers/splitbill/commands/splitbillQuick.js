@@ -2,7 +2,7 @@
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const splitbillClient = require('../utils/splitbillClient');
-const { memberDisplay, ensureMembersExist, isTripMember } = require('../utils/tripHelper');
+const { memberDisplay, isTripMember, toMemberIds } = require('../utils/tripHelper');
 const { equalSplit, fetchRealTimeRate, round2 } = require('../utils/calculator');
 const { parsePayerField, parseSplitField } = require('../utils/parse');
 
@@ -46,7 +46,7 @@ module.exports = {
     // 🔒 只有行程內的成員才能對此行程記帳，避免非相關人士誤操作或惡意灌帳
     if (!isTripMember(trip, user.id)) {
       return interaction.reply({
-        content: `❌ 你不是行程「${trip.name}」的成員，無法對此行程記帳。請先請行程內的成員從 \`/splitbill\` 面板「👥 成員管理 → ➕ 新增成員」把你加入。`,
+        content: `❌ 你不是行程「${trip.name}」的成員（或你的 Discord 帳號尚未連結到行程裡的成員），無法對此行程記帳。請行程內的成員從 \`/splitbill\` 面板「👥 成員管理」把你加入或連結。`,
         flags: MessageFlags.Ephemeral
       });
     }
@@ -73,34 +73,38 @@ module.exports = {
 
     try {
       // 1. 解析代墊人：優先採用 multi_payers 的文字語法，否則用 payer 選項（預設為指令發起人）
+      // 🆕 [行程獨立化] @提及／使用者選項拿到的是 Discord 使用者 ID，寫進帳目前一律
+      // 換成行程內的成員 ID（toMemberIds 會擋下沒有連結到這個行程的人）。
       let payers;
       if (multiPayersText) {
         payers = parsePayerField(multiPayersText, amount);
-        ensureMembersExist(trip, payers.map(p => p.userId));
+        const payerMemberIds = toMemberIds(trip, payers.map(p => p.userId));
+        payers = payers.map((p, i) => ({ userId: payerMemberIds[i], amount: p.amount }));
         const payerSum = round2(payers.reduce((s, p) => s + p.amount, 0));
         if (Math.abs(payerSum - amount) > 0.01) {
           throw new Error(`multi_payers 金額加總 (${payerSum}) 與總花費 (${amount}) 不相符，差額 ${round2(Math.abs(payerSum - amount))}`);
         }
       } else {
-        const payerId = payerUser ? payerUser.id : user.id;
-        ensureMembersExist(trip, [payerId]);
+        const payerDiscordId = payerUser ? payerUser.id : user.id;
+        const [payerId] = toMemberIds(trip, [payerDiscordId]);
         payers = [{ userId: payerId, amount }];
       }
 
-      // 2. 解析分攤方式：預設 equal（全體平分）
+      // 2. 解析分攤方式：預設 equal（全體平分，包含尚未連結 Discord 的成員）
       const allMemberIds = trip.members.map(m => m.id);
       const splitInfo = parseSplitField(splitText, allMemberIds);
-      ensureMembersExist(trip, splitInfo.ids);
+      const isAllMembers = splitInfo.ids === allMemberIds; // 沒有 @提及，本來就是成員 ID
 
       let shares;
       if (splitInfo.mode === 'equal') {
-        shares = equalSplit(amount, splitInfo.ids);
+        shares = equalSplit(amount, isAllMembers ? allMemberIds : toMemberIds(trip, splitInfo.ids));
       } else {
         const shareSum = round2(splitInfo.customShares.reduce((s, p) => s + p.amount, 0));
         if (Math.abs(shareSum - amount) > 0.01) {
           throw new Error(`split 自訂金額加總 (${shareSum}) 與總花費 (${amount}) 不相符，差額 ${round2(Math.abs(shareSum - amount))}`);
         }
-        shares = splitInfo.customShares.map(p => ({ userId: p.userId, share: p.amount }));
+        const shareMemberIds = toMemberIds(trip, splitInfo.customShares.map(p => p.userId));
+        shares = splitInfo.customShares.map((p, i) => ({ userId: shareMemberIds[i], share: p.amount }));
       }
 
       // 3. 匯率：非本位幣時嘗試即時匯率，抓不到就退回行程預設匯率
@@ -137,7 +141,7 @@ module.exports = {
       };
 
       trip.expenses.push(newExpense);
-      await splitbillClient.saveTrip(guildId, trip.id, trip);
+      await splitbillClient.saveTrip(guildId, trip.id, trip, { actorId: interaction.user.id });
 
       const payerText = payers.map(p => `${memberDisplay(trip, p.userId)}(${p.amount})`).join('、');
       const participantText = newExpense.participants.map(s => `${memberDisplay(trip, s.userId)}(${s.amount})`).join('、');
