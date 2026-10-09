@@ -1,4 +1,21 @@
+# bgutil PO Token Provider：伺服器與 yt-dlp plugin 版本需一致
+ARG BGUTIL_VERSION=2.0.2
+
+# ── 建置 bgutil PO Token Provider HTTP 伺服器（git / devDependencies 只留在這個 stage）──
+FROM node:22-slim AS bgutil-build
+ARG BGUTIL_VERSION
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 --single-branch --branch ${BGUTIL_VERSION} \
+        https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git /tmp/bgutil && \
+    cd /tmp/bgutil/server && \
+    npm ci --no-audit --no-fund && \
+    npx tsc && \
+    npm prune --omit=dev && \
+    mkdir -p /opt/bgutil && cp -r build node_modules package.json /opt/bgutil/
+
 FROM node:22-slim
+ARG BGUTIL_VERSION
 
 # ── 系統依賴 ────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -39,10 +56,15 @@ RUN python3 -c "import openwakeword; print('OWW OK')" && \
 # 重新建置時因此能拿到當下最新版。
 ADD https://pypi.org/pypi/edge-tts/json /tmp/edge-tts-latest.json
 ADD https://pypi.org/pypi/yt-dlp/json /tmp/yt-dlp-latest.json
-RUN pip install --no-cache-dir -U edge-tts yt-dlp && \
+# yt-dlp[default] 內含 yt-dlp-ejs（YouTube JS challenge 解題腳本）；
+# bgutil-ytdlp-pot-provider 是 PO Token plugin，會向下方 supervisord 跑的 HTTP 伺服器索取 token。
+RUN pip install --no-cache-dir -U edge-tts "yt-dlp[default]" "bgutil-ytdlp-pot-provider==${BGUTIL_VERSION}" && \
     echo "yt-dlp version: $(yt-dlp --version)" && \
     pip show edge-tts | grep -E "^(Name|Version)" && \
     rm -f /tmp/edge-tts-latest.json /tmp/yt-dlp-latest.json
+
+# ── bgutil PO Token Provider 伺服器（預設只監聽 127.0.0.1:4416，不對外開放）──
+COPY --from=bgutil-build /opt/bgutil /opt/bgutil
 
 # ── 工作目錄 ────────────────────────────────────────────
 WORKDIR /app
@@ -54,6 +76,21 @@ nodaemon=true\n\
 logfile=/dev/stdout\n\
 logfile_maxbytes=0\n\
 loglevel=info\n\
+\n\
+[program:bgutil-pot]\n\
+command=node /opt/bgutil/build/main.js\n\
+directory=/opt/bgutil\n\
+autostart=true\n\
+autorestart=true\n\
+startretries=5\n\
+startsecs=3\n\
+priority=1\n\
+user=bot\n\
+environment=HOME="/home/bot",USER="bot"\n\
+stdout_logfile=/dev/stdout\n\
+stdout_logfile_maxbytes=0\n\
+stderr_logfile=/dev/stderr\n\
+stderr_logfile_maxbytes=0\n\
 \n\
 [program:oww-server]\n\
 command=/opt/oww-env/bin/python3 /app/oww-server/server.py\n\

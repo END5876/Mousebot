@@ -55,6 +55,12 @@ const YOUTUBE_HEADERS = {
 
 const YT_PO_TOKEN = process.env.YOUTUBE_PO_TOKEN || null;
 
+// ── bgutil PO Token Provider（HTTP 伺服器）────────────────
+// Docker image 內由 supervisord 在 127.0.0.1:4416 啟動，plugin 預設就會找這個位址；
+// 只有伺服器跑在別處（例如獨立容器）時才需要設定 YT_POT_PROVIDER_URL。
+const YT_POT_PROVIDER_DEFAULT_URL = 'http://127.0.0.1:4416';
+const YT_POT_PROVIDER_URL = (process.env.YT_POT_PROVIDER_URL || '').replace(/\/+$/, '') || null;
+
 // ── YouTube player_client 優先順序策略 ───────────────────
 const YT_CLIENT_STRATEGIES = [
   {
@@ -67,7 +73,7 @@ const YT_CLIENT_STRATEGIES = [
     name    : 'mweb+po',
     args    : ['--extractor-args', 'youtube:player_client=default,mweb'],
     needsPO : true,
-    desc    : 'mweb client（需要 PO Token）',
+    desc    : 'mweb client（需要 PO Token，由 bgutil provider 自動產生）',
   },
   {
     name    : 'tv',
@@ -165,6 +171,29 @@ function _appendCookieArgs(args, cookiesFile, cookieHeader) {
   }
 }
 
+function _appendPotProviderArgs(args) {
+  if (YT_POT_PROVIDER_URL) {
+    args.push('--extractor-args', `youtubepot-bgutilhttp:base_url=${YT_POT_PROVIDER_URL}`);
+  }
+}
+
+// 確認 bgutil PO Token 伺服器是否可用；回傳伺服器版本，連不上則回傳 null
+async function checkPotProvider({ retries = 5, delayMs = 1000 } = {}) {
+  const url = `${YT_POT_PROVIDER_URL || YT_POT_PROVIDER_DEFAULT_URL}/ping`;
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
+      if (res.ok) {
+        const body = await res.json().catch(() => ({}));
+        return body.version || 'unknown';
+      }
+    } catch {}
+    // supervisord 與 Bot 同時啟動，伺服器可能還沒 listen，稍等再試
+    if (i < retries - 1) await new Promise(r => setTimeout(r, delayMs));
+  }
+  return null;
+}
+
 function getYtClientStrategy(guildId) {
   const idx = ytClientIndex.get(guildId) || 0;
   return { strategy: YT_CLIENT_STRATEGIES[idx], idx };
@@ -203,6 +232,7 @@ function buildYouTubeArgs(url, strategy, streamMode = true) {
 
   args.push('--no-playlist', '--no-warnings');
   args.push(...strategy.args);
+  _appendPotProviderArgs(args);
 
   if (strategy.needsPO && YT_PO_TOKEN) {
     args.push('--extractor-args', `youtube:po_token=mweb.gvs+${YT_PO_TOKEN}`);
@@ -305,6 +335,7 @@ function buildYouTubeSearchArgs() {
   }
 
   _appendCookieArgs(args, YT_COOKIES_FILE, YT_COOKIE_HEADER);
+  _appendPotProviderArgs(args);
 
   args.push(
     '--user-agent',   YOUTUBE_HEADERS['User-Agent'],
@@ -326,6 +357,7 @@ function buildInfoArgs(url) {
 
     const strategy = YT_CLIENT_STRATEGIES.find(s => s.name === 'default') || YT_CLIENT_STRATEGIES[0];
     base.push(...strategy.args);
+    _appendPotProviderArgs(base);
 
     if (strategy.name !== 'tv_simply') {
       _appendCookieArgs(base, YT_COOKIES_FILE, YT_COOKIE_HEADER);
@@ -362,6 +394,7 @@ function buildPlaylistCheckArgs(url) {
 
     const strategy = YT_CLIENT_STRATEGIES.find(s => s.name === 'default') || YT_CLIENT_STRATEGIES[0];
     base.push(...strategy.args);
+    _appendPotProviderArgs(base);
 
     if (strategy.name !== 'tv_simply') {
       _appendCookieArgs(base, YT_COOKIES_FILE, YT_COOKIE_HEADER);
@@ -427,6 +460,7 @@ module.exports = {
   buildPlaylistCheckArgs,
   classifyBilibiliError,
   buildInfoArgs,
+  checkPotProvider,
   getCookieStatus: () => ({
     bilibili : BILIBILI_COOKIES_FILE || BILIBILI_COOKIE_HEADER,
     youtube  : YT_COOKIES_FILE       || YT_COOKIE_HEADER,

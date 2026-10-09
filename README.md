@@ -177,7 +177,8 @@ BILIBILI_SESSDATA=
 BILIBILI_BILI_JCT=
 BILIBILI_DEDEUSERID=
 # YouTube 認證
-YOUTUBE_PO_TOKEN=
+YOUTUBE_PO_TOKEN=                         # 手動 PO Token（已由 bgutil provider 自動產生取代，通常留空）
+YT_POT_PROVIDER_URL=                      # bgutil PO Token 伺服器位址；Docker image 內建於 127.0.0.1:4416，留空即可
 YOUTUBE_VISITOR_INFO=
 YOUTUBE_SESSION_ID=
 
