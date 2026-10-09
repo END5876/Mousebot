@@ -5,6 +5,7 @@ const splitbillClient = require('../utils/splitbillClient');
 const { calcNetBalances, calcNetBalancesByCurrency, listTransfersByMember, getUsedCurrencies, convertNetToSingleCurrency, round2 } = require('../utils/calculator');
 const { simplifyDebts } = require('../utils/settlement');
 const { showMainMenu } = require('../commands/splitbill');
+const { memberMention } = require('../utils/tripHelper');
 
 /**
  * 🆕【收支帳模式 v3】每人淨額明細呈現
@@ -55,7 +56,7 @@ function formatTransferLines(transfers, trip) {
     // 🆕 備註改成獨立一行並縮排，而不是接在同一行尾端——手機寬度不夠時，
     // 原本接在句尾的備註很容易把整行撐到很晚才換行，閱讀起來斷得很突兀。
     const noteText = t.note ? `\n　　📝 ${t.note}` : '';
-    return `${arrow} <@${t.counterpartId}>：${amountText}${baseText}${noteText}`;
+    return `${arrow} ${memberMention(trip, t.counterpartId)}：${amountText}${baseText}${noteText}`;
   });
 }
 
@@ -145,7 +146,7 @@ module.exports = {
       const renderMember = ({ m, val }) => {
         const statusIcon = val > 0 ? '🟢' : '🔴';
         const actionText = val > 0 ? '需收回' : '需付款';
-        const titleLine = `**${statusIcon} <@${m.id}> ${actionText} ${round2(Math.abs(val))} ${trip.baseCurrency}**`;
+        const titleLine = `**${statusIcon} ${memberMention(trip, m.id)} ${actionText} ${round2(Math.abs(val))} ${trip.baseCurrency}**`;
 
         const sections = formatExpenseSections(netByCurrency[m.id], trip);
         const transferLines = formatTransferLines(transfersByMember[m.id], trip);
@@ -161,7 +162,7 @@ module.exports = {
         sections.push(`**🟢 需要收款**\n\n${receiving.map(renderMember).join('\n\n')}`);
       }
       if (settled.length) {
-        sections.push(`**⚪ 已結清**\n${settled.map(m => `<@${m.id}>`).join('、')} 帳目兩清，無需收付`);
+        sections.push(`**⚪ 已結清**\n${settled.map(m => memberMention(trip, m.id)).join('、')} 帳目兩清，無需收付`);
       }
 
       const tip = '\n\n💡 以上金額已依記帳當下匯率換算成 TWD，方便對帳。想知道誰該轉給誰？可以到「建議轉帳清單」查看最省事的匯款方案。';
@@ -194,7 +195,7 @@ module.exports = {
         embed.setDescription('🎉 讚啦！當前所有人帳目皆完全兩清，無須進行任何轉帳！');
       } else {
         const lines = transactions.map((t, idx) =>
-          `**${idx + 1}.** <@${t.from}> ➡️ <@${t.to}>：**${round2(t.amount)} ${trip.baseCurrency}**`
+          `**${idx + 1}.** ${memberMention(trip, t.from)} ➡️ ${memberMention(trip, t.to)}：**${round2(t.amount)} ${trip.baseCurrency}**`
         ).join('\n');
         embed.setDescription(lines);
       }
@@ -263,7 +264,7 @@ module.exports = {
         .setDescription(
           (rateLines ? `**採用即時匯率：**\n${rateLines}\n\n` : '') +
           (transactions.length
-            ? `**最精簡轉帳路線：**\n${transactions.map((t, idx) => `${idx + 1}. <@${t.from}> ➡️ <@${t.to}>：**${t.amount} ${targetCurrency}**`).join('\n')}`
+            ? `**最精簡轉帳路線：**\n${transactions.map((t, idx) => `${idx + 1}. ${memberMention(trip, t.from)} ➡️ ${memberMention(trip, t.to)}：**${t.amount} ${targetCurrency}**`).join('\n')}`
             : '🎉 讚啦！換算後所有人帳目皆完全兩清，無須進行任何轉帳！') +
           (failedCurrencies.length ? `\n\n⚠️ 以下幣別即時匯率抓取失敗，已從換算結果中忽略：${failedCurrencies.join('、')}` : '')
         );

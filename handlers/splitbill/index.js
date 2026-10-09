@@ -4,6 +4,7 @@ const { MessageFlags } = require('discord.js');
 const bootSummary = require('../../utils/bootSummary');
 const splitbillCmd = require('./commands/splitbill');
 const splitbillQuickCmd = require('./commands/splitbillQuick');
+const splitbillAttachCmd = require('./commands/splitbillAttach');
 const expenseUI = require('./interactions/expenseUI');
 const memberUI = require('./interactions/memberUI');
 const settleUI = require('./interactions/settleUI');
@@ -90,7 +91,7 @@ async function enforceTripPermission(interaction) {
   if (!targetTrip) return true;
 
   if (!isTripMember(targetTrip, user.id)) {
-    const msg = `❌ 你不是行程「${targetTrip.name}」的成員，無法操作此行程。請先請行程內的成員從「👥 成員管理 → ➕ 新增成員」把你加入。`;
+    const msg = `❌ 你不是行程「${targetTrip.name}」的成員（或你的 Discord 帳號尚未連結到行程裡的成員），無法操作此行程。請行程內的成員從「👥 成員管理」把你加入，或用「🔗 連結 Discord 帳號」把你連結到既有的成員。`;
     if (interaction.replied || interaction.deferred) {
       await interaction.followUp({ content: msg, flags: MessageFlags.Ephemeral });
     } else {
@@ -113,6 +114,7 @@ function setupSplitbillCommands(client) {
   // 註冊面板進入點指令，以及給熟手用的免面板快速記帳指令
   client.commands.set(splitbillCmd.data.name, splitbillCmd);
   client.commands.set(splitbillQuickCmd.data.name, splitbillQuickCmd);
+  client.commands.set(splitbillAttachCmd.data.name, splitbillAttachCmd);
 
   // 攔截所有元件互動事件
   client.on('interactionCreate', async (interaction) => {
@@ -137,9 +139,9 @@ function setupSplitbillCommands(client) {
   });
 
   if (splitbillClient.isConfigured()) {
-    bootSummary.report('分帳系統 (/splitbill, /splitbill-quick)', 'ok', '資料來自獨立的 splitbill-service（SPLITBILL_SERVICE_URL）');
+    bootSummary.report('分帳系統 (/splitbill, /splitbill-quick, /splitbill-attach)', 'ok', '資料來自獨立的 splitbill-service（SPLITBILL_SERVICE_URL）');
   } else {
-    bootSummary.report('分帳系統 (/splitbill, /splitbill-quick)', 'off', '未設定 SPLITBILL_SERVICE_URL，分帳指令將無法使用');
+    bootSummary.report('分帳系統 (/splitbill, /splitbill-quick, /splitbill-attach)', 'off', '未設定 SPLITBILL_SERVICE_URL，分帳指令將無法使用');
   }
 }
 

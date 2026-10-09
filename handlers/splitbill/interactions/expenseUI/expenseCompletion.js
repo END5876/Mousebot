@@ -7,9 +7,10 @@ const splitbillClient = require('../../utils/splitbillClient');
 const { equalSplit } = require('../../utils/calculator');
 const { showMainMenu } = require('../../commands/splitbill');
 const { formatAmountConversion } = require('./helpers');
+const { memberMention } = require('../../utils/tripHelper');
 
-function renderSplitMethodUI(interaction, state) {
-  const payerMentions = state.payers.map(p => `<@${p.userId}>(${p.amount})`).join(', ');
+function renderSplitMethodUI(interaction, state, trip) {
+  const payerMentions = state.payers.map(p => `${memberMention(trip, p.userId)}(${p.amount})`).join(', ');
   const embed = new EmbedBuilder()
     .setColor(0xe67e22)
     .setTitle('⚖️ 步驟 3/3：選擇分攤方式')
@@ -53,10 +54,10 @@ async function completeExpenseLogging(interaction, trip, state, participantIds, 
     };
 
     trip.expenses.push(newExpense);
-    await splitbillClient.saveTrip(interaction.guildId, trip.id, trip);
+    await splitbillClient.saveTrip(interaction.guildId, trip.id, trip, { actorId: interaction.user.id });
     cache.delete(interaction.guildId, interaction.user.id);
 
-    const payerText = newExpense.payers.map(p => `<@${p.userId}>`).join(', ');
+    const payerText = newExpense.payers.map(p => memberMention(trip, p.userId)).join(', ');
     const amountText = formatAmountConversion(newExpense.amount, newExpense.currency, amountInBase, trip.baseCurrency);
     const msg = `✅ **記帳成功！** 項目：${newExpense.description} | 金額：${amountText} | 代墊：${payerText}`;
     
@@ -90,11 +91,11 @@ async function completeExpenseLogging(interaction, trip, state, participantIds, 
       };
 
       trip.expenses.push(newExpense);
-      await splitbillClient.saveTrip(interaction.guildId, trip.id, trip);
+      await splitbillClient.saveTrip(interaction.guildId, trip.id, trip, { actorId: interaction.user.id });
       cache.delete(interaction.guildId, interaction.user.id);
 
-      const payerText = newExpense.payers.map(p => `<@${p.userId}>`).join(', ');
-      const shareText = shares.map(s => `<@${s.userId}>(${s.share})`).join('、');
+      const payerText = newExpense.payers.map(p => memberMention(trip, p.userId)).join(', ');
+      const shareText = shares.map(s => `${memberMention(trip, s.userId)}(${s.share})`).join('、');
       const amountText = formatAmountConversion(newExpense.amount, newExpense.currency, amountInBase, trip.baseCurrency);
       const msg = `✅ **記帳成功（自訂分攤）！** 項目：${newExpense.description} | 金額：${amountText}\n代墊：${payerText}\n各自應付：${shareText}`;
       

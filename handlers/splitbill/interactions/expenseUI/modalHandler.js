@@ -10,6 +10,7 @@ const { addDeposit } = require('../../utils/deposit');
 const { showMainMenu } = require('../../commands/splitbill');
 const { parseScanItemSuffix, scanItemCacheUserId, buildScanResultView } = require('./billScan');
 const { renderSplitMethodUI, completeExpenseLoggingWithShares } = require('./expenseCompletion');
+const { memberMention } = require('../../utils/tripHelper');
 
 async function handleModal(interaction, cache) {
     if (interaction.customId.startsWith('exp_modal_scan_custom_currency')) {
@@ -62,7 +63,7 @@ async function handleModal(interaction, cache) {
         }
 
         trip.rates[currency] = rate;
-        await splitbillClient.saveTrip(guildId, trip.id, trip);
+        await splitbillClient.saveTrip(guildId, trip.id, trip, { actorId: interaction.user.id });
         rateNote = `（已新增為此行程幣別，匯率 1 ${currency} = ${rate} ${trip.baseCurrency}，${rateSource}）`;
       }
 
@@ -124,11 +125,11 @@ async function handleModal(interaction, cache) {
           totalAmount += amount;
         }
         
-        await splitbillClient.saveTrip(guildId, trip.id, trip);
+        await splitbillClient.saveTrip(guildId, trip.id, trip, { actorId: interaction.user.id });
         cache.delete(guildId, user.id);
 
-        const payerMentions = depositsAdded.map(d => `<@${d.payerId}>(${d.amount})`).join('、');
-        const msg = `✅ **預收款紀錄成功！** <@${state.depositCollectorId}> 共收了 ${totalAmount} ${state.depositCurrency}。\n付款人：${payerMentions}\n備註：${note}`;
+        const payerMentions = depositsAdded.map(d => `${memberMention(trip, d.payerId)}(${d.amount})`).join('、');
+        const msg = `✅ **預收款紀錄成功！** ${memberMention(trip, state.depositCollectorId)} 共收了 ${totalAmount} ${state.depositCurrency}。\n付款人：${payerMentions}\n備註：${note}`;
         
         return showMainMenu(interaction, msg);
       } catch (err) {
@@ -250,7 +251,9 @@ async function handleModal(interaction, cache) {
       state.payers = payers;
       delete state.tempPayerIds;
 
-      return renderSplitMethodUI(interaction, state);
+      // 只用來顯示代墊者名字（已連結的 @、未連結的顯示純文字），不寫入任何資料
+      const trip = await splitbillClient.resolveTripById(guildId, state.tripId);
+      return renderSplitMethodUI(interaction, state, trip);
     }
 
     if (interaction.customId === 'exp_modal_custom_split') {

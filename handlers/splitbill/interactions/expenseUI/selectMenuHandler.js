@@ -173,7 +173,7 @@ async function handleSelectMenu(interaction, cache) {
 
       if (payerIds.length === 1) {
         state.payers = [{ userId: payerIds[0], amount: state.amount }];
-        return renderSplitMethodUI(interaction, state);
+        return renderSplitMethodUI(interaction, state, trip);
       } else {
         state.tempPayerIds = payerIds; 
         const modal = new ModalBuilder().setCustomId('exp_modal_multi_payer').setTitle(`輸入多人代墊金額 (總計: ${state.amount})`);
