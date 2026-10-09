@@ -1,14 +1,17 @@
-const { SlashCommandBuilder, MessageFlags, PermissionFlagsBits } = require('discord.js');
+const {
+    SlashCommandBuilder, MessageFlags, PermissionFlagsBits,
+    ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder,
+} = require('discord.js');
 const {
     selectMode,
     getModeName,
     setUserMode,
     getUserModeOverride,
-    AVAILABLE_MODES,
+    getAvailableModes,
 } = require('./modeSelector');
+const promptStore = require('./promptStore');
 
 const {
-    MODE_MAP,
     getUserMode,
     getGeminiResponse,
     getGeminiResponseVoice,
@@ -91,6 +94,23 @@ const aiCommand = {
                     opt.setName('mode')
                         .setDescription('模式名稱（不填則重置為預設）')
                         .setRequired(false)
+                        .setAutocomplete(true)
+                )
+        )
+
+        // ── /ai prompt edit（子指令群組，僅限擁有者） ──
+        .addSubcommandGroup(group =>
+            group.setName('prompt')
+                .setDescription('管理 AI 模式的 system prompt（僅限擁有者）')
+                .addSubcommand(sub =>
+                    sub.setName('edit')
+                        .setDescription('編輯指定模式的 prompt，輸入不存在的代號則新增模式')
+                        .addStringOption(opt =>
+                            opt.setName('mode')
+                                .setDescription('模式代號（_general / _voice 為共用規則）')
+                                .setRequired(true)
+                                .setAutocomplete(true)
+                        )
                 )
         )
 
@@ -135,6 +155,9 @@ const aiCommand = {
         if (group === 'chance') {
             return handleChanceSet(interaction);
         }
+        if (group === 'prompt') {
+            return handlePromptEdit(interaction);
+        }
 
         switch (sub) {
             case 'ask':   return handleAsk(interaction);
@@ -143,7 +166,26 @@ const aiCommand = {
             case 'mode':  return handleMode(interaction);
             case 'gugu':  return handleGugu(interaction);
         }
-    }
+    },
+
+    // /ai mode 與 /ai prompt edit 的模式代號自動完成
+    async autocomplete(interaction) {
+        const focused = interaction.options.getFocused().toLowerCase();
+        const group   = interaction.options.getSubcommandGroup(false);
+
+        const choices = getAvailableModes().map(key => ({ name: `${key}（${getModeName(key)}）`, value: key }));
+        if (group === 'prompt') {
+            if (!isOwner(interaction.user.id)) return interaction.respond([]);
+            choices.push(
+                { name: '_general（全局回覆規則）', value: '_general' },
+                { name: '_voice（語音回覆規則）',   value: '_voice' },
+            );
+        }
+
+        await interaction.respond(
+            choices.filter(c => c.name.toLowerCase().includes(focused)).slice(0, 25)
+        );
+    },
 };
 
 // ── /ai ask ──────────────────────────────────────────────
@@ -208,7 +250,7 @@ async function handleClear(interaction) {
     const userId = interaction.user.id;
     const mode = selectMode(userId, '');
     clearUserMemory(userId);
-    await interaction.reply({ content: MODE_MAP[mode].getClearMemoryMessage() });
+    await interaction.reply({ content: promptStore.getMode(mode)?.clearMemoryMessage ?? '🧠 已清除你的對話記憶。' });
 }
 
 // ── /ai tts ──────────────────────────────────────────────
@@ -252,7 +294,7 @@ async function handleMode(interaction) {
         });
     }
 
-    const matched = AVAILABLE_MODES.find(m => m.toLowerCase() === selected);
+    const matched = getAvailableModes().find(m => m.toLowerCase() === selected);
     if (!matched) {
         return interaction.reply({
             content: `❌ 無效的模式名稱：\`${selected}\``,
@@ -265,6 +307,110 @@ async function handleMode(interaction) {
         content: `✅ 已將 **${targetUser.username}** 的 AI 模式設為：**${getModeName(matched)}**`,
         flags: MessageFlags.Ephemeral,
     });
+}
+
+// ── /ai prompt edit（僅限 OWNER_USER_ID） ────────────────
+// 以 Modal 編輯 data/prompts/ 底下的檔案，存檔後立即生效（promptStore 會重新載入）。
+// Discord TextInput 上限 4000 字，超過的 prompt 請直接改檔案。
+const PROMPT_MODAL_MAX        = 4000;
+const PROMPT_MODAL_TIMEOUT_MS = 15 * 60 * 1000;
+
+async function handlePromptEdit(interaction) {
+    if (!isOwner(interaction.user.id)) {
+        return interaction.reply({
+            content: '❌ 你沒有權限使用此指令。',
+            flags: MessageFlags.Ephemeral,
+        });
+    }
+
+    const target   = interaction.options.getString('mode').trim();
+    const isShared = promptStore.SHARED_KEYS.includes(target);
+
+    if (!isShared && !promptStore.MODE_KEY_RE.test(target)) {
+        return interaction.reply({
+            content: `❌ 模式代號只能使用英數、底線、連字號（1~32 字）：\`${target}\``,
+            flags: MessageFlags.Ephemeral,
+        });
+    }
+
+    const existing      = isShared ? null : promptStore.getMode(target);
+    const currentPrompt = isShared ? promptStore.getShared(target) : (existing?.prompt ?? '');
+
+    if (currentPrompt.length > PROMPT_MODAL_MAX) {
+        return interaction.reply({
+            content: `❌ \`${target}\` 的 prompt 有 ${currentPrompt.length} 字，超過 Discord 輸入框上限 ${PROMPT_MODAL_MAX} 字，請直接編輯 data/prompts/ 底下的檔案（存檔後自動生效）。`,
+            flags: MessageFlags.Ephemeral,
+        });
+    }
+
+    const modalId = `aiprompt_edit:${interaction.id}`;
+    const modal = new ModalBuilder()
+        .setCustomId(modalId)
+        .setTitle(`編輯 prompt：${target}${existing || isShared ? '' : '（新模式）'}`.slice(0, 45));
+
+    const promptInput = new TextInputBuilder()
+        .setCustomId('prompt')
+        .setLabel('System Prompt')
+        .setStyle(TextInputStyle.Paragraph)
+        .setMaxLength(PROMPT_MODAL_MAX)
+        .setRequired(true);
+    if (currentPrompt) promptInput.setValue(currentPrompt);
+    modal.addComponents(new ActionRowBuilder().addComponents(promptInput));
+
+    if (!isShared) {
+        const nameInput = new TextInputBuilder()
+            .setCustomId('name')
+            .setLabel('顯示名稱（例如：戀人模式）')
+            .setStyle(TextInputStyle.Short)
+            .setMaxLength(50)
+            .setRequired(false);
+        if (existing?.name) nameInput.setValue(existing.name);
+
+        const clearInput = new TextInputBuilder()
+            .setCustomId('clearMemoryMessage')
+            .setLabel('/ai clear 時的回覆訊息')
+            .setStyle(TextInputStyle.Short)
+            .setMaxLength(200)
+            .setRequired(false);
+        if (existing?.clearMemoryMessage) clearInput.setValue(existing.clearMemoryMessage);
+
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(nameInput),
+            new ActionRowBuilder().addComponents(clearInput),
+        );
+    }
+
+    await interaction.showModal(modal);
+
+    const submitted = await interaction.awaitModalSubmit({
+        filter: i => i.customId === modalId && i.user.id === interaction.user.id,
+        time: PROMPT_MODAL_TIMEOUT_MS,
+    }).catch(() => null);
+    if (!submitted) return; // 逾時或關閉視窗
+
+    try {
+        const prompt = submitted.fields.getTextInputValue('prompt');
+        if (isShared) {
+            promptStore.saveShared(target, prompt);
+        } else {
+            promptStore.saveMode(target, {
+                prompt,
+                name:               submitted.fields.getTextInputValue('name'),
+                clearMemoryMessage: submitted.fields.getTextInputValue('clearMemoryMessage'),
+            });
+        }
+        console.log(`[PromptStore] ${submitted.user.username} 更新了 ${target}`);
+        await submitted.reply({
+            content: `✅ 已${existing || isShared ? '更新' : '新增'} \`${target}\` 的 prompt（${prompt.trim().length} 字），立即生效。`,
+            flags: MessageFlags.Ephemeral,
+        });
+    } catch (err) {
+        console.error('[PromptStore] 寫入失敗:', err);
+        await submitted.reply({
+            content: `❌ 儲存失敗：${err.message}`,
+            flags: MessageFlags.Ephemeral,
+        });
+    }
 }
 
 // ── 權限檢查小工具：/ai chance set / toggle 僅限管理員 ──
@@ -363,7 +509,7 @@ function setupAICommands(client) {
     bootSummary.report(
         'AI 對話 (/ai)',
         process.env.GEMINI_API_KEY ? 'ok' : 'off',
-        process.env.GEMINI_API_KEY ? 'Gemini API 已連線，9 種人格模式可用' : '未設定 GEMINI_API_KEY，AI 功能停用'
+        process.env.GEMINI_API_KEY ? `Gemini API 已連線，${getAvailableModes().length} 種人格模式可用` : '未設定 GEMINI_API_KEY，AI 功能停用'
     );
 
     client.on('messageCreate', async message => {
