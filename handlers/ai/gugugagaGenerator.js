@@ -1,5 +1,5 @@
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
-const { GUGU_MODE_PROMPT } = require('./modes/gugugagaMode');
+const promptStore = require('./promptStore');
 
 // 初始化 API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -16,7 +16,7 @@ const GENERATION_CONFIG = {
 function getGuguModel() {
     return genAI.getGenerativeModel({
         model: MODEL_NAME,
-        systemInstruction: GUGU_MODE_PROMPT,
+        systemInstruction: promptStore.getMode('gugu')?.prompt ?? '',
         safetySettings: [
             { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_NONE },
             { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_NONE },

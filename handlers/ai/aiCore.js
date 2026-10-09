@@ -1,14 +1,7 @@
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
 const { GENERATION_CONFIG } = require('./aiSettings');
 const { selectMode, getModeName } = require('./modeSelector');
-const developerMode    = require('./modes/developerMode');
-const guguMode         = require('./modes/gugugagaMode');
-const lossMode         = require('./modes/lossMode');
-const mambaMentorMode  = require('./modes/mambaMentorMode');
-const mygoMode         = require('./modes/mygoMode');
-const inmuMode         = require('./modes/inmuMode');
-const loverMode        = require('./modes/loverMode');
-const mesugakiMode     = require('./modes/mesugakiMode');
+const promptStore = require('./promptStore');
 
 const {
     historyCache, HISTORY_CACHE_TTL_MS,
@@ -26,41 +19,6 @@ const HISTORY_PAIR_LIMIT   = 12;
 const HISTORY_TIME_LIMIT_MS = 10 * 60 * 1000;
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-// ════════════════════════════════════════════════════════
-//  模式映射表
-// ════════════════════════════════════════════════════════
-const MODE_MAP = {
-    loss:        lossMode,
-    mambaMentor: mambaMentorMode,
-    mygo:        mygoMode,
-    inmu:        inmuMode,
-    lover:       loverMode,
-    developer:   developerMode,
-    gugu:        guguMode,
-    mesugaki:    mesugakiMode,
-};
-
-const VOICE_MODE_ADDON = `
-
-## 語音回覆規則（最高優先，覆蓋長度設定）
-1. 使用者現在是透過「語音」跟你講話，你的回覆也會被轉成語音播放。
-2. 回答必須「口語化」，像真人聊天一樣自然。
-3. 保持簡短！盡量控制在 1~3 句話以內（約 30~50 字），絕對不要長篇大論。
-4. 絕對不要使用 Markdown 語法（如 **粗體**、*斜體*、列表、程式碼區塊），因為語音引擎無法朗讀排版。
-5. 【重要】請優先針對最新訊息回應，歷史紀錄僅供參考。
-`;
-
-// 在全局規則中加入「格式區分」的強烈約束
-const GENERAL_TEXT_ADDON = `
-
-## 全局回覆與注意力規則
-- 【最高優先】請務必針對使用者的「最新一則訊息」與「當下指令」進行回覆。歷史紀錄與引用訊息僅供語境參考。
-- 【格式區分】對話中會以「【發言者：暱稱】」來標示是誰說的話。絕對不要把暱稱當成對話內容來回答！
-- 不要輸出「【發言者：...】」這樣的標籤，請直接給出回覆內容即可。
-- 若為日常閒聊或一般對話，回覆字數請盡量控制在 30 字以內，保持自然、簡短的聊天節奏。
-- 若使用者詢問技術問題、需要詳細解說或撰寫程式碼時，則不受此字數限制，請給出完整的解答。
-`;
 
 // ════════════════════════════════════════════════════════
 //  Token 用量 Debug
@@ -118,19 +76,14 @@ function toGeminiPart(part) {
 // ════════════════════════════════════════════════════════
 //  模式工具函式
 // ════════════════════════════════════════════════════════
-const promptCache = {};
+// prompt 內容由 promptStore 從 data/prompts/ 讀取（可熱重載），這裡不做快取
+const FALLBACK_MODE = 'loss';
 
 function getSystemPrompt(mode) {
-    if (promptCache[mode]) return promptCache[mode];
-
-    const modeModule = MODE_MAP[mode];
-    if (!modeModule) {
-        console.error(`Unknown mode: ${mode}`);
-        return lossMode.LOSS_MODE_PROMPT;
-    }
-    const promptKey = Object.keys(modeModule).find(key => key.endsWith('_PROMPT'));
-    promptCache[mode] = modeModule[promptKey];
-    return promptCache[mode];
+    const modeData = promptStore.getMode(mode);
+    if (modeData) return modeData.prompt;
+    console.error(`Unknown mode: ${mode}，改用 ${FALLBACK_MODE}`);
+    return promptStore.getMode(FALLBACK_MODE)?.prompt ?? '';
 }
 
 function getUserMode(userId, message) {
@@ -140,9 +93,9 @@ function getUserMode(userId, message) {
 }
 
 function getModel(mode, isVoice = false) {
-    let systemPrompt = getSystemPrompt(mode);
-    systemPrompt += GENERAL_TEXT_ADDON;
-    if (isVoice) systemPrompt += VOICE_MODE_ADDON;
+    const parts = [getSystemPrompt(mode), promptStore.getShared('_general')];
+    if (isVoice) parts.push(promptStore.getShared('_voice'));
+    const systemPrompt = parts.filter(Boolean).join('\n\n');
 
     return genAI.getGenerativeModel({
         model: MODEL_NAME,
@@ -417,7 +370,6 @@ async function getShortResponse(userId, promptText, imageParts = [], channel = n
 }
 
 module.exports = {
-    MODE_MAP,
     getUserMode,
     getGeminiResponse,
     getGeminiResponseVoice,

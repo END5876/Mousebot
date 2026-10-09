@@ -8,12 +8,12 @@
 
 | 功能模組 | 說明 |
 |---|---|
-| **AI 對話** | 整合 Google Gemini API（`gemini-3.1-flash-lite`），支援 8 種角色扮演人格、圖片輸入、每頻道隨機插話、AI 回覆自動朗讀 |
+| **AI 對話** | 整合 Google Gemini API（`gemini-3.1-flash-lite`），支援多種角色扮演人格（prompt 外部化、可熱重載、可用指令線上編輯）、圖片輸入、每頻道隨機插話、AI 回覆自動朗讀 |
 | **文字轉語音（TTS）** | 主力使用 GPT-SoVITS，離線時自動 fallback 至 Edge-TTS，附排隊系統、多模型切換、LRU 快取 |
 | **語音轉文字（STT）** | 搭配 OpenWakeWord 喚醒詞偵測 + Groq Whisper，支援語音指令觸發與手動錄音按鈕 |
 | **線上音樂播放** | 支援 YouTube / Bilibili 串流播放、搜尋與播放清單匯入，含循環模式、佇列管理、隨機連播、響度正規化、閒置自動停止 |
-| **本地音樂播放** | 播放 `data/music` 內的音訊檔案（mp3/wav/ogg/flac/m4a/aac），附播放次數統計與排序 |
-| **分帳系統（Splitbill）** | 多行程、多幣別記帳與結算，支援面板／快速指令／**免建行程的⚡快速分帳**三種操作方式，內建預收訂金抵銷與交叉債務簡化演算法，**並附一個獨立的網頁記帳介面** |
+| **本地音樂播放** | 播放 `data/music` 內的音訊檔案（mp3/wav/ogg/flac/m4a/aac），附播放次數統計與排序；可選擇接上**共用音樂庫服務**（`MUSIC_LIB_URL`），讓多個 Bot 共享音檔與播放次數 |
+| **分帳系統（Splitbill）** | 多行程、多幣別記帳與結算，支援面板／快速指令／**免建行程的⚡快速分帳**三種操作方式，並可用 `/splitbill-attach` 將網頁建立的行程綁定到伺服器，內建預收訂金抵銷與交叉債務簡化演算法，**並附一個獨立的網頁記帳介面** |
 | **分帳網頁介面（Web UI）** | 已拆成獨立部署的 **splitbill-service**（Bot 透過內部網路呼叫它讀寫資料），支援**即時同步（SSE）**、**可設定唯讀／可編輯權限與到期時間的分享連結**、**AI 帳單照片辨識自動記帳（含多人協作認領進度同步）**、即時匯率換算 |
 | **遊戲限免通知** | 每 30 分鐘輪詢並推播 Steam / Epic Games 限時免費遊戲資訊 |
 | **整點報時** | 整點播放對應的語音音效（24 小時制，需自備 .wav 音效檔） |
@@ -26,21 +26,33 @@
 
 ## AI 對話模式
 
-Mousebot 支援 8 種 AI 角色扮演人格，可透過 `/ai mode` 依情境切換：
+所有人格的 system prompt **不再寫死在程式碼中**，而是存放在 `data/prompts/`（已被 `.gitignore` 排除），由 `handlers/ai/promptStore.js` 載入：
 
-| 模式鍵值 | 說明 |
-|---|---|
-| `developer` | 非常友好的哥們，絕對配合、跟著一起罵人、同仇敵愾 |
-| `gugu` | 咕咕嘎嘎風格語言模式，輸出特殊語言風格 |
-| `inmu` | 「淫夢」風格 AI 角色扮演模式 |
-| `loss` | 極度毒舌的損友，對任何人惡言相向、嘲諷羞辱 |
-| `lover` | 溫柔黏人的戀人模式，僅限 `LOVER_MODE_USER_IDS` 指定使用者 |
-| `mambaMentor` | 「牢大」風格導師模式 |
-| `mesugaki` | 嘴賤愛挑釁但被誇獎就破防的傲嬌雌小鬼人設 |
-| `mygo` | MyGO!!!!! 動畫相關風格模式 |
+```
+data/prompts/
+├── _general.md          # 所有文字回覆共用的全局規則
+├── _voice.md            # 語音回覆時額外附加的規則
+└── modes/
+    └── <mode>.md        # 各人格，檔名（英數／底線／連字號，1~32 字）即模式代號
+```
 
-> `developer` 模式另可依 `DEVELOPER_MODE_USER_IDS` 限制可設定的使用者。
-> 模式設定持久化儲存於 `data/userModes.json`。
+模式檔格式（front matter 僅支援單行 `key: value`）：
+
+```md
+---
+name: 戀人模式
+shortDescription: 簡短說明
+clearMemoryMessage: 已經清除記憶了喔~
+---
+（以下為 system prompt 本文）
+```
+
+- **熱重載**：以檔案 mtime 比對（約 2 秒檢查一次），修改後**不需重啟**；解析失敗時沿用上一版，不會讓壞檔案弄掛 Bot。
+- **線上編輯**：Bot 擁有者可用 `/ai prompt edit <mode>` 以 Modal 編輯（含 `_general`、`_voice`；輸入不存在的代號即新增模式）。Discord 輸入框上限 4000 字，超過請直接改檔案。
+- **切換模式**：`/ai mode` 的模式清單來自 `data/prompts/modes/` 內的檔案（支援自動完成）；若使用者選的模式檔被刪除，會自動略過覆蓋、退回預設判斷。找不到的模式會 fallback 到 `loss`。
+- 特殊身分：`LOVER_MODE_USER_IDS` 預設使用 `lover` 模式、`DEVELOPER_MODE_USER_IDS` 預設使用 `developer` 模式（需有對應模式檔）。
+- 使用者的模式設定持久化儲存於 `data/userModes.json`。
+
 
 ---
 
@@ -164,6 +176,14 @@ STT_VAD_RATIO_MIN=0.1
 STT_MIN_DURATION_MS=500
 STT_START_DELAY_MS=200
 STT_NO_SPEECH_PROB=0.8
+# 進階 STT 設定（選填，有預設值）
+STT_DETECT_INTERVAL_MS=
+STT_OWW_MAX_CONCURRENT=
+STT_OWW_MAX_SOCKETS=
+STT_OWW_QUEUE_MAX=
+STT_USER_IDLE_MS=
+STT_USER_CLEANUP_INTERVAL_MS=
+STT_DEBUG_MEM=
 
 # ── 手動錄音按鈕行為（選填，有預設值） ──────────────────────────────
 HEYJQN_USER_COOLDOWN_MS=4000
@@ -171,6 +191,9 @@ HEYJQN_BTN_TTL_MS=900000
 
 # ── 音樂播放（選填） ─────────────────────────────────────────────────
 MAX_CACHE_SIZE_MB=2048
+# 共用音樂庫服務（選填；未設定則只用本機 data/music）
+MUSIC_LIB_URL=                            # 例如 http://<library-service>.internal:3000
+MUSIC_LIB_SECRET=                         # 與音樂庫服務共用的金鑰（x-music-lib-key）
 WARP_PROXY_URL=                           # Cloudflare WARP Proxy（YouTube 防封用）
 # Bilibili 認證
 BILIBILI_SESSDATA=
@@ -185,6 +208,7 @@ YOUTUBE_SESSION_ID=
 # ── 分帳系統（連到獨立部署的 splitbill-service，必填才能使用 /splitbill） ─────────
 SPLITBILL_SERVICE_URL=                    # 例如 http://<service-name>.internal:3000（內部網路位址）
 SPLITBILL_SERVICE_KEY=                    # 與 splitbill-service 的 SPLITBILL_API_KEY 相同的共用金鑰
+# （SPLITBILL_SERVICE_KEY 未設定時會退回使用 SPLITBILL_API_KEY）
 # 注意：splitbill-service 也要設定相同的 OWNER_USER_ID，否則 Bot 擁有者刪除他人行程時會被 service 拒絕
 ```
 
@@ -196,22 +220,14 @@ SPLITBILL_SERVICE_KEY=                    # 與 splitbill-service 的 SPLITBILL_
 Mousebot/
 ├── handlers/
 │   ├── ai/
-│   │   ├── modes/
-│   │   │   ├── developerMode.js      # developer 人格
-│   │   │   ├── gugugagaMode.js       # gugu 人格（含 GUGU_MODE_PROMPT）
-│   │   │   ├── lossMode.js           # loss 人格
-│   │   │   ├── mambaMentorMode.js    # mambaMentor 人格
-│   │   │   ├── mygoMode.js           # mygo 人格
-│   │   │   ├── inmuMode.js           # inmu 人格
-│   │   │   ├── loverMode.js          # lover 人格
-│   │   │   └── mesugakiMode.js       # mesugaki 人格
 │   │   ├── aiChance.js               # 隨機插話機率控制，持久化至 data/replyChance.json
-│   │   ├── aiCore.js                 # Gemini API 核心（gemini-3.1-flash-lite），MODE_MAP 映射
-│   │   ├── aiHandler.js              # /ai 指令主處理器（ask/clear/tts/mode/chance/gugu）
+│   │   ├── aiCore.js                 # Gemini API 核心（gemini-3.1-flash-lite），system prompt 取自 promptStore
+│   │   ├── aiHandler.js              # /ai 指令主處理器（ask/clear/tts/mode/chance/gugu/prompt edit）
 │   │   ├── aiSettings.js             # GENERATION_CONFIG、LOVER/DEVELOPER_MODE_USER_IDS
 │   │   ├── aiUtils.js                # TTS 開關、對話記憶快取、圖片壓縮（sharp）、工具函式
 │   │   ├── gugugagaGenerator.js      # 咕咕嘎嘎文章生成（gemini-2.5-flash-lite）
-│   │   └── modeSelector.js           # 使用者模式選擇與持久化（data/userModes.json）
+│   │   ├── modeSelector.js           # 使用者模式選擇與持久化（data/userModes.json）
+│   │   └── promptStore.js            # prompt 存放區：載入 data/prompts/*.md、mtime 熱重載、寫入 API
 │   ├── musicplayer/
 │   │   ├── unifiedQueue/             # 統一播放佇列模組
 │   │   │   ├── index.js              # 對外進入點（彙整子模組，保持 API 介面一致）
@@ -225,6 +241,7 @@ Mousebot/
 │   │   │   │   ├── autocomplete.js    # Slash Command Autocomplete
 │   │   │   │   └── urlUtils.js
 │   │   │   └── commands.js           # Slash Commands 註冊、控制面板按鈕互動、閒置監控指令
+│   │   ├── musicLibraryClient.js     # 共用音樂庫服務客戶端（MUSIC_LIB_URL，選用）
 │   │   ├── localMusicHandler.js      # 本地音樂引擎，支援 mp3/wav/ogg/flac/m4a/aac，播放次數統計
 │   │   ├── musicAntiBot.js           # YouTube/Bilibili 防爬蟲 Headers、Cookies、yt-dlp 參數
 │   │   ├── musicCache.js             # 音樂快取管理（data/music/cache/），自動清理舊快取
@@ -255,6 +272,7 @@ Mousebot/
 │   ├── splitbill/
 │   │   ├── commands/
 │   │   │   ├── splitbill.js          # /splitbill 主控台面板（引導式操作）
+│   │   │   ├── splitbillAttach.js    # /splitbill-attach 將網頁行程綁定到伺服器
 │   │   │   └── splitbillQuick.js     # /splitbill-quick 一行快速記帳指令
 │   │   ├── interactions/
 │   │   │   ├── expenseUI/            # 記帳 UI（新增、編輯、刪除花費、帳單照片辨識）
@@ -278,8 +296,8 @@ Mousebot/
 │   │   │   ├── billScanner.js        # 帳單照片辨識（Gemini Vision，結構化 JSON 輸出）
 │   │   │   ├── rateLimiter.js        # 滑動視窗節流器，保護帳單辨識等外部 API 呼叫
 │   │   │   ├── parse.js              # parsePayerField、parseSplitField（解析代墊/分攤語法）
+│   │   │   ├── splitbillClient.js    # 呼叫獨立部署的 splitbill-service（SPLITBILL_SERVICE_URL / KEY）
 │   │   │   ├── stateCache.js         # 跨面板操作狀態快取（TTL 15 分鐘，自動清除過期項目）
-│   │   │   ├── storage.js            # 資料持久化（data/splitbill.json），含 Trip/Guild 預設結構、分享連結
 │   │   │   └── tripHelper.js         # resolveTrip、memberDisplay、ensureMembersExist
 │   │   └── index.js                  # setupSplitbillCommands，統一攔截 Button/Modal/SelectMenu，行程成員權限管控
 │   ├── audioManager.js               # 音頻優先級排程（SILENCE=0 < MUSIC=1 < TTS=2）
@@ -287,33 +305,20 @@ Mousebot/
 │   ├── commandHandler.js             # /ping、/serverinfo、/say、/nh；「有什麼了不起」被動回應
 │   ├── responseHandler.js            # 自訂關鍵字自動回應（data/responses.json）
 │   └── voiceHandler.js               # /voice 指令群：join/leave/status/stt/silence/record-button
-│   ├── server.js                     # 組裝 Express app、掛載中介層與各 router、監聽埠號
-│   ├── lib/
-│   │   ├── auth.js                   # API Key 中介層、分享連結權限判斷（requireOwner、authorizeTripAccess）
-│   │   ├── fxRates.js                # 即時匯率查詢與快取
-│   │   ├── sse.js                    # SSE 訂閱表、換票機制、事件廣播
-│   │   ├── receiptScan.js            # 帳單照片辨識（Gemini），供網頁介面使用
-│   │   └── receiptSessions.js        # 帳單辨識多人協作認領進度（記憶體內，不落地）
-│   ├── routes/
-│   │   ├── trips.js                  # GET /api/guilds、GET/PUT /api/trip/:guildId/:tripId
-│   │   ├── shareLinks.js             # 分享連結建立／列出／修改／撤銷（僅擁有者）
-│   │   ├── sharedTrip.js             # 分享連結持有者的讀寫端點（憑 token，免額外登入）
-│   │   ├── sse.js                    # SSE 換票（/api/sse-ticket）與事件串流端點
-│   │   ├── utility.js                # 即時匯率、帳單照片辨識端點
-│   │   └── receiptSession.js         # 帳單辨識認領進度的讀取／更新／即時同步
-│   └── public/                       # 前端靜態頁面（index.html + css/js）
 ├── oww-server/
 │   ├── models/                       # OWW ONNX 模型檔案（需自行放置）
 │   ├── requirements.txt              # Python 依賴（見下方）
 │   └── server.py                     # Flask HTTP 伺服器（含 Session TTL、Rate Limiting）
 ├── utils/
 │   ├── bootSummary.js                # 開機摘要收集器，啟動時統一列印模組狀態表
-│   └── logger.js                     # 統一 log 工具（success / warn / error / debug / info）
+│   ├── config.js                     # 擁有者身分判斷（OWNER_USER_ID、isOwner）
+│   ├── logger.js                     # 統一 log 工具（success / warn / error / debug / info）
+│   └── processGuards.js              # 全域 unhandledRejection / uncaughtException 處理（EXIT_ON_UNCAUGHT）
 ├── data/                             # 執行期持久化資料（已列入 .gitignore，不提交）
 │   ├── music/
 │   │   └── cache/                    # 線上音樂下載快取
 │   ├── timeAnnouncer/                # 整點報時音效（需自備 24 個 .wav 檔）
-│   ├── splitbill.json                # 分帳資料（行程、成員、花費、訂金、分享連結）
+│   ├── prompts/                      # AI system prompt（_general.md、_voice.md、modes/*.md）
 │   ├── userModes.json                # 使用者 AI 人格模式設定
 │   ├── responses.json                # 自訂關鍵字回應規則
 │   ├── replyChance.json              # 各伺服器 AI 隨機插話機率
@@ -373,7 +378,8 @@ Mousebot/
 | `/ai ask <question> [image]` | 向 AI 提問，可附帶圖片 |
 | `/ai clear` | 清除你與 AI 的對話記憶 |
 | `/ai tts` | 切換 AI 回覆是否自動朗讀 |
-| `/ai mode <target> <mode>` | 設定指定使用者的 AI 人格模式 |
+| `/ai mode <target> [mode]` | 設定指定使用者的 AI 人格模式（模式名稱可自動完成；不填則重置為預設；限擁有者） |
+| `/ai prompt edit <mode>` | 以 Modal 編輯模式的 system prompt（`_general` / `_voice` 為共用規則；不存在的代號即新增），存檔立即生效，僅限擁有者 |
 | `/ai chance set <chance>` | 設定本伺服器的 AI 隨機插話機率（0～100%） |
 | `/ai chance toggle` | 切換本頻道的 AI 隨機插話開關 |
 | `/ai gugu <topic>` | 依主題生成咕咕嘎嘎體文章 |
@@ -405,6 +411,7 @@ Mousebot/
 | 指令 | 說明 |
 |---|---|
 | `/splitbill` | 召喚分帳主控台面板（行程建立、成員管理、記帳〔含帳單照片辨識〕、預收訂金、結算皆透過按鈕與選單操作；也可從面板取得網頁介面的分享連結） |
+| `/splitbill-attach <code>` | 將網頁上建立的行程綁定到目前伺服器（綁定碼由網頁「設定 → Discord 綁定」產生；權限由 splitbill-service 判斷，限行程建立者或 `OWNER_USER_ID`） |
 | `/splitbill-quick` | 一行快速記帳，免開面板（支援單一/多人代墊、全體平分、部分成員分攤、自訂金額語法） |
 
 > 面板中還有「⚡ 快速分帳」按鈕：完全不綑綁任何行程、不寫入持久化資料，適合臨時一筆帳單快速算完即丟的情境。
@@ -536,6 +543,7 @@ Discord 面板 ──→ splitbillClient.js ──(內部網路 HTTP)──┐
 - OWW 模型檔案（`.onnx`）需自行放置於 `oww-server/models/` 資料夾。
 - 整點報時功能需自行準備 24 個對應小時的 `.wav` 音效檔，放置於 `data/timeAnnouncer/` 資料夾。
 - GPT-SoVITS 為外部服務，需自行部署並透過 `SOVITS_HOST` / `SOVITS_PORT` 連線；未部署時 TTS 自動 fallback 為 Edge-TTS。
+- AI 人格 prompt 放在 `data/prompts/`（不隨版本庫提供），首次部署需自行建立 `modes/*.md`，否則會提示找不到任何模式檔。
 - 分帳資料存放在獨立的 splitbill-service；Bot 未設定 `SPLITBILL_SERVICE_URL`／`SPLITBILL_SERVICE_KEY` 時，分帳面板與指令會無法使用（快速分帳 `⚡` 不受影響，因為它不存取行程資料）。
 
 ---

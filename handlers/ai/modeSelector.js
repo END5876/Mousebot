@@ -1,14 +1,13 @@
 const path = require('path');
 const fs   = require('fs');
 const { LOVER_MODE_USER_IDS, DEVELOPER_MODE_USER_IDS } = require('./aiSettings');
+const promptStore = require('./promptStore');
 const logger = require('../../utils/logger');
 
 // ════════════════════════════════════════════════════════
 //  常數
 // ════════════════════════════════════════════════════════
 const MODES_FILE_PATH = path.resolve(__dirname, '../../data/userModes.json');
-
-const AVAILABLE_MODES = ['loss', 'mambaMentor', 'mygo', 'inmu', 'lover', 'developer', 'gugu', 'mesugaki'];
 
 // ════════════════════════════════════════════════════════
 //  JSON 持久化
@@ -74,10 +73,11 @@ function getUserModeOverride(userId) {
 /**
  * 根據用戶 ID 選擇適當的模式
  * 優先順序：動態覆蓋 > 特殊身份 > 預設
+ * 覆蓋的模式檔若已被刪除，就略過覆蓋往下判斷
  */
 function selectMode(userId, content) {
     const override = userModeOverride.get(userId);
-    if (override) return override;
+    if (override && promptStore.getMode(override)) return override;
 
     if (LOVER_MODE_USER_IDS.includes(userId)) return 'lover';
     if (DEVELOPER_MODE_USER_IDS.includes(userId)) return 'developer';
@@ -86,20 +86,17 @@ function selectMode(userId, content) {
 }
 
 /**
- * 獲取模式的顯示名稱（用於日誌）
+ * 獲取模式的顯示名稱（取自模式檔 front matter 的 name）
  */
 function getModeName(mode) {
-    const names = {
-        loss:        '損友模式',
-        mambaMentor: '牢大模式',
-        mygo:        'MyGO 模式',
-        inmu:        '淫夢模式',
-        lover:       '戀人模式',
-        developer:   '開發者模式',
-        gugu:        '咕咕模式',
-        mesugaki:    '磁小鬼模式',
-    };
-    return names[mode] ?? mode;
+    return promptStore.getMode(mode)?.name ?? mode;
+}
+
+/**
+ * 目前所有可用模式（即 data/prompts/modes/ 底下的檔案）
+ */
+function getAvailableModes() {
+    return promptStore.listModes();
 }
 
 module.exports = {
@@ -107,5 +104,5 @@ module.exports = {
     getModeName,
     setUserMode,
     getUserModeOverride,
-    AVAILABLE_MODES,
+    getAvailableModes,
 };
