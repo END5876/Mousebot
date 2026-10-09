@@ -189,7 +189,7 @@ async function handleButton(interaction, cache) {
           return renderLedgerPage(interaction, trip, page, '⚠️ 找不到此花費帳目，可能已被其他人刪除。', source);
         }
         const deleted = trip.expenses.splice(idx, 1)[0];
-        await splitbillClient.saveTrip(guildId, trip.id, trip);
+        await splitbillClient.saveTrip(guildId, trip.id, trip, { actorId: interaction.user.id });
         return renderLedgerPage(interaction, trip, page, `🗑️ 已成功刪除花費：**${deleted.description}** (${deleted.amount} ${deleted.currency})`, source);
       } else if (type === 'deposit') {
         const idx = trip.deposits.findIndex(d => d.id === realId);
@@ -197,7 +197,7 @@ async function handleButton(interaction, cache) {
           return renderLedgerPage(interaction, trip, page, '⚠️ 找不到此訂金紀錄，可能已被其他人刪除。', source);
         }
         const deleted = trip.deposits.splice(idx, 1)[0];
-        await splitbillClient.saveTrip(guildId, trip.id, trip);
+        await splitbillClient.saveTrip(guildId, trip.id, trip, { actorId: interaction.user.id });
         return renderLedgerPage(interaction, trip, page, `🗑️ 已成功刪除訂金紀錄：**${memberDisplay(trip, deleted.payerId)} 預付給 ${memberDisplay(trip, deleted.collectorId)}** (${deleted.amount} ${deleted.currency})`, source);
       }
     }
