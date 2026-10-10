@@ -2,12 +2,14 @@ const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@googl
 const { GENERATION_CONFIG } = require('./aiSettings');
 const { selectMode, getModeName } = require('./modeSelector');
 const promptStore = require('./promptStore');
+const { recordUsage } = require('./tokenTracker');
 
 const {
     historyCache, HISTORY_CACHE_TTL_MS,
     getMemoryClearTime, getBotMessageContext,
     processAttachments,
     processImageUrls,
+    dedupeInlineParts,
 } = require('./aiUtils');
 
 // ════════════════════════════════════════════════════════
@@ -19,49 +21,6 @@ const HISTORY_PAIR_LIMIT   = 12;
 const HISTORY_TIME_LIMIT_MS = 10 * 60 * 1000;
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-// ════════════════════════════════════════════════════════
-//  Token 用量 Debug
-// ════════════════════════════════════════════════════════
-// createTokenAccumulator：每次外部請求（getGeminiResponse 等）建立一個
-// 獨立的累加器物件，透過參數往下傳遞給所有子呼叫（歷史淨化、引用淨化、
-// 主要生成），藉此在多位使用者並發請求時，避免共用全域變數造成的
-// token 計數互相汙染。
-function createTokenAccumulator(label) {
-    return { label, prompt: 0, candidates: 0, total: 0, calls: 0 };
-}
-
-// logTokenUsage：印出單次 API 呼叫的 token 用量。
-// 若傳入 accumulator，會同時將這筆用量累加進去，供後續彙總使用。
-function logTokenUsage(label, response, accumulator = null) {
-    const meta = response.usageMetadata;
-    if (!meta) {
-        console.log(`[Token] (${label}) ⚠️ 無法取得 usageMetadata`);
-        return;
-    }
-    const prompt     = meta.promptTokenCount     ?? 0;
-    const candidates = meta.candidatesTokenCount ?? 0;
-    const total      = meta.totalTokenCount      ?? 0;
-    console.log(
-        `[Token] (${label})\n` +
-        `        輸入: ${prompt} | 輸出: ${candidates} | 總計: ${total}`
-    );
-    if (accumulator) {
-        accumulator.prompt     += prompt;
-        accumulator.candidates += candidates;
-        accumulator.total      += total;
-        accumulator.calls      += 1;
-    }
-}
-
-// logTokenSummary：印出單次外部請求（含所有子呼叫）的 token 總花費。
-function logTokenSummary(accumulator) {
-    console.log(
-        `[Token] ══════ (${accumulator.label}) 本次請求總花費 ══════\n` +
-        `        子呼叫數: ${accumulator.calls} | 輸入: ${accumulator.prompt} | ` +
-        `輸出: ${accumulator.candidates} | 總計: ${accumulator.total}`
-    );
-}
 
 // ════════════════════════════════════════════════════════
 //  工具函式：將 imageParts 陣列轉換為 Gemini API 格式
@@ -204,7 +163,9 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
             history.push({ role: msg.author.id === botId ? 'model' : 'user', parts });
         }
 
-        let finalHistory = mergeConsecutiveRoles(history);
+        // 合併連續同角色訊息後再去重，連續幾則傳同一張圖也只會送一次
+        let finalHistory = mergeConsecutiveRoles(history)
+            .map(entry => ({ ...entry, parts: dedupeInlineParts(entry.parts) }));
 
         const firstUserIndex = finalHistory.findIndex(msg => msg.role === 'user');
         if (firstUserIndex > 0) {
@@ -294,7 +255,7 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
         const authorName = message?.author?.username || '使用者';
         parts.push({ text: `【發言者：${authorName}】\n${question}` });
     }
-    return parts;
+    return dedupeInlineParts(parts);
 }
 
 // ════════════════════════════════════════════════════════
@@ -310,13 +271,13 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
         // 如果沒有 message (例如斜線指令)，也要加上預設標籤
         const messageParts = message
             ? await buildMessagePartsWithReference(message, prompt, imageParts, botId, mode, userId)
-            : [
+            : dedupeInlineParts([
                 ...imageParts.map(part => toGeminiPart(part)).filter(Boolean),
                 { text: prompt ? `【發言者：使用者】\n${prompt}` : '' }
-            ];
+            ]);
 
         const result = await chat.sendMessage(messageParts);
-        logTokenUsage(`getGeminiResponse / user:${userId} / mode:${mode}`, result.response); 
+        recordUsage('chat', result.response, { userId, mode });
         return result.response.text();
     } catch (error) {
         console.error(`Gemini Error (${MODEL_NAME}):`, error.message);
@@ -333,7 +294,7 @@ async function getGeminiResponseVoice(userId, prompt, channel = null, messageId 
 
         const result   = await chat.sendMessage([{ text: prompt }]);
         const response = result.response.text().trim();
-        logTokenUsage(`getGeminiResponseVoice / user:${userId} / mode:${mode}`, result.response); 
+        recordUsage('voice', result.response, { userId, mode });
         console.log(`[Voice AI] ${userId}: "${prompt}" → "${response}"`);
         return response;
     } catch (error) {
@@ -355,13 +316,13 @@ async function getShortResponse(userId, promptText, imageParts = [], channel = n
         // 短回覆標籤邏輯
         const messageParts = message
             ? await buildMessagePartsWithReference(message, shortPrompt, imageParts, botId, mode, userId)
-            : [
+            : dedupeInlineParts([
                 ...imageParts.map(part => toGeminiPart(part)).filter(Boolean),
                 { text: `【發言者：使用者】\n${shortPrompt}` }
-            ];
+            ]);
 
         const result = await chat.sendMessage(messageParts);
-        logTokenUsage(`getShortResponse / user:${userId} / mode:${mode}`, result.response); 
+        recordUsage('short', result.response, { userId, mode });
         return result.response.text().trim();
     } catch (error) {
         console.error(`Short Response Error:`, error.message);
