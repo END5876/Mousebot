@@ -1,10 +1,11 @@
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
 const promptStore = require('./promptStore');
+const { recordUsage } = require('./tokenTracker');
 
 // 初始化 API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-const MODEL_NAME = "gemini-2.5-flash-lite";
+const MODEL_NAME = "gemini-3.1-flash-lite";
 
 const GENERATION_CONFIG = {
     temperature: 1.2,
@@ -53,6 +54,7 @@ async function generateGuguArticle(topic) {
 請直接生成文章，不要有任何前綴說明。`;
 
         const result = await model.generateContent(prompt);
+        recordUsage('gugu', result.response);
         return result.response.text();
 
     } catch (error) {
