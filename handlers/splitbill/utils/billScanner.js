@@ -7,6 +7,7 @@
  */
 
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold, GoogleGenerativeAIAbortError } = require('@google/generative-ai');
+const { recordUsage } = require('../../ai/tokenTracker');
 
 const MODEL_NAME = 'gemini-3.1-flash-lite';
 
@@ -139,6 +140,7 @@ async function scanBillImage(imageParts, tripCurrencies = [], baseCurrency = 'TW
       { signal: controller.signal, timeout: GEMINI_REQUEST_TIMEOUT_MS }
     );
     response = result.response;
+    recordUsage('billScan', response);
   } catch (err) {
     if (err instanceof GoogleGenerativeAIAbortError || err?.name === 'AbortError') {
       console.error(`[billScanner] Gemini API 呼叫逾時（超過 ${GEMINI_REQUEST_TIMEOUT_MS / 1000} 秒）`);

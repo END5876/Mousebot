@@ -1,5 +1,6 @@
 const { playTTS } = require('../voice/ttsHandler');
 const sharp = require('sharp'); // 引入 sharp 進行圖片壓縮
+const crypto = require('crypto');
 const dns = require('dns').promises;
 const net = require('net');
 
@@ -14,6 +15,8 @@ const HISTORY_CACHE_TTL_MS = 30 * 1000;
 const IMAGE_CACHE_MAX_ENTRIES = 40;          // 每筆最多約 1MB 級 base64，限制總量避免吃光記憶體
 const IMAGE_FETCH_TIMEOUT_MS = 10_000;
 const IMAGE_MAX_REDIRECTS = 3;
+const EMOJI_MAX_SIZE_PX = 64;                // emoji 只需辨識表情，縮小以節省 token
+const EMOJI_MAX_COUNT = 5;                   // 每則訊息最多送出的 emoji 圖片數，超過的只保留文字標記
 
 // ════════════════════════════════════════════════════════
 //  快取
@@ -409,12 +412,18 @@ async function fetchAndCacheEmoji(url, mimeType, name, id) {
         } else {
             const response = await fetch(url, { signal: AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS) });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const buffer = await response.arrayBuffer();
-            const base64 = Buffer.from(buffer).toString('base64');
+            const rawBuffer = Buffer.from(await response.arrayBuffer());
+            const isAnimated = mimeType === 'image/gif';
+            const resize = { width: EMOJI_MAX_SIZE_PX, height: EMOJI_MAX_SIZE_PX, fit: 'inside', withoutEnlargement: true };
+            const buffer = isAnimated
+                ? await sharp(rawBuffer, { animated: true }).resize(resize).gif().toBuffer()
+                : await sharp(rawBuffer).resize(resize).webp({ quality: 80 }).toBuffer();
+            const finalMimeType = isAnimated ? 'image/gif' : 'image/webp';
+            const base64 = buffer.toString('base64');
             if (imageCache.size >= IMAGE_CACHE_MAX_ENTRIES) imageCache.delete(imageCache.keys().next().value);
-            imageCache.set(url, { base64, mimeType, cachedAt: Date.now() });
+            imageCache.set(url, { base64, mimeType: finalMimeType, cachedAt: Date.now() });
             console.log(`[Emoji] 已下載：${name} (${id})`);
-            return { mimeType, data: base64 };
+            return { mimeType: finalMimeType, data: base64 };
         }
     } catch (err) {
         console.warn(`[Emoji] 下載失敗 ${name}:`, err.message);
@@ -430,10 +439,10 @@ async function processCustomEmojis(content) {
     const promises = [];
 
     const cleanedText = content.replace(/<(a?):(\w+):(\d+)>/g, (match, animated, name, id) => {
-        if (!seen.has(id)) {
+        if (!seen.has(id) && seen.size < EMOJI_MAX_COUNT) {
             seen.add(id);
             const ext = animated ? 'gif' : 'png';
-            const url = `https://cdn.discordapp.com/emojis/${id}.${ext}`;
+            const url = `https://cdn.discordapp.com/emojis/${id}.${ext}?size=${EMOJI_MAX_SIZE_PX}`;
             const mimeType = animated ? 'image/gif' : 'image/png';
             promises.push(fetchAndCacheEmoji(url, mimeType, name, id));
         }
@@ -444,6 +453,25 @@ async function processCustomEmojis(content) {
     results.forEach(res => { if (res) emojiParts.push(res); });
 
     return { cleanedText, emojiParts };
+}
+
+// ════════════════════════════════════════════════════════
+//  圖片去重：同一份內容（附件、網址圖、emoji 皆適用）只送一次
+// ════════════════════════════════════════════════════════
+// 以壓縮後的 base64 計算雜湊；圖片經過相同的 sharp 處理，內容相同的檔案
+// 即使 Discord 給的網址不同，結果也會一致。文字 part 不受影響。
+function dedupeInlineParts(parts) {
+    const seen = new Set();
+    let removed = 0;
+    const result = parts.filter(part => {
+        if (!part?.inlineData?.data) return true;
+        const hash = crypto.createHash('sha1').update(part.inlineData.data).digest('hex');
+        if (seen.has(hash)) { removed++; return false; }
+        seen.add(hash);
+        return true;
+    });
+    if (removed > 0) console.log(`[Image] 已移除 ${removed} 張重複圖片`);
+    return result;
 }
 
 // ════════════════════════════════════════════════════════
@@ -577,7 +605,8 @@ module.exports = {
     processAttachments,
     processCustomEmojis,
     processImageUrls,
-    processEmbeds,       
+    processEmbeds,
+    dedupeInlineParts,
     hasMissingSignature, 
     resolveDiscordImageUrl, 
     withTyping, speakWithTTS, splitMessage,
