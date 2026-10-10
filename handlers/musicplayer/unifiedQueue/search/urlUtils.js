@@ -43,6 +43,21 @@ function cleanUrl(rawUrl) {
 }
 
 // ════════════════════════════════════════════════════════
+//  YouTube 網址且沒有 list 參數 → 一定是單一影片，不需要播放清單偵測
+//  （mix / radio / 播放清單頁都會帶 list=；Bilibili 的分 P 無法從網址判斷，不適用）
+// ════════════════════════════════════════════════════════
+function _isYouTubeWithoutList(rawUrl) {
+  try {
+    const urlObj = new URL(rawUrl);
+    const host = urlObj.hostname.toLowerCase();
+    const isYouTube = host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com');
+    return isYouTube && !urlObj.searchParams.has('list');
+  } catch {
+    return false;
+  }
+}
+
+// ════════════════════════════════════════════════════════
 //  將 flat-playlist 條目解析為可直接 getInfo() 的完整網址
 // ════════════════════════════════════════════════════════
 function _resolveEntryUrl(baseUrl, entry) {
@@ -55,5 +70,6 @@ function _resolveEntryUrl(baseUrl, entry) {
 module.exports = {
   _formatDuration,
   cleanUrl,
+  _isYouTubeWithoutList,
   _resolveEntryUrl
 };

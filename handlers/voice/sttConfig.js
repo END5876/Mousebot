@@ -229,20 +229,23 @@ function isHallucination(text) {
 }
 
 // ── OWW HTTP 偵測（含 Semaphore）────────────────────────
-async function detectWakeword(guildId, userId, pcmBuffer) {
+// reset=true：本次送的是整個滑動視窗（音訊不連續），請 OWW 先清空該 session 的串流狀態。
+// 回傳值的 processed=false 代表這段音訊沒有被模型處理（請求失敗、OWW 暫停或冷卻中），
+// 呼叫端應標記串流中斷，下次改送整個視窗。
+async function detectWakeword(guildId, userId, pcmBuffer, reset = false) {
   // 可能因佇列已滿而拋出錯誤，呼叫端需自行捕獲
   await owwSemaphore.acquire();
   try {
     const sessionId = `${guildId}_${userId}`;
     const response  = await owwAxios.post(
-      `${OWW_HTTP_URL}/detect?session_id=${sessionId}`,
+      `${OWW_HTTP_URL}/detect?session_id=${sessionId}${reset ? '&reset=1' : ''}`,
       pcmBuffer,
       { headers: { 'Content-Type': 'application/octet-stream' } },
     );
-    return response.data;
+    return { ...response.data, processed: response.data?.processed !== false };
   } catch (err) {
     console.error(`[STT] OWW 偵測失敗 (${userId}): ${err.message}`);
-    return { detected: false };
+    return { detected: false, processed: false };
   } finally {
     owwSemaphore.release();
   }

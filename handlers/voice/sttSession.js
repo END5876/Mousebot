@@ -68,6 +68,43 @@ function pushDetectChunk(userState, chunk) {
   ) {
     userState.detectBytes -= userState.detectChunks.shift().length;
   }
+
+  // 尚未送給 OWW 的增量音訊（與滑動視窗共用同一批 Buffer，不額外複製）。
+  // 累積超過一個視窗代表太久沒送出，舊的部分丟掉並標記串流中斷，下次改送整個視窗。
+  userState.pendingChunks.push(chunk);
+  userState.pendingBytes += chunk.length;
+  while (userState.pendingBytes > DETECT_MAX_BYTES && userState.pendingChunks.length > 0) {
+    userState.pendingBytes -= userState.pendingChunks.shift().length;
+    userState.streamBroken = true;
+  }
+}
+
+/**
+ * 取出這次要送給 OWW 的音訊，並清空待送區。
+ * - 串流連續：只送上次之後新增的音訊（OWW 端的串流狀態會接著累積）
+ * - 串流中斷：送整個滑動視窗並要求 OWW 端先 reset，讓它從乾淨狀態重建上下文
+ * @returns {{ buffer: Buffer, reset: boolean }}
+ */
+function takeDetectPayload(userState) {
+  const reset  = userState.streamBroken;
+  const buffer = reset
+    ? getDetectBuffer(userState)
+    : Buffer.concat(userState.pendingChunks, userState.pendingBytes);
+
+  userState.pendingChunks = [];
+  userState.pendingBytes  = 0;
+  userState.streamBroken  = false;
+  return { buffer, reset };
+}
+
+/**
+ * 丟棄待送音訊並標記串流中斷（略過偵測、冷卻中、請求失敗等，OWW 沒收到這段音訊時呼叫）。
+ * @param {object} userState
+ */
+function markStreamBroken(userState) {
+  userState.pendingChunks = [];
+  userState.pendingBytes  = 0;
+  userState.streamBroken  = true;
 }
 
 /** 取得目前偵測視窗的合併 Buffer（僅在要送去偵測時才組合一次） */
@@ -85,6 +122,7 @@ function getDetectBuffer(userState) {
 function clearDetectBuffer(userState) {
   userState.detectChunks = [];
   userState.detectBytes  = 0;
+  markStreamBroken(userState);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -108,6 +146,7 @@ function unsubscribeUser(guildId, userId) {
   userState.recordChunks       = [];
   userState.detectBytes        = 0;
   userState.recordBytes        = 0;
+  markStreamBroken(userState);
   userState._lastSilenceChunksLen = -1;
   userState._lastSilenceRMS       = 0;
 
@@ -169,6 +208,9 @@ function subscribeUser(guildId, userId, member) {
     member,
     detectChunks:  [],
     detectBytes:   0,
+    pendingChunks: [],   // 尚未送給 OWW 的增量音訊
+    pendingBytes:  0,
+    streamBroken:  true, // 新訂閱的使用者第一次偵測要送整個視窗並 reset
     recordChunks:  [],
     recordBytes:   0,
     stream:        null,
@@ -285,6 +327,8 @@ module.exports = {
   pushDetectChunk,
   clearDetectBuffer,
   getDetectBuffer,
+  takeDetectPayload,
+  markStreamBroken,
   unsubscribeUser,
   subscribeUser,
   startUserIdleCleanup,
