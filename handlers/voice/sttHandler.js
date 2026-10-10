@@ -9,6 +9,7 @@ const { getGeminiResponseVoice } = require('../../handlers/ai/aiHandler');
 
 // 將 ttsHandler 移至頂層 require，避免每次喚醒都在熱路徑上執行動態載入
 const { playTTS } = require('./ttsHandler');
+const { restoreActiveLayer } = require('../audioManager');
 
 const {
   WAKEUP_VOICE_PATH, TEMP_DIR,
@@ -27,6 +28,8 @@ const {
   resetAllRecordBuffers,
   clearDetectBuffer,
   getDetectBuffer,
+  takeDetectPayload,
+  markStreamBroken,
   unsubscribeUser,
   subscribeUser,
   startUserIdleCleanup,
@@ -55,6 +58,9 @@ function playWakeupSound(connection) {
       if (done) return;
       done = true;
       try { player?.stop(); player?.removeAllListeners(); } catch {}
+      // 音效是直接 subscribe 到連線、繞過 audioManager 的；播完要把訂閱還給目前應在播的那一層
+      // （音樂 / 靜音防踢），否則辨識失敗、沒有 TTS 接手時，音樂會一直無聲到下一首。
+      restoreActiveLayer(connection.joinConfig.guildId);
       resolve();
     };
 
@@ -199,24 +205,39 @@ async function triggerDetection(guildId, userId) {
   const userState = state.users.get(userId);
   if (!userState) return;
 
+  // 上一個請求還在進行中：新音訊留在待送區，下次一起送出，不會遺失
   if (userState.isDetectingRequest) return;
   userState.isDetectingRequest = true;
 
+  let payloadTaken = false;
+
   try {
-    if (state.isExclusive) return;
+    // 以下三種略過情形，這段音訊都不會送進 OWW → 標記串流中斷，下次改送整個視窗並 reset
+    if (state.isExclusive) return markStreamBroken(userState);
 
     const now = Date.now();
-    if (now < userState.cooldownUntil) return;
+    if (now < userState.cooldownUntil) return markStreamBroken(userState);
 
-    // 只在送去偵測時才把 chunk 組合成一塊 Buffer
-    const pcmBuffer = getDetectBuffer(userState);
-    if (!pcmBuffer || pcmBuffer.length === 0) return;
+    // 只在送去偵測時才把 chunk 組合成一塊 Buffer；音量判斷仍以整個滑動視窗為準（與原本相同）
+    const windowBuffer = getDetectBuffer(userState);
+    if (!windowBuffer || windowBuffer.length === 0) return;
 
-    if (calcRMS(pcmBuffer) < RMS_THRESHOLD) return;
+    if (calcRMS(windowBuffer) < RMS_THRESHOLD) return markStreamBroken(userState);
+
+    // 平常只送新增的音訊；串流中斷時送整個視窗並請 OWW 先 reset
+    const { buffer, reset } = takeDetectPayload(userState);
+    if (buffer.length === 0) return;
+    payloadTaken = true;
 
     // detectWakeword 內的 Semaphore.acquire() 可能因佇列已滿而拋出，
     // 此處 catch 已涵蓋，不影響正常流程
-    const result = await detectWakeword(guildId, userId, pcmBuffer);
+    const result = await detectWakeword(guildId, userId, buffer, reset);
+    if (!result.processed) {
+      // 請求失敗或 OWW 沒有處理這段音訊（暫停 / 冷卻）
+      const latest = guildStates.get(guildId)?.users?.get(userId);
+      if (latest) markStreamBroken(latest);
+      return;
+    }
     if (!result.detected) return;
 
     // 成功喚醒後，清空滑動視窗，避免剛退出錄音模式又立刻被舊聲音觸發
@@ -229,6 +250,11 @@ async function triggerDetection(guildId, userId) {
     await handleWakeup(guildId, userId, userState.member);
   } catch (err) {
     console.error(`[STT] triggerDetection 錯誤: ${err.message}`);
+    // 音訊已取出卻沒送成功（例如 Semaphore 佇列已滿），下次改送整個視窗
+    if (payloadTaken) {
+      const latest = guildStates.get(guildId)?.users?.get(userId);
+      if (latest) markStreamBroken(latest);
+    }
   } finally {
     const latestUserState = guildStates.get(guildId)?.users?.get(userId);
     if (latestUserState) latestUserState.isDetectingRequest = false;

@@ -8,7 +8,7 @@ const { _engines, SEARCH_MARKER } = require('../state');
 const { enqueue, ensureConnection } = require('../playback');
 const voiceMonitor = require('../../voiceActivityMonitor');
 
-const { cleanUrl } = require('./urlUtils');
+const { cleanUrl, _isYouTubeWithoutList } = require('./urlUtils');
 const { _handlePlayAll, _handleLocalMultiSelect } = require('./local');
 const { _askPlaylistChoice, _handleAddPlaylist } = require('./playlist');
 const { _replyPlayResult, _handleOnlineSearch } = require('./onlineSearch');
@@ -53,41 +53,57 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
     const engine = _engines.bilibili;
     if (!engine) return interaction.editReply('❌ 串流引擎未就緒');
 
-    // 先偵測是否為播放清單
-    // ★ 修正：改用 input（原始未清理網址），保留 list 參數才能正確偵測 YouTube 播放清單。
-    //    getInfo 仍使用 cleanInput，因為 buildInfoArgs 已內建 --no-playlist，帶 list 參數也安全。
-    let playlistInfo = null;
-    if (typeof engine.checkPlaylist === 'function') {
-      await interaction.editReply({
-        embeds: [new EmbedBuilder().setColor(0x1DB954).setDescription('🔍 正在檢查網址類型...')]
-      });
+    // YouTube 網址沒有 list= 參數就不可能是播放清單，直接跳過偵測（省一次 yt-dlp）
+    const needPlaylistCheck = typeof engine.checkPlaylist === 'function' && !_isYouTubeWithoutList(input);
+    const infoMsg = () => interaction.editReply({
+      embeds: [new EmbedBuilder().setColor(0x1DB954).setDescription('🔍 正在獲取影片資訊...')]
+    });
+
+    await (needPlaylistCheck
+      ? interaction.editReply({
+          embeds: [new EmbedBuilder().setColor(0x1DB954).setDescription('🔍 正在檢查網址類型...')]
+        })
+      : infoMsg());
+
+    // 單曲資訊與播放清單偵測同時進行；結果包成 { info } / { error }，避免未等待時變成 unhandled rejection。
+    // getInfo 使用 cleanInput：buildInfoArgs 已內建 --no-playlist，帶 list 參數也安全。
+    const fetchInfo = (signal) => engine.getInfo(cleanInput, { signal })
+      .then(info => ({ info }), error => ({ error }));
+    const infoAbort = new AbortController();
+    const infoResult = fetchInfo(infoAbort.signal);
+    let askedPlaylist = false;
+
+    if (needPlaylistCheck) {
+      // ★ 修正：改用 input（原始未清理網址），保留 list 參數才能正確偵測 YouTube 播放清單。
+      let playlistInfo = null;
       try {
         playlistInfo = await engine.checkPlaylist(input);
       } catch {
         playlistInfo = null;
       }
-    }
 
-    if (playlistInfo && playlistInfo.isPlaylist) {
-      const choice = await _askPlaylistChoice(interaction, playlistInfo);
-      if (choice === 'cancel') return;
-      if (choice === 'all') {
-        // ★ 修正：baseUrl 同步改用 input，與上方 checkPlaylist(input) 保持一致
-        return _handleAddPlaylist(interaction, input, playlistInfo, guildId);
+      if (playlistInfo && playlistInfo.isPlaylist) {
+        askedPlaylist = true;
+        const choice = await _askPlaylistChoice(interaction, playlistInfo);
+        if (choice !== 'first') {
+          infoAbort.abort(); // 不需要單曲資訊了，停掉背景的 yt-dlp
+          if (choice === 'cancel') return;
+          // ★ 修正：baseUrl 同步改用 input，與上方 checkPlaylist(input) 保持一致
+          return _handleAddPlaylist(interaction, input, playlistInfo, guildId);
+        }
+        // choice === 'first' → 繼續往下走，用單曲流程處理 cleanInput
+      } else {
+        await infoMsg();
       }
-      // choice === 'first' → 繼續往下走，用單曲流程處理 cleanInput
-    } else {
-      await interaction.editReply({
-        embeds: [new EmbedBuilder().setColor(0x1DB954).setDescription('🔍 正在獲取影片資訊...')]
-      });
     }
 
-    try {
-      item = await engine.getInfo(cleanInput);
-      item.type = 'bilibili';
-    } catch (err) {
-      return interaction.editReply(`❌ 無法獲取影片資訊：${err.message}`);
-    }
+    let { info, error } = await infoResult;
+    // 使用者在播放清單選單停留期間，並行的 getInfo 可能已逾時；照原本「選完才抓」的流程再抓一次
+    if (error && askedPlaylist) ({ info, error } = await fetchInfo());
+    if (error) return interaction.editReply(`❌ 無法獲取影片資訊：${error.message}`);
+
+    item = info;
+    item.type = 'bilibili';
   } else {
 
     const localEngine = _engines.local;
