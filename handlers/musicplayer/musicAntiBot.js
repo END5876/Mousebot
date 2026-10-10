@@ -420,10 +420,10 @@ function classifyYouTubeError(errorOutput) {
   if (errorOutput.includes('Sign in to confirm') || errorOutput.includes('not a bot')) {
     return { type: 'BOT_DETECTED',   rotate: true,  msg: 'YouTube 偵測到機器人請求，嘗試切換 client' };
   }
-  if (errorOutput.includes('403')) {
+  if (_hasHttpStatus(errorOutput, 403)) {
     return { type: 'FORBIDDEN_403',  rotate: true,  msg: '403 禁止存取（可能需要 PO Token 或 Cookie）' };
   }
-  if (errorOutput.includes('429')) {
+  if (_hasHttpStatus(errorOutput, 429)) {
     return { type: 'RATE_LIMITED',   rotate: false, msg: '請求頻率過高 (429)，稍後重試' };
   }
   if (errorOutput.includes('Private video') || errorOutput.includes('private video')) {
@@ -432,17 +432,30 @@ function classifyYouTubeError(errorOutput) {
   if (errorOutput.includes('Video unavailable') || errorOutput.includes('not available')) {
     return { type: 'UNAVAILABLE',    rotate: false, msg: '影片不可用（可能有地區限制）' };
   }
-  if (errorOutput.includes('410') || errorOutput.includes('removed')) {
+  if (_hasHttpStatus(errorOutput, 410) || errorOutput.includes('removed')) {
     return { type: 'REMOVED',        rotate: false, msg: '影片已被刪除' };
   }
   return   { type: 'UNKNOWN',        rotate: true,  msg: `未知錯誤: ${errorOutput.slice(-150)}` };
 }
 
+// 只比對真正的 HTTP 狀態碼（例如 "HTTP Error 412"），避免 BV 號 / av 號 / 時間戳中含有相同數字而誤判
+function _hasHttpStatus(errorOutput, code) {
+  return new RegExp(`HTTP Error ${code}\\b|status(?: code)?:? ${code}\\b|\\b${code} (?:Precondition|Forbidden|Not Found|Too Many)`, 'i').test(errorOutput);
+}
+
+// 取出 yt-dlp 最後一行 ERROR 訊息，供未知錯誤顯示
+function _lastErrorLine(errorOutput) {
+  const lines = errorOutput.split('\n').filter(l => l.startsWith('ERROR:'));
+  return (lines.pop() || errorOutput.trim().split('\n').pop() || '').slice(0, 200);
+}
+
 function classifyBilibiliError(errorOutput) {
-  if (errorOutput.includes('412')) return { msg: 'Bilibili 反爬蟲限制 (412)' };
-  if (errorOutput.includes('403')) return { msg: '影片無法訪問 (403)，可能有地區限制或需要大會員' };
-  if (errorOutput.includes('404')) return { msg: '找不到影片 (404)' };
-  return { msg: `未知錯誤: ${errorOutput.slice(-150)}` };
+  if (_hasHttpStatus(errorOutput, 412)) return { msg: 'Bilibili 反爬蟲限制 (412)，請稍後再試或更新 Cookies' };
+  if (_hasHttpStatus(errorOutput, 403)) return { msg: '影片無法訪問 (403)，可能有地區限制或需要大會員' };
+  if (_hasHttpStatus(errorOutput, 404)) return { msg: '找不到影片 (404)' };
+  if (errorOutput.includes('deleted or geo-restricted')) return { msg: '影片已刪除或有地區限制' };
+  if (errorOutput.includes('Unsupported URL')) return { msg: '不支援的網址' };
+  return { msg: `未知錯誤: ${_lastErrorLine(errorOutput)}` };
 }
 
 module.exports = {
