@@ -94,22 +94,20 @@ const aiCommand = {
                     opt.setName('mode')
                         .setDescription('模式名稱（不填則重置為預設）')
                         .setRequired(false)
-                        .setAutocomplete(true)
                 )
         )
 
         // ── /ai prompt edit（子指令群組，僅限擁有者） ──
         .addSubcommandGroup(group =>
             group.setName('prompt')
-                .setDescription('管理 AI 模式的 system prompt（僅限擁有者）')
+                .setDescription('AI 模式設定')
                 .addSubcommand(sub =>
                     sub.setName('edit')
-                        .setDescription('編輯指定模式的 prompt，輸入不存在的代號則新增模式')
+                        .setDescription('編輯 AI 模式')
                         .addStringOption(opt =>
                             opt.setName('mode')
-                                .setDescription('模式代號（_general / _voice 為共用規則）')
+                                .setDescription('模式名稱')
                                 .setRequired(true)
-                                .setAutocomplete(true)
                         )
                 )
         )
@@ -166,26 +164,7 @@ const aiCommand = {
             case 'mode':  return handleMode(interaction);
             case 'gugu':  return handleGugu(interaction);
         }
-    },
-
-    // /ai mode 與 /ai prompt edit 的模式代號自動完成
-    async autocomplete(interaction) {
-        const focused = interaction.options.getFocused().toLowerCase();
-        const group   = interaction.options.getSubcommandGroup(false);
-
-        const choices = getAvailableModes().map(key => ({ name: `${key}（${getModeName(key)}）`, value: key }));
-        if (group === 'prompt') {
-            if (!isOwner(interaction.user.id)) return interaction.respond([]);
-            choices.push(
-                { name: '_general（全局回覆規則）', value: '_general' },
-                { name: '_voice（語音回覆規則）',   value: '_voice' },
-            );
-        }
-
-        await interaction.respond(
-            choices.filter(c => c.name.toLowerCase().includes(focused)).slice(0, 25)
-        );
-    },
+    }
 };
 
 // ── /ai ask ──────────────────────────────────────────────
