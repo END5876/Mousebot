@@ -7,6 +7,7 @@ const fs   = require('fs');
 const path = require('path');
 const logger = require('../../utils/logger');
 const libraryClient = require('./musicLibraryClient');
+const normalizer = require('./musicNormalizer');
 
 const ytdlpPath = 'yt-dlp';
 
@@ -149,13 +150,15 @@ function downloadAndCache(url, title, ytdlpArgs, onProgress) {
     ensureCacheDir();
     evictCacheIfNeeded();
 
-    const filename  = getCacheFilename(url, title);
-    const filePath  = path.join(CACHE_DIR, filename);
-    const tmpBase   = path.join(CACHE_DIR, filename.replace(/\.mp3$/, '.tmp'));
-    const tmpActual = tmpBase + '.mp3'; // yt-dlp 轉檔後實際產生的路徑
+    const filename = getCacheFilename(url, title);
+    const filePath = path.join(CACHE_DIR, filename);
+    // 原始音訊（yt-dlp 不轉檔，輸出名稱不含 %(ext)s，會照原樣寫入這個路徑）
+    const rawTmp   = path.join(CACHE_DIR, filename.replace(/\.mp3$/, '.tmp'));
+    // 正規化後的 MP3 暫存檔；以 .mp3 結尾讓 ffmpeg 依副檔名選擇輸出格式
+    const mp3Tmp   = path.join(CACHE_DIR, filename.replace(/\.mp3$/, `.enc_${Date.now()}.tmp.mp3`));
 
     // 將輸出路徑注入參數（替換佔位符 __OUTPUT__）
-    const finalArgs = ytdlpArgs.map(a => a === '__OUTPUT__' ? tmpBase : a);
+    const finalArgs = ytdlpArgs.map(a => a === '__OUTPUT__' ? rawTmp : a);
 
     const platform = url.includes('youtube.com') || url.includes('youtu.be')
       ? 'YouTube' : 'Bilibili';
@@ -178,32 +181,39 @@ function downloadAndCache(url, title, ytdlpArgs, onProgress) {
 
     ytdlp.on('close', code => {
       if (code !== 0) {
-        try { if (fs.existsSync(tmpActual)) fs.unlinkSync(tmpActual); } catch {}
-        try { if (fs.existsSync(tmpBase))   fs.unlinkSync(tmpBase);   } catch {}
+        safeUnlink(rawTmp);
+        safeUnlink(`${rawTmp}.part`);
         console.error(`❌ [${platform}] 下載失敗:`, errorOutput.slice(-300));
         reject(new Error(`下載失敗 (code: ${code}): ${errorOutput.slice(-200)}`));
         return;
       }
 
-      const actualTmp = fs.existsSync(tmpActual) ? tmpActual
-        : fs.existsSync(tmpBase)                 ? tmpBase
-        : null;
-
-      if (!actualTmp) {
+      if (!fs.existsSync(rawTmp)) {
         reject(new Error('下載完成但找不到輸出檔案'));
         return;
       }
 
-      try {
-        fs.renameSync(actualTmp, filePath);
-        const sizeMB = (fs.statSync(filePath).size / 1024 / 1024).toFixed(2);
-        console.log(`✅ [${platform}] 下載完成: ${filename} (${sizeMB} MB)`);
-        resolve(filePath);
-      } catch (err) {
-        reject(new Error('重新命名快取檔失敗: ' + err.message));
-      }
+      // 響度正規化與 MP3 編碼一次完成（正規化失敗時 normalizer 會退回一般轉檔），
+      // 完成後才 rename 成正式檔名，播放端不會讀到未完成的檔案
+      normalizer.encodeNormalizedMp3(rawTmp, mp3Tmp)
+        .then(({ normalized }) => {
+          safeUnlink(rawTmp);
+          fs.renameSync(mp3Tmp, filePath);
+          const sizeMB = (fs.statSync(filePath).size / 1024 / 1024).toFixed(2);
+          console.log(`✅ [${platform}] 下載完成: ${filename} (${sizeMB} MB${normalized ? '，已正規化響度' : '，未正規化'})`);
+          resolve(filePath);
+        })
+        .catch(err => {
+          safeUnlink(rawTmp);
+          safeUnlink(mp3Tmp);
+          reject(new Error('轉檔快取檔失敗: ' + err.message));
+        });
     });
   });
+}
+
+function safeUnlink(f) {
+  try { fs.unlinkSync(f); } catch {}
 }
 
 module.exports = {

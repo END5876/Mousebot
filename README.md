@@ -506,16 +506,13 @@ Discord 面板 ──→ splitbillClient.js ──(內部網路 HTTP)──┐
 | `@discordjs/opus` | ^0.10 | Opus 音訊編碼 |
 | `@google/generative-ai` | ^0.24 | Google Gemini AI API（對話、帳單照片辨識） |
 | `groq-sdk` | ^1.1 | Groq Whisper 語音轉文字 |
-| `play-dl` | ^1.9 | YouTube / Bilibili 串流（備用） |
-| `ytdl-core` | ^4.11 | YouTube 下載（備用） |
-| `fluent-ffmpeg` | ^2.1 | 音訊格式轉換 |
-| `ffmpeg-static` | ^5.3 | 內建 ffmpeg 二進位 |
+| `ffmpeg-static` | ^5.3 | 內建 ffmpeg 二進位（prism-media 播放音訊時優先使用） |
+| `prism-media` | ^1.3 | Opus 解碼（STT 收音）、音訊轉碼 |
 | `sharp` | ^0.34 | 圖片壓縮（AI 圖片輸入前處理） |
-| `axios` | ^1.15 | HTTP 請求（限免通知、SoVITS API 等） |
+| `axios` | ^1.15 | HTTP 請求（共用音樂庫、OWW 喚醒詞服務） |
 | `ws` | ^8.20 | WebSocket 通訊 |
-| `@snazzah/davey` | ^0.1 | Steam / Epic 遊戲資訊擷取 |
+| `@snazzah/davey` | ^0.1 | Discord 語音 DAVE 端對端加密協定 |
 | `libsodium-wrappers` | ^0.8 | 語音加密（Discord 語音頻道要求） |
-| `form-data` | ^4.0 | 表單資料（SoVITS API 請求） |
 | `dotenv` | ^17 | 環境變數載入 |
 
 **Python 套件（oww-server/requirements.txt）**
@@ -524,11 +521,8 @@ Discord 面板 ──→ splitbillClient.js ──(內部網路 HTTP)──┐
 |---|---|---|
 | `openwakeword` | 0.6.0 | 喚醒詞偵測核心 |
 | `flask` | 3.1.0 | OWW HTTP 伺服器 |
-| `websockets` | 13.1 | WebSocket 支援 |
 | `numpy` | 1.26.4 | 數值運算 |
 | `onnxruntime` | 1.20.1 | ONNX 模型推理引擎 |
-| `librosa` | 0.10.2 | 音訊處理 |
-| `soundfile` | 0.12.1 | 音訊檔案讀寫 |
 | `python-dotenv` | — | 環境變數載入 |
 | `edge-tts`（pip 額外安裝） | — | Microsoft Edge TTS fallback |
 | `yt-dlp`（pip 額外安裝） | — | 線上音樂下載工具 |

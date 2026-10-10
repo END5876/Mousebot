@@ -222,7 +222,8 @@ function buildYouTubeArgs(url, strategy, streamMode = true) {
   if (streamMode) {
     args.push('-f', 'bestaudio/best', '-o', '-', '--quiet', '--buffer-size', '16K');
   } else {
-    args.push('-f', 'bestaudio/best', '-o', '__OUTPUT__', '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0');
+    // 快取下載只抓原始音訊，不在這裡轉 MP3：musicCache 會在響度正規化時一次編碼成 MP3
+    args.push('-f', 'bestaudio/best', '-o', '__OUTPUT__');
   }
 
   args.push('--no-playlist', '--no-warnings');
@@ -266,7 +267,8 @@ function buildBilibiliArgs(url, streamMode = true) {
   if (streamMode) {
     args.push('-f', 'bestaudio/best', '-o', '-', '--quiet', '--extract-audio', '--audio-format', 'opus', '--audio-quality', '0', '--buffer-size', '16K');
   } else {
-    args.push('-f', 'bestaudio/best', '-o', '__OUTPUT__', '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0');
+    // 同 YouTube：只抓原始音訊，MP3 編碼交給 musicCache 的正規化步驟一次完成
+    args.push('-f', 'bestaudio/best', '-o', '__OUTPUT__');
   }
 
   args.push('--no-playlist', '--no-warnings');

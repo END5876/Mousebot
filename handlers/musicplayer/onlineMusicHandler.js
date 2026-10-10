@@ -16,7 +16,6 @@ const cache   = require('./musicCache');
 const antiBot = require('./musicAntiBot');
 const logger  = require('../../utils/logger');
 const bootSummary = require('../../utils/bootSummary');
-const normalizer = require('./musicNormalizer');
 
 const execAsync = promisify(exec);
 const ytdlpPath = 'yt-dlp';
@@ -94,8 +93,11 @@ function cleanupProcess(guildId) {
 // ════════════════════════════════════════════════════════
 //  getInfo（取得影片資訊）— YouTube + Bilibili
 // ════════════════════════════════════════════════════════
-async function getInfo(url) {
+// signal（選填）：與播放清單偵測並行時，使用者選了「全部加入／取消」就用它提前終止 yt-dlp
+async function getInfo(url, { signal } = {}) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error('已取消取得影片資訊'));
+
     const args  = antiBot.buildInfoArgs(url);
     const ytdlp = spawn(ytdlpPath, args);
     let data = '', errorData = '';
@@ -108,6 +110,14 @@ async function getInfo(url) {
       try { ytdlp.kill('SIGKILL'); } catch {}
       reject(new Error('取得影片資訊逾時，請確認網址是否正確或稍後再試'));
     }, GET_INFO_TIMEOUT_MS);
+
+    signal?.addEventListener('abort', () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      try { ytdlp.kill('SIGKILL'); } catch {}
+      reject(new Error('已取消取得影片資訊'));
+    }, { once: true });
 
     ytdlp.stdout.on('data', c => { data      += c.toString(); });
     ytdlp.stderr.on('data', c => { errorData += c.toString(); });
@@ -384,22 +394,12 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
           },
         )
         .then((filePath) => {
+          // downloadAndCache 完成時已經做完響度正規化（失敗則為一般轉檔），檔案可直接使用
           if (!silent) console.log(`✅ [Cache] 背景下載完成，已儲存至: ${path.basename(filePath)}`);
 
-          // 下載完成後，背景自動進行響度正規化（不阻塞任何播放邏輯）
-          normalizer.normalizeAudioFile(filePath)
-            .then(() => {
-              if (!silent) console.log(`🎚️ [Normalizer] 響度正規化完成: ${path.basename(filePath)}`);
-            })
-            .catch((err) => {
-              if (!silent) console.warn(`⚠️ [Normalizer] 正規化失敗（略過，原檔仍可正常播放）: ${err.message}`);
-            })
-            .finally(() => {
-              // 不論正規化成功與否，都把目前這份檔案同步上傳到共用音樂庫，
-              // 讓其他 Bot 也能直接取用，不必重新下載一次。
-              // 未設定 MUSIC_LIB_URL 時 pushToSharedLibrary() 會直接是 no-op。
-              cache.pushToSharedLibrary(filePath, path.basename(filePath));
-            });
+          // 同步上傳到共用音樂庫，讓其他 Bot 也能直接取用，不必重新下載一次。
+          // 未設定 MUSIC_LIB_URL 時 pushToSharedLibrary() 會直接是 no-op。
+          cache.pushToSharedLibrary(filePath, path.basename(filePath));
         })
         .catch((err) => {
           if (!silent) console.error(`⚠️ [Cache] 背景下載失敗: ${err.message}`);

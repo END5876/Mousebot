@@ -3,7 +3,7 @@
 // 原理：使用 ffmpeg 內建 loudnorm 濾鏡，雙通道 (two-pass) 分析 + 套用
 // 參數對齊指令：ffmpeg-normalize "$f" -o "output/$f" -nt ebu -t -16 -lrt 20
 // 依賴：系統需安裝 ffmpeg（專案已依賴，無需額外套件）
-// 被 onlineMusicHandler.js 引用
+// 被 musicCache.js 引用：下載的原始音訊經 encodeNormalizedMp3() 一次編碼成已正規化的 MP3
 
 const { spawn } = require('child_process');
 const fs   = require('fs');
@@ -29,13 +29,20 @@ const queue = [];
 function _runNext() {
   if (running >= MAX_CONCURRENT || queue.length === 0) return;
   running++;
-  const { filePath, resolve, reject } = queue.shift();
-  _normalizeOne(filePath)
+  const { task, resolve, reject } = queue.shift();
+  task()
     .then(resolve, reject)
     .finally(() => {
       running--;
       _runNext();
     });
+}
+
+function _enqueue(task) {
+  return new Promise((resolve, reject) => {
+    queue.push({ task, resolve, reject });
+    _runNext();
+  });
 }
 
 /**
@@ -44,9 +51,29 @@ function _runNext() {
  * 失敗：保留原檔案不動，reject(err)（呼叫端應 catch 但不中斷主流程）
  */
 function normalizeAudioFile(filePath) {
-  return new Promise((resolve, reject) => {
-    queue.push({ filePath, resolve, reject });
-    _runNext();
+  return _enqueue(() => _normalizeOne(filePath));
+}
+
+/**
+ * 從原始音訊（yt-dlp 下載的 webm / m4a 等，未經轉檔）直接產生「已正規化」的 MP3，
+ * 整個流程只編碼一次。原本是 yt-dlp 先轉 MP3、正規化時再重新編碼一次 MP3。
+ * 正規化失敗時退回一般轉檔（參數與 yt-dlp --audio-format mp3 --audio-quality 0 相同），
+ * 確保仍產出可播放的檔案，等同舊流程「正規化失敗、保留原檔」的結果。
+ * @returns {Promise<{ normalized: boolean }>}
+ */
+function encodeNormalizedMp3(inputPath, outputPath) {
+  return _enqueue(async () => {
+    try {
+      const measured = await _analyzeLoudness(inputPath);
+      await _applyLoudnorm(inputPath, outputPath, measured);
+      logger.debug('MusicNormalizer', `✅ 響度正規化完成: ${path.basename(outputPath)}`);
+      return { normalized: true };
+    } catch (err) {
+      try { fs.unlinkSync(outputPath); } catch {}
+      logger.warn('MusicNormalizer', `⚠️ 正規化失敗，改為一般轉檔: ${path.basename(outputPath)} - ${err.message}`);
+      await _plainMp3(inputPath, outputPath);
+      return { normalized: false };
+    }
   });
 }
 
@@ -114,20 +141,33 @@ function _analyzeLoudness(filePath) {
 // ── 第二階段：依分析結果套用實際轉檔 ──────────────────────
 //  對應 ffmpeg-normalize 未指定 --dynamic 時的預設行為：linear=true
 function _applyLoudnorm(inputPath, outputPath, measured) {
-  return new Promise((resolve, reject) => {
-    const af =
-      `loudnorm=I=${TARGET_LUFS}:LRA=${TARGET_LRA}:TP=${TARGET_TP}:` +
-      `measured_I=${measured.input_i}:measured_LRA=${measured.input_lra}:` +
-      `measured_TP=${measured.input_tp}:measured_thresh=${measured.input_thresh}:` +
-      `offset=${measured.target_offset}:linear=true:print_format=summary`;
+  const af =
+    `loudnorm=I=${TARGET_LUFS}:LRA=${TARGET_LRA}:TP=${TARGET_TP}:` +
+    `measured_I=${measured.input_i}:measured_LRA=${measured.input_lra}:` +
+    `measured_TP=${measured.input_tp}:measured_thresh=${measured.input_thresh}:` +
+    `offset=${measured.target_offset}:linear=true:print_format=summary`;
 
-    const args = [
-      '-hide_banner', '-y',
-      '-i', inputPath,
-      '-af', af,
-      // 未指定 -ar / -b:a，維持原始取樣率與編碼設定，與參考指令行為一致
-      outputPath,
-    ];
+  const args = [
+    '-hide_banner', '-y',
+    '-i', inputPath,
+    '-vn', // 原始下載可能是帶影像的格式（bestaudio 不可用時退回 best），只取音訊
+    '-af', af,
+    // 未指定 -ar / -b:a，維持原始取樣率與編碼設定，與參考指令行為一致
+    outputPath,
+  ];
+  return _runFfmpeg(args, 'ffmpeg 套用正規化失敗');
+}
+
+// ── 正規化失敗時的退路：一般轉檔為 MP3（等同 yt-dlp --audio-format mp3 --audio-quality 0）──
+function _plainMp3(inputPath, outputPath) {
+  return _runFfmpeg(
+    ['-hide_banner', '-y', '-i', inputPath, '-vn', '-c:a', 'libmp3lame', '-q:a', '0', outputPath],
+    'ffmpeg 轉檔 MP3 失敗',
+  );
+}
+
+function _runFfmpeg(args, failLabel) {
+  return new Promise((resolve, reject) => {
     const ff = spawn('ffmpeg', args);
     let stderr = '';
 
@@ -135,7 +175,7 @@ function _applyLoudnorm(inputPath, outputPath, measured) {
 
     ff.on('close', (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`ffmpeg 套用正規化失敗 (code ${code}): ${stderr.slice(-300)}`));
+      else reject(new Error(`${failLabel} (code ${code}): ${stderr.slice(-300)}`));
     });
 
     ff.on('error', (err) => reject(new Error('執行 ffmpeg 轉檔失敗: ' + err.message)));
@@ -144,6 +184,7 @@ function _applyLoudnorm(inputPath, outputPath, measured) {
 
 module.exports = {
   normalizeAudioFile,
+  encodeNormalizedMp3,
   TARGET_LUFS,
   TARGET_LRA,
   TARGET_TP,
