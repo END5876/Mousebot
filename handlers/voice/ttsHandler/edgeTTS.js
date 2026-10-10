@@ -55,8 +55,16 @@ function checkEdgeTTS() {
 
 function generateEdgeTTS(text, filename, voice) {
   return new Promise((resolve, reject) => {
-    const proc = spawn('edge-tts', ['--voice', voice, '--text', text, '--write-media', filename, '--rate', '+10%']);
-    proc.on('close', (code) => { if (code === 0) resolve(); else reject(new Error(`edge-tts 退出碼: ${code}`)); });
+    // --text= 寫法避免以「-」開頭的文字被 argparse 當成參數
+    const proc = spawn('edge-tts', ['--voice', voice, `--text=${text}`, '--write-media', filename, '--rate=+10%']);
+    let stderr = '';
+    proc.stderr.on('data', (d) => { stderr += d; });
+    proc.on('close', (code) => {
+      if (code === 0) return resolve();
+      // 只取最後一行（Python traceback 的例外訊息）
+      const lastLine = stderr.trim().split('\n').pop() || '';
+      reject(new Error(`edge-tts 退出碼: ${code}${lastLine ? ` (${lastLine.trim()})` : ''}`));
+    });
     proc.on('error', reject);
   });
 }

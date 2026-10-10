@@ -48,7 +48,14 @@ function splitSentences(text, maxLen = 50) {
     if (buf) result.push(buf);
   }
 
-  return result.filter(s => s.length > 0);
+  // 純標點段落（如「好耶！！！」切出的「！」）無法發音，edge-tts 會回 NoAudioReceived；
+  // 併回前一段，沒有前一段就丟掉
+  const merged = [];
+  for (const s of result) {
+    if (/[\p{L}\p{N}]/u.test(s)) merged.push(s);
+    else if (merged.length > 0) merged[merged.length - 1] += s;
+  }
+  return merged;
 }
 
 module.exports = { splitSentences };
