@@ -11,6 +11,11 @@
 //   uncaughtException  → 記錄完整堆疊後，約 1 秒內以 exit code 1 結束，
 //                        由 supervisord（autorestart=true）重新拉起。
 //   EXIT_ON_UNCAUGHT=0 → 恢復舊行為（只記錄不結束），本機沒有 supervisor 時可用。
+//   SIGTERM / SIGINT   → 先關閉 Discord 連線（最多等 SHUTDOWN_TIMEOUT_MS），再以 process.exit() 結束。
+//                        沒有這個處理時程序是被訊號直接殺掉，process.on('exit') 不會執行，
+//                        tokenTracker 尚未寫入的用量、yt-dlp 子程序清理都會被跳過。
+
+const SHUTDOWN_TIMEOUT_MS = 3000;
 
 let installed = false;
 let exiting = false;
@@ -39,6 +44,23 @@ function install() {
     try { fatalHook?.(); } catch {}
     setTimeout(() => process.exit(1), 1000);
   });
+
+  for (const signal of ['SIGTERM', 'SIGINT']) {
+    process.once(signal, () => gracefulShutdown(signal));
+  }
+}
+
+async function gracefulShutdown(signal) {
+  if (exiting) return;
+  exiting = true;
+
+  console.log(`⏹️ 收到 ${signal}，正在關閉...`);
+  const timeout = new Promise(resolve => setTimeout(resolve, SHUTDOWN_TIMEOUT_MS));
+  try {
+    await Promise.race([Promise.resolve(fatalHook?.()), timeout]);
+  } catch {}
+  // process.exit() 會觸發各模組註冊的 'exit' 處理（寫入用量紀錄、結束子程序）
+  process.exit(0);
 }
 
 module.exports = { install, setFatalHook };

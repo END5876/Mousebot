@@ -304,14 +304,13 @@ async function fetchImageAsBase64(attachment) {
     return await fetchImageUrlAsBase64(fetchUrl);
 }
 
+// 多張圖片並行下載＋壓縮；Promise.all 保留原本的附件順序
 async function processAttachments(attachments) {
-    const imageParts = [];
-    if (!attachments || attachments.size === 0) return imageParts;
-    for (const [, attachment] of attachments) {
-        const imgData = await fetchImageAsBase64(attachment);
-        if (imgData) imageParts.push({ mimeType: imgData.mimeType, data: imgData.base64 });
-    }
-    return imageParts;
+    if (!attachments || attachments.size === 0) return [];
+    const results = await Promise.all([...attachments.values()].map(fetchImageAsBase64));
+    return results
+        .filter(Boolean)
+        .map(imgData => ({ mimeType: imgData.mimeType, data: imgData.base64 }));
 }
 
 // 檢查是否包含缺少簽名的 Discord 網址
@@ -330,19 +329,15 @@ function hasMissingSignature(content) {
 
 // 處理 Discord Embeds (預覽圖)
 async function processEmbeds(embeds) {
-    const imageParts = [];
-    if (!embeds || embeds.length === 0) return imageParts;
+    if (!embeds || embeds.length === 0) return [];
 
-    for (const embed of embeds) {
+    const results = await Promise.all(embeds.map(embed => {
         const imageUrl = embed.image?.proxyURL || embed.image?.url || embed.thumbnail?.proxyURL || embed.thumbnail?.url;
-        if (imageUrl) {
-            const imgData = await fetchImageUrlAsBase64(imageUrl);
-            if (imgData) {
-                imageParts.push({ type: 'image', mimeType: imgData.mimeType, data: imgData.base64 });
-            }
-        }
-    }
-    return imageParts;
+        return imageUrl ? fetchImageUrlAsBase64(imageUrl) : null;
+    }));
+    return results
+        .filter(Boolean)
+        .map(imgData => ({ type: 'image', mimeType: imgData.mimeType, data: imgData.base64 }));
 }
 
 /**
@@ -356,48 +351,39 @@ async function processImageUrls(content, client) {
     if (!content) return [];
 
     const urlRegex = /(https?:\/\/[^\s)\]>]+)/g;
-    const urls = content.match(urlRegex) || [];
-    const imageParts = [];
-    const seen = new Set();
+    const urls = [...new Set(content.match(urlRegex) || [])];
 
-    for (const url of urls) {
-        if (seen.has(url)) continue;
-        seen.add(url);
-
+    // 每個網址各自處理（並行），最後依網址出現順序組回結果；非圖片網址回傳 null
+    const processOne = async (url) => {
         const isDiscordCDN = url.includes('cdn.discordapp.com/attachments/');
         const hasSignature = url.includes('?ex=') && url.includes('&is=') && url.includes('&hm=');
 
         const isLikelyImage = /\.(png|jpg|jpeg|webp|heic|heif|gif)(?:\?.*)?$/i.test(url)
             || isDiscordCDN;
 
-        if (isLikelyImage) {
-            // 缺簽名的 Discord CDN 網址：先嘗試修復，別急著判死刑
-            if (isDiscordCDN && !hasSignature) {
-                const freshUrl = await resolveDiscordImageUrl(url, client);
+        if (!isLikelyImage) return null;
 
-                if (freshUrl) {
-                    // ✅ 修復成功，當作正常圖片繼續處理
-                    const imgData = await fetchImageUrlAsBase64(freshUrl);
-                    if (imgData) {
-                        imageParts.push({ type: 'image', mimeType: imgData.mimeType, data: imgData.base64 });
-                        continue;
-                    }
-                }
+        // 缺簽名的 Discord CDN 網址：先嘗試修復，別急著判死刑
+        if (isDiscordCDN && !hasSignature) {
+            const freshUrl = await resolveDiscordImageUrl(url, client);
 
-                // 兩種策略皆失敗（或未傳入 client），才真的標記為缺簽名交給外部處理
-                imageParts.push({ type: 'missing_signature', url });
-                continue;
+            if (freshUrl) {
+                // ✅ 修復成功，當作正常圖片繼續處理
+                const imgData = await fetchImageUrlAsBase64(freshUrl);
+                if (imgData) return { type: 'image', mimeType: imgData.mimeType, data: imgData.base64 };
             }
 
-            const imgData = await fetchImageUrlAsBase64(url);
-            if (imgData) {
-                imageParts.push({ type: 'image', mimeType: imgData.mimeType, data: imgData.base64 });
-            } else {
-                imageParts.push({ type: 'text', text: '[系統提示：使用者傳送的圖片網址無法讀取或檔案過大]' });
-            }
+            // 兩種策略皆失敗（或未傳入 client），才真的標記為缺簽名交給外部處理
+            return { type: 'missing_signature', url };
         }
-    }
-    return imageParts;
+
+        const imgData = await fetchImageUrlAsBase64(url);
+        return imgData
+            ? { type: 'image', mimeType: imgData.mimeType, data: imgData.base64 }
+            : { type: 'text', text: '[系統提示：使用者傳送的圖片網址無法讀取或檔案過大]' };
+    };
+
+    return (await Promise.all(urls.map(processOne))).filter(Boolean);
 }
 
 // ════════════════════════════════════════════════════════

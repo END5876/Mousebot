@@ -3,6 +3,7 @@
 const fs   = require('fs');
 const http = require('http');
 const dns  = require('dns').promises;
+const net  = require('net');
 const logger = require('../../../utils/logger');
 const { getActiveModel } = require('./models');
 
@@ -23,9 +24,16 @@ const SOVITS_RECEIVE_TIMEOUT_MS = 30_000;  // 音訊接收逾時
 // ════════════════════════════════════════════════════════
 let cachedSoVITSIP = null;
 let cacheExpireAt  = 0;
-const DNS_CACHE_TTL_MS = 5 * 60 * 1000;
+const DNS_CACHE_TTL_MS          = 5 * 60 * 1000;
+// 解析失敗（例如 Docker 內網主機名）時也快取一段時間，避免每次合成都再查一次外部 DNS
+const DNS_NEGATIVE_CACHE_TTL_MS = 60 * 1000;
+
+// IP 位址或 localhost 交給外部 DNS 查一定失敗、最後仍退回原字串，直接略過查詢
+const SKIP_DNS_LOOKUP = net.isIP(SOVITS_HOST) !== 0 || SOVITS_HOST.toLowerCase() === 'localhost';
 
 async function resolveSoVITSHost() {
+  if (SKIP_DNS_LOOKUP) return SOVITS_HOST;
+
   const now = Date.now();
   if (cachedSoVITSIP && now < cacheExpireAt) return cachedSoVITSIP;
   try {
@@ -38,6 +46,8 @@ async function resolveSoVITSHost() {
     return cachedSoVITSIP;
   } catch (err) {
     logger.debug('SoVITS-DNS', `解析失敗: ${err.message}，使用原始 hostname`);
+    cachedSoVITSIP = SOVITS_HOST;
+    cacheExpireAt  = now + DNS_NEGATIVE_CACHE_TTL_MS;
     return SOVITS_HOST;
   }
 }

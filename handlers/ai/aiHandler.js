@@ -186,10 +186,18 @@ async function handleAsk(interaction) {
 
     try {
         const rawQuestion = interaction.options.getString('question');
-        const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
 
-        // ✅ 補上 interaction.client，讓 processImageUrls 內部可嘗試修復缺簽名網址
-        const urlImagePartsRaw = await processImageUrls(question, interaction.client);
+        // emoji → 網址圖片（需要清理後的文字）與附件下載彼此獨立，並行處理
+        const [{ cleanedText: question, emojiParts, urlImagePartsRaw }, attachmentParts] = await Promise.all([
+            processCustomEmojis(rawQuestion).then(async ({ cleanedText, emojiParts }) => ({
+                cleanedText,
+                emojiParts,
+                // ✅ 補上 interaction.client，讓 processImageUrls 內部可嘗試修復缺簽名網址
+                urlImagePartsRaw: await processImageUrls(cleanedText, interaction.client),
+            })),
+            attachment ? processAttachments(new Map([[attachment.id, attachment]])) : [],
+        ]);
+
         const urlImageParts = urlImagePartsRaw.map(part => {
             if (part.type === 'missing_signature') {
                 return {
@@ -199,10 +207,6 @@ async function handleAsk(interaction) {
             }
             return part;
         });
-
-        let attachmentParts = [];
-        if (attachment)
-            attachmentParts = await processAttachments(new Map([[attachment.id, attachment]]));
 
         const imageParts = [...emojiParts, ...urlImageParts, ...attachmentParts];
 
@@ -581,34 +585,39 @@ function setupAICommands(client) {
             try {
                 const mode = getUserMode(userId, rawQuestion || '圖片');
 
-                const { cleanedText: question, emojiParts } = await processCustomEmojis(rawQuestion);
+                // 「正在輸入中」涵蓋圖片下載/壓縮階段，使用者不用乾等
+                const answer = await withTyping(message.channel, async () => {
+                    // emoji → 網址圖片、embed、附件三者彼此獨立，並行處理
+                    const [{ question, emojiParts, urlImagePartsRaw }, embedParts, attachmentParts] = await Promise.all([
+                        processCustomEmojis(rawQuestion).then(async ({ cleanedText, emojiParts }) => ({
+                            question: cleanedText,
+                            emojiParts,
+                            // ✅ 補上 client，讓 processImageUrls 內部可嘗試修復缺簽名網址
+                            urlImagePartsRaw: await processImageUrls(cleanedText, client),
+                        })),
+                        processEmbeds(message.embeds),
+                        processAttachments(message.attachments),
+                    ]);
 
-                const embedParts = await processEmbeds(message.embeds);
-                // ✅ 補上 client，讓 processImageUrls 內部可嘗試修復缺簽名網址
-                const urlImagePartsRaw = await processImageUrls(question, client);
-
-                const urlImageParts = [];
-                for (const part of urlImagePartsRaw) {
-                    if (part.type === 'missing_signature') {
-                        if (embedParts.length > 0) {
-                            continue;
+                    const urlImageParts = [];
+                    for (const part of urlImagePartsRaw) {
+                        if (part.type === 'missing_signature') {
+                            if (embedParts.length > 0) {
+                                continue;
+                            } else {
+                                urlImageParts.push({
+                                    type: 'text',
+                                    text: '[系統提示：使用者傳送的 Discord 圖片網址缺少了安全簽名參數(?ex=...&is=...)，導致權限不足無法讀取。請直接吐槽使用者複製連結時把後面的參數弄丟了，叫他重新上傳圖片或給完整的連結。]'
+                                });
+                            }
                         } else {
-                            urlImageParts.push({
-                                type: 'text',
-                                text: '[系統提示：使用者傳送的 Discord 圖片網址缺少了安全簽名參數(?ex=...&is=...)，導致權限不足無法讀取。請直接吐槽使用者複製連結時把後面的參數弄丟了，叫他重新上傳圖片或給完整的連結。]'
-                            });
+                            urlImageParts.push(part);
                         }
-                    } else {
-                        urlImageParts.push(part);
                     }
-                }
 
-                const attachmentParts = await processAttachments(message.attachments);
-                const imageParts = [...emojiParts, ...urlImageParts, ...embedParts, ...attachmentParts];
-
-                const answer = await withTyping(message.channel, () =>
-                    getGeminiResponse(userId, question, imageParts, channel, messageId, botId, message, mode)
-                );
+                    const imageParts = [...emojiParts, ...urlImageParts, ...embedParts, ...attachmentParts];
+                    return getGeminiResponse(userId, question, imageParts, channel, messageId, botId, message, mode);
+                });
 
                 const chunks = splitMessage(answer);
                 for (const chunk of chunks) {
@@ -656,15 +665,17 @@ function setupAICommands(client) {
             const chance = getReplyChance(guildId);
             if (Math.random() < chance) {
                 try {
-                    const { cleanedText: cleanedContent, emojiParts } = await processCustomEmojis(rawCleaned);
+                    let mode;
+                    const shortReply = await withTyping(message.channel, async () => {
+                        const [{ cleanedText: cleanedContent, emojiParts }, attachmentParts] = await Promise.all([
+                            processCustomEmojis(rawCleaned),
+                            processAttachments(message.attachments),
+                        ]);
 
-                    const mode = getUserMode(userId, cleanedContent);
-                    const attachmentParts = await processAttachments(message.attachments);
-                    const imageParts = [...emojiParts, ...attachmentParts]; 
-
-                    const shortReply = await withTyping(message.channel, () =>
-                        getShortResponse(userId, cleanedContent, imageParts, channel, messageId, botId, message, mode)
-                    );
+                        mode = getUserMode(userId, cleanedContent);
+                        const imageParts = [...emojiParts, ...attachmentParts];
+                        return getShortResponse(userId, cleanedContent, imageParts, channel, messageId, botId, message, mode);
+                    });
 
                     if (shortReply) {
                         const sentMsg = await message.channel.send(shortReply);

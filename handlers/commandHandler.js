@@ -41,11 +41,13 @@ function setupBasicCommands(client) {
             .setDescription('測試 Bot 延遲'),
 
         async execute(interaction, client) {
-            await interaction.reply({ content: '🏓 計算中...' });
-            const ping = interaction.createdTimestamp - Date.now();
+            // 以「回覆訊息建立時間 − 指令建立時間」計算往返延遲（兩者皆為 Discord 端時間，不受本機時鐘偏差影響）
+            const response = await interaction.reply({ content: '🏓 計算中...', withResponse: true });
+            const replyTimestamp = response.resource?.message?.createdTimestamp ?? Date.now();
+            const ping = replyTimestamp - interaction.createdTimestamp;
             await interaction.editReply(
                 `🏓 Pong!\n` +
-                `📡 延遲：${Math.abs(ping)}ms\n` +
+                `📡 延遲：${Math.max(0, ping)}ms\n` +
                 `🌐 API 延遲：${Math.round(client.ws.ping)}ms`
             );
         }
