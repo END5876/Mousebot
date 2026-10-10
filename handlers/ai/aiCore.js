@@ -141,14 +141,17 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
 
         relevantMessages = relevantMessages.last(HISTORY_PAIR_LIMIT);
 
+        // 各則訊息的附件並行下載＋壓縮，再依原本的時間順序組裝
+        const historyMessages = [...relevantMessages.values()];
+        const attachmentPartsList = await Promise.all(
+            historyMessages.map(msg => processAttachments(msg.attachments))
+        );
+
         const history = [];
-        for (const msg of relevantMessages.values()) {
+        for (const [index, msg] of historyMessages.entries()) {
             const parts = [];
-            if (msg.attachments.size > 0) {
-                const imgParts = await processAttachments(msg.attachments);
-                imgParts.forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } }));
-            }
-            
+            attachmentPartsList[index].forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } }));
+
             const textContent = msg.cleanContent || msg.content;
             if (textContent?.trim().length > 0) {
                 // 歷史紀錄中，明確標示發言者
