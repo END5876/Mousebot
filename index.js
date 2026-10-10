@@ -39,7 +39,7 @@ const client = new Client({
   ]
 });
 
-// 致命錯誤（uncaughtException）時，先讓 Discord 連線正常關閉再結束程序
+// 致命錯誤（uncaughtException）與 SIGTERM / SIGINT 時，先讓 Discord 連線正常關閉再結束程序
 processGuards.setFatalHook(() => client.destroy());
 
 if (OWNER_USER_IDS.size === 0) {
@@ -95,11 +95,11 @@ client.on('interactionCreate', async interaction => {
       content: '❌ 執行指令時發生錯誤，請稍後再試。',
       flags: MessageFlags.Ephemeral,
     };
-    if (interaction.replied || interaction.deferred) {
-      await interaction.followUp(reply);
-    } else {
-      await interaction.reply(reply);
-    }
+    // 回覆錯誤訊息本身也可能失敗（互動已逾時、頻道已刪除），不要讓它變成 unhandled rejection
+    const send = interaction.replied || interaction.deferred
+      ? interaction.followUp(reply)
+      : interaction.reply(reply);
+    await send.catch(err => console.error('❌ 回覆錯誤訊息失敗：', err.message));
   }
 });
 

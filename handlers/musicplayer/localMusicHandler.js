@@ -14,7 +14,7 @@ const {
 const fs = require('fs');
 const path = require('path');
 
-const { registerEngine, handleAutocomplete } = require('./unifiedQueue');
+const { registerEngine } = require('./unifiedQueue');
 const logger = require('../../utils/logger');
 const libraryClient = require('./musicLibraryClient');
 
@@ -300,9 +300,10 @@ async function playStream(guildId, item, player, { silent = false, countPlay = t
     }
   }
 
+  // 專案內沒有任何地方調整音樂音量，不需要 inlineVolume 的逐幀 PCM 運算
   const resource = createAudioResource(item.filePath, {
     inputType: StreamType.Arbitrary,
-    inlineVolume: true,
+    inlineVolume: false,
   });
   player.play(resource);
 
@@ -372,11 +373,8 @@ function setupLocalMusicEngine(client) {
     logger.debug('LocalMusic', '未設定 MUSIC_LIB_URL，使用原本的本地磁碟音樂庫模式');
   }
 
-  // ── Autocomplete ──────────────────────────────────────
-  client.on('interactionCreate', async interaction => {
-    if (!interaction.isAutocomplete()) return;
-    handleAutocomplete(interaction);
-  });
+  // /play 的 Autocomplete 由 unifiedQueue/commands.js 統一處理，這裡不再重複監聽
+  // （原本兩邊都會處理，每次按鍵掃兩次清單、回應兩次，第二次必定失敗被吞掉）。
 
   logger.debug('LocalMusic', '引擎已載入（清單功能已合併進 /music local list，並依播放次數排序）');
 }

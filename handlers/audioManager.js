@@ -41,10 +41,15 @@ function _subscribe(guildId, player) {
 // ════════════════════════════════════════════════════
 //  靜音層（最低優先，常駐背景）
 // ════════════════════════════════════════════════════
+// 直接送預先編碼好的 Opus 靜音幀（每次 read 一個封包），不經過 PCM → 音量 → Opus 編碼。
+// 原本推送全 0 PCM 再乘 0.01 音量，結果同樣是靜音，卻讓每個常駐伺服器每秒做 50 次編碼。
+// objectMode：StreamType.Opus 要求每個 chunk 是一個獨立封包，不能被串流合併。
+const OPUS_SILENCE_FRAME = Buffer.from([0xF8, 0xFF, 0xFE]);
+
 function _createSilenceStream() {
-  const silence = Buffer.alloc(3840, 0);
   return new Readable({
-    read() { this.push(silence); }
+    objectMode: true,
+    read() { this.push(OPUS_SILENCE_FRAME); }
   });
 }
 
@@ -55,14 +60,10 @@ function startSilenceLayer(guildId) {
   const player = createAudioPlayer();
   state.players.silence = player;
 
-  const makeRes = () => {
-    const r = createAudioResource(_createSilenceStream(), {
-      inputType: StreamType.Raw,
-      inlineVolume: true,
-    });
-    r.volume.setVolume(0.01);
-    return r;
-  };
+  const makeRes = () => createAudioResource(_createSilenceStream(), {
+    inputType: StreamType.Opus,
+    inlineVolume: false,
+  });
 
   player.play(makeRes());
   player.on(AudioPlayerStatus.Idle, () => {
