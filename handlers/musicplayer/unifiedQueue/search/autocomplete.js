@@ -9,9 +9,12 @@ const AC_MIN_KEYWORD_LEN   = 2;
 const AC_SEARCH_TIMEOUT_MS = 2000;
 const AC_CACHE_TTL_MS      = 30_000;
 const AC_RESULT_LIMIT      = 5;
+// 同時進行的即時搜尋上限：每個都是一支 yt-dlp（約 60~100MB），
+// 打字時每個前綴都會觸發搜尋，滿了就終止最舊的（使用者已經打過去的前綴）
+const AC_MAX_IN_FLIGHT     = 2;
 
 const _acCache    = new Map(); // keyword(lowercase) -> { results, timestamp }
-const _acInFlight = new Map(); // keyword(lowercase) -> Promise
+const _acInFlight = new Map(); // keyword(lowercase) -> { promise, controller }（插入順序 = 新舊順序）
 
 setInterval(() => {
   const now = Date.now();
@@ -31,18 +34,29 @@ function _getAcCached(keyword) {
 function _raceOnlineSearch(engine, keyword) {
   const key = keyword.toLowerCase();
 
-  let inflight = _acInFlight.get(key);
+  let inflight = _acInFlight.get(key)?.promise;
   if (!inflight) {
+    while (_acInFlight.size >= AC_MAX_IN_FLIGHT) {
+      const [oldestKey, oldest] = _acInFlight.entries().next().value;
+      _acInFlight.delete(oldestKey);
+      oldest.controller.abort();
+    }
+
+    const controller = new AbortController();
     // 第 3 參數 true      = fast 模式（YouTube 走 flat-playlist 加速）
     // 第 4 參數 ['youtube'] = 只搜尋 YouTube，移除 Bilibili
-    inflight = engine.searchMulti(keyword, AC_RESULT_LIMIT, true, ['youtube'])
+    inflight = engine.searchMulti(keyword, AC_RESULT_LIMIT, true, ['youtube'], { signal: controller.signal })
       .then(results => {
-        _acCache.set(key, { results, timestamp: Date.now() });
+        // 被中止的搜尋回傳空陣列，不能寫進快取，否則 30 秒內這個關鍵字都查不到結果
+        if (!controller.signal.aborted) _acCache.set(key, { results, timestamp: Date.now() });
         return results;
       })
       .catch(() => [])
-      .finally(() => { _acInFlight.delete(key); });
-    _acInFlight.set(key, inflight);
+      .finally(() => {
+        // 被中止時這筆已經被移除，且同 key 可能已有新的搜尋，只刪自己那筆
+        if (_acInFlight.get(key)?.controller === controller) _acInFlight.delete(key);
+      });
+    _acInFlight.set(key, { promise: inflight, controller });
   }
 
   const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), AC_SEARCH_TIMEOUT_MS));

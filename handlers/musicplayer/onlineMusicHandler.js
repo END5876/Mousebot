@@ -225,8 +225,11 @@ async function checkPlaylist(url) {
 // ════════════════════════════════════════════════════════
 //  _searchOnePlatform — 搜尋單一平台（內部工具，不對外匯出）
 // ════════════════════════════════════════════════════════
-function _searchOnePlatform(searchPrefix, keyword, limit, fast = false) {
+// signal（選填）：中止時立即 kill yt-dlp 並回傳空陣列
+function _searchOnePlatform(searchPrefix, keyword, limit, fast = false, signal) {
   return new Promise((resolve) => {
+    if (signal?.aborted) return resolve([]);
+
     const query = `${searchPrefix}${limit}:${keyword}`;
     const isYT  = searchPrefix === 'ytsearch';
 
@@ -259,6 +262,14 @@ function _searchOnePlatform(searchPrefix, keyword, limit, fast = false) {
       try { ytdlp.kill('SIGKILL'); } catch {}
       resolve([]);
     }, timeoutMs);
+
+    signal?.addEventListener('abort', () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      try { ytdlp.kill('SIGKILL'); } catch {}
+      resolve([]);
+    }, { once: true });
 
     ytdlp.stdout.on('data', c => { data      += c.toString(); });
     ytdlp.stderr.on('data', c => { errorData += c.toString(); });
@@ -325,13 +336,13 @@ function _searchOnePlatform(searchPrefix, keyword, limit, fast = false) {
 // ════════════════════════════════════════════════════════
 //  searchMulti — 同時搜尋 YouTube + Bilibili
 // ════════════════════════════════════════════════════════
-async function searchMulti(keyword, limit = 5, fast = false, platforms = ['youtube', 'bilibili']) {
+async function searchMulti(keyword, limit = 5, fast = false, platforms = ['youtube', 'bilibili'], { signal } = {}) {
   const tasks = [
     platforms.includes('youtube')
-      ? _searchOnePlatform('ytsearch', keyword, limit, fast)
+      ? _searchOnePlatform('ytsearch', keyword, limit, fast, signal)
       : Promise.resolve([]),
     platforms.includes('bilibili')
-      ? _searchOnePlatform('bilisearch', keyword, limit, fast)
+      ? _searchOnePlatform('bilisearch', keyword, limit, fast, signal)
       : Promise.resolve([]),
   ];
   const [ytResults, biliResults] = await Promise.all(tasks);
