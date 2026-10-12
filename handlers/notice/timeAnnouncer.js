@@ -242,6 +242,7 @@ const timeAnnounceCommand = {
   data: new SlashCommandBuilder()
     .setName('timeannounce')
     .setDescription('管理本伺服器的整點報時系統')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addStringOption(option =>
       option
         .setName('action')

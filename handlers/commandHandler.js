@@ -1,4 +1,4 @@
-const { EmbedBuilder, SlashCommandBuilder, MessageFlags } = require('discord.js');
+const { EmbedBuilder, SlashCommandBuilder, MessageFlags, PermissionFlagsBits } = require('discord.js');
 const bootSummary = require('../utils/bootSummary');
 
 const SAY_AUTHORIZED_ID = process.env.SAY_AUTHORIZED_ID;
@@ -138,7 +138,8 @@ function setupBasicCommands(client) {
     client.commands.set('say', {
         data: new SlashCommandBuilder()
             .setName('say')
-            .setDescription('讓機器裊說一句話')
+            .setDescription('讓機器人說一句話')
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
             .addStringOption(opt =>
                 opt.setName('text')
                     .setDescription('要說的內容')

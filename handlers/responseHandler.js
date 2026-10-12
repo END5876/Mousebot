@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, MessageFlags } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags, PermissionFlagsBits } = require('discord.js');
 const fs   = require('fs');
 const path = require('path');
 const bootSummary = require('../utils/bootSummary');
@@ -106,6 +106,7 @@ function setupCustomResponses(client) {
   const command = new SlashCommandBuilder()
     .setName('response')
     .setDescription('管理自動回應規則')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 
     // /response add
     .addSubcommand(sub => sub
