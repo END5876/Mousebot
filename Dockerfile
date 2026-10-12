@@ -64,6 +64,11 @@ RUN pip install --no-cache-dir -U edge-tts "yt-dlp[default]" "bgutil-ytdlp-pot-p
 # ── bgutil PO Token Provider 伺服器（預設只監聽 127.0.0.1:4416，不對外開放）──
 COPY --from=bgutil-build /opt/bgutil /opt/bgutil
 
+# ── glibc malloc arena 上限 ─────────────────────────────
+# glibc 預設每條執行緒各開一個 arena，sharp(libvips) / onnxruntime 這類多執行緒原生程式碼
+# 會因此累積大量碎片、RSS 降不回來；限制為 2 個可明顯壓低三個常駐程序的常駐記憶體。
+ENV MALLOC_ARENA_MAX=2
+
 # ── 工作目錄 ────────────────────────────────────────────
 WORKDIR /app
 

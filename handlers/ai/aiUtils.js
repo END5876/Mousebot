@@ -1,5 +1,7 @@
 const { playTTS } = require('../voice/ttsHandler');
 const sharp = require('sharp'); // 引入 sharp 進行圖片壓縮
+// 關閉 libvips 的 operation cache（預設最多 50MB）：每張圖只處理一次，結果已由下方 imageCache 快取，這層純屬重複
+sharp.cache(false);
 const crypto = require('crypto');
 const dns = require('dns').promises;
 const net = require('net');
