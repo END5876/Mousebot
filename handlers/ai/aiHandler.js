@@ -43,6 +43,7 @@ const {
 const { generateGuguArticle, getGuguErrorMessage } = require('./gugugagaGenerator');
 const bootSummary = require('../../utils/bootSummary');
 const { isOwner } = require('../../utils/config');
+const { hasCustomResponse } = require('../responseHandler');
 
 // 每則訊息都會跑一次的正規表示式：原本 `[^\s)\]>]+.*\.` 的兩段貪婪量詞在長訊息上會
 // 造成 O(n²) 回溯；改成單段非空白匹配，語意相同（網址中任一處出現圖片副檔名）。
@@ -651,6 +652,9 @@ function setupAICommands(client) {
             }
 
             if (isChannelDisabled(channelId)) return;
+
+            // 已觸發自訂匹配回應（/response）的訊息，不再隨機回覆
+            if (hasCustomResponse(message.content)) return;
 
             // 將提及轉換為名字
             const rawCleaned = replaceMentions(message, botId);
