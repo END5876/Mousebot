@@ -59,6 +59,32 @@ function saveResponses(data) {
 
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 
+// 找出訊息觸發的自訂回應；沒有匹配時回傳 null
+// （aiHandler 的隨機回覆也會呼叫，用來避免同一則訊息同時觸發兩種回應）
+function findResponse(content) {
+  if (!content) return null;
+  const responses = loadResponses();
+
+  // 完全匹配（用 hasOwn：避免訊息內容是 "constructor"、"toString" 等原型鏈屬性名時誤觸發）
+  if (hasOwn(responses.exact, content)) {
+    return { type: 'exact', keyword: content, response: responses.exact[content] };
+  }
+
+  // 包含匹配
+  for (const [keyword, response] of Object.entries(responses.contains)) {
+    if (content.includes(keyword)) return { type: 'contains', keyword, response };
+  }
+  return null;
+}
+
+function hasCustomResponse(content) {
+  try {
+    return findResponse(content) !== null;
+  } catch {
+    return false;
+  }
+}
+
 async function sendResponse(channel, response) {
   const list = Array.isArray(response) ? response : [response];
   for (const msg of list) await channel.send(msg);
@@ -80,23 +106,12 @@ function setupCustomResponses(client) {
     if (!content) return;
 
     try {
-      const responses = loadResponses();
+      const match = findResponse(content);
+      if (!match) return;
 
-      // 完全匹配（用 hasOwn：避免訊息內容是 "constructor"、"toString" 等原型鏈屬性名時誤觸發）
-      if (hasOwn(responses.exact, content)) {
-        await sendResponse(message.channel, responses.exact[content]);
-        console.log(`🎯 觸發完全匹配回應: "${content}"`);
-        return;
-      }
-
-      // 包含匹配（值可能是用 | 分隔產生的陣列，需逐則送出）
-      for (const [keyword, response] of Object.entries(responses.contains)) {
-        if (content.includes(keyword)) {
-          await sendResponse(message.channel, response);
-          console.log(`🎯 觸發包含匹配回應: "${keyword}"`);
-          return;
-        }
-      }
+      // 值可能是用 | 分隔產生的陣列，需逐則送出
+      await sendResponse(message.channel, match.response);
+      console.log(`🎯 觸發${match.type === 'exact' ? '完全' : '包含'}匹配回應: "${match.keyword}"`);
     } catch (err) {
       console.error('❌ [Response] 自動回應處理失敗:', err.message);
     }
@@ -313,4 +328,4 @@ function setupCustomResponses(client) {
   }
 }
 
-module.exports = { setupCustomResponses };
+module.exports = { setupCustomResponses, hasCustomResponse };
