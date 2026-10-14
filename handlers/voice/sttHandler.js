@@ -309,7 +309,7 @@ async function handleWakeup(guildId, userId, member) {
     userState.lastActive    = Date.now();
 
     try {
-      const aiReply = await getGeminiResponseVoice(userId, sttResult.text);
+      const aiReply = await getGeminiResponseVoice(userId, sttResult.text, null, null, null, null, guildId);
       if (aiReply) {
         // AI 回覆後再次確認 state 仍有效
         if (!guildStates.get(guildId)?.active) return;
