@@ -598,18 +598,7 @@ async function _connectTo({ guild, voiceChannel, textChannel, client }) {
   requestChannels.set(guildId, textChannel);
 
   if (connection) {
-    connections.set(guildId, connection);
-
-    if (!voiceMonitor.isMonitoring(guildId) && voiceChannel) {
-      voiceMonitor.startMonitoring({
-        guildId,
-        connection,
-        channel: voiceChannel,
-        client,
-        onStop: _createPersistentIdleHandler(guildId, textChannel),
-      });
-    }
-
+    _adoptConnection({ guildId, connection, voiceChannel, textChannel, client });
     return connection;
   }
 
@@ -653,6 +642,36 @@ async function _connectTo({ guild, voiceChannel, textChannel, client }) {
   });
 
   connections.set(guildId, connection);
+  return connection;
+}
+
+// 沿用已存在的語音連線（autojoin、/voice 加入、或之前的播放留下的）：登記到 connections、
+// 還沒有閒置監控就掛上。_connectTo 與 adoptExistingConnection 共用。
+function _adoptConnection({ guildId, connection, voiceChannel, textChannel, client }) {
+  connections.set(guildId, connection);
+  if (!voiceMonitor.isMonitoring(guildId) && voiceChannel) {
+    voiceMonitor.startMonitoring({
+      guildId,
+      connection,
+      channel: voiceChannel,
+      client,
+      onStop: _createPersistentIdleHandler(guildId, textChannel),
+    });
+  }
+}
+
+/**
+ * 不是由指令觸發、但 Bot 已經在語音頻道裡（例如 autojoin）時，讓音樂播放接手這條連線，
+ * 效果同 /play 遇到既有連線的情況。webSync.js 從網頁點歌時使用；沒有連線時回傳 null（不會主動加入頻道）。
+ * @param {import('discord.js').Guild} guild
+ * @param {import('discord.js').Client} client
+ * @param {import('discord.js').TextBasedChannel|null} textChannel 閒置停止時的通知頻道
+ */
+function adoptExistingConnection(guild, client, textChannel) {
+  const connection = getVoiceConnection(guild.id);
+  if (!connection || connection.state.status === VoiceConnectionStatus.Destroyed) return null;
+  const voiceChannel = guild.channels.cache.get(connection.joinConfig.channelId) || null;
+  _adoptConnection({ guildId: guild.id, connection, voiceChannel, textChannel, client });
   return connection;
 }
 
@@ -731,4 +750,5 @@ module.exports = {
   resetShuffleBag,
   resumeSavedSessions,
   getRequestChannel,
+  adoptExistingConnection,
 };
