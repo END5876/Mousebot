@@ -380,10 +380,9 @@ async function processImageUrls(content, client) {
             return { type: 'missing_signature', url };
         }
 
+        // 讀不到就安靜略過，不給模型「讀取失敗」的提示，免得它拿來吐槽
         const imgData = await fetchImageUrlAsBase64(url);
-        return imgData
-            ? { type: 'image', mimeType: imgData.mimeType, data: imgData.base64 }
-            : { type: 'text', text: '[系統提示：使用者傳送的圖片網址無法讀取或檔案過大]' };
+        return imgData ? { type: 'image', mimeType: imgData.mimeType, data: imgData.base64 } : null;
     };
 
     return (await Promise.all(urls.map(processOne))).filter(Boolean);
