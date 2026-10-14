@@ -556,10 +556,10 @@ function setupAICommands(client) {
             if (isEmptyContent && hasReference) {
                 if (!process.env.GEMINI_API_KEY) return;
                 try {
+                    // 引用說明與「只 @ 沒打字」的提示由 buildMessagePartsWithReference 補上
                     const mode = getUserMode(userId, '');
-                    const referPrompt = '使用者引用了一則訊息並 @ 了你，沒有輸入其他文字，請針對被引用的內容做出回應或吐槽。';
                     const { text: answer, chunks } = await withTyping(message.channel, () =>
-                        getGeminiResponse(userId, referPrompt, [], channel, messageId, botId, message, mode)
+                        getGeminiResponse(userId, '', [], channel, messageId, botId, message, mode)
                     );
                     for (const chunk of chunks) {
                         const sentMsg = await message.channel.send(chunk);
