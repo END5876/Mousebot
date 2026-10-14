@@ -102,8 +102,18 @@ pip install edge-tts yt-dlp
 python3 oww-server/server.py
 
 # 啟動 Discord Bot
-node index.js
+npm start
 ```
+
+### 開發
+
+```bash
+npm run lint    # ESLint（禁止直接使用 console.*，請改用 utils/logger.js）
+npm test        # node:test 單元測試（分帳計算、JSON 儲存、AI 額度、網址工具…）
+npm run check   # 以上兩者，GitHub Actions 每次 push / PR 都會執行
+```
+
+開發時建議設定 `DEV_GUILD_ID`，Slash Commands 只註冊到測試伺服器、改完立即生效。
 
 ---
 
@@ -119,6 +129,14 @@ CLIENT_ID=your_discord_application_id
 # ── Google Gemini AI（必填） ────────────────────────────────────────
 # 同時供 /ai 對話與分帳系統的帳單照片辨識使用
 GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=                             # 選填，預設 gemini-3.1-flash-lite
+GEMINI_VISION_MODEL=                      # 選填，帳單辨識用模型，預設同 GEMINI_MODEL
+
+# ── AI 額度（選填，0 = 不限制；擁有者不受單人限制） ─────────────────────
+AI_USER_RATE_LIMIT=8                      # 每人在視窗內最多呼叫次數
+AI_USER_RATE_WINDOW_SEC=60
+AI_USER_DAILY_TOKEN_BUDGET=0              # 每人每日 token 上限
+AI_DAILY_TOKEN_BUDGET=0                   # 全體每日 token 上限（硬上限，擁有者也受限）
 
 # ── Groq 語音轉文字 STT（選填） ─────────────────────────────────────
 GROQ_API_KEY=your_groq_api_key
@@ -129,6 +147,13 @@ DEVELOPER_MODE_USER_IDS=123456789012345678
 SAY_AUTHORIZED_ID=123456789012345678      # /say 指令授權使用者
 OWNER_USER_ID=123456789012345678          # Bot 擁有者（可逗號分隔多人）：/ai mode、/response add|remove、/autojoin 變更頻道、可刪除舊版行程；未設定則這些功能全部拒絕
 EXIT_ON_UNCAUGHT=1                        # 未捕捉例外時結束程序交由 supervisord 重啟（設 0 = 只記錄不結束）
+
+# ── 執行環境（選填） ─────────────────────────────────────────────────
+LOG_LEVEL=info                            # debug | info | warn | error（DEBUG_STARTUP=true 等同 debug）
+DEV_GUILD_ID=                             # 設定後 Slash Commands 只註冊到這個伺服器（開發用，立即生效）
+FORCE_COMMAND_SYNC=0                      # 1 = 忽略指令 hash 比對，強制重新註冊
+HEALTH_PORT=3939                          # /healthz 健康檢查埠（0 = 停用）；Docker HEALTHCHECK 使用
+HEALTH_HOST=127.0.0.1
 
 # ── 自動加入語音頻道（選填） ─────────────────────────────────────────
 TARGET_VOICE_CHANNEL_ID=your_voice_channel_id
@@ -191,6 +216,8 @@ HEYJQN_BTN_TTL_MS=900000
 
 # ── 音樂播放（選填） ─────────────────────────────────────────────────
 MAX_CACHE_SIZE_MB=2048
+MUSIC_RESUME=1                            # 重啟後自動接續播放（0 = 停用）
+MUSIC_RESUME_MAX_AGE_MIN=15               # 快照超過幾分鐘就不接續
 # 共用音樂庫服務（選填；未設定則只用本機 data/music）
 MUSIC_LIB_URL=                            # 例如 http://<library-service>.internal:3000
 MUSIC_LIB_SECRET=                         # 與音樂庫服務共用的金鑰（x-music-lib-key）
@@ -221,18 +248,21 @@ Mousebot/
 ├── handlers/
 │   ├── ai/
 │   │   ├── aiChance.js               # 隨機插話機率控制，持久化至 data/replyChance.json
-│   │   ├── aiCore.js                 # Gemini API 核心（gemini-3.1-flash-lite），system prompt 取自 promptStore
+│   │   ├── aiCore.js                 # 對話核心：歷史紀錄組裝、system prompt 取自 promptStore
+│   │   ├── aiQuota.js                # AI 額度：每人頻率限制、每人 / 全體每日 token 上限
 │   │   ├── aiHandler.js              # /ai 指令主處理器（ask/clear/tts/mode/chance/gugu/prompt edit）
 │   │   ├── aiSettings.js             # GENERATION_CONFIG、LOVER/DEVELOPER_MODE_USER_IDS
 │   │   ├── aiUtils.js                # TTS 開關、對話記憶快取、圖片壓縮（sharp）、工具函式
-│   │   ├── gugugagaGenerator.js      # 咕咕嘎嘎文章生成（gemini-2.5-flash-lite）
+│   │   ├── geminiClient.js           # 唯一的 Gemini 入口（@google/genai、GEMINI_MODEL、safetySettings）
+│   │   ├── gugugagaGenerator.js      # 咕咕嘎嘎文章生成
 │   │   ├── modeSelector.js           # 使用者模式選擇與持久化（data/userModes.json）
 │   │   └── promptStore.js            # prompt 存放區：載入 data/prompts/*.md、mtime 熱重載、寫入 API
 │   ├── musicplayer/
 │   │   ├── unifiedQueue/             # 統一播放佇列模組
 │   │   │   ├── index.js              # 對外進入點（彙整子模組，保持 API 介面一致）
 │   │   │   ├── state.js              # 共用狀態 Maps 與引擎注入（registerEngine）
-│   │   │   ├── playback.js           # 播放器生命週期、佇列播放、控制面板更新
+│   │   │   ├── playback.js           # 播放器生命週期、佇列播放、控制面板更新、重啟後接續播放
+│   │   │   ├── session.js            # 播放快照持久化（data/musicSession.json）
 │   │   │   ├── search/                # /play 核心、搜尋與播放清單匯入
 │   │   │   │   ├── index.js
 │   │   │   │   ├── onlineSearch.js    # YouTube / Bilibili 搜尋
@@ -294,7 +324,6 @@ Mousebot/
 │   │   │   ├── settlement.js         # 貪心演算法：最少筆數交叉債務簡化
 │   │   │   ├── deposit.js            # 預收訂金：記錄、與實際花費互相抵銷
 │   │   │   ├── billScanner.js        # 帳單照片辨識（Gemini Vision，結構化 JSON 輸出）
-│   │   │   ├── rateLimiter.js        # 滑動視窗節流器，保護帳單辨識等外部 API 呼叫
 │   │   │   ├── parse.js              # parsePayerField、parseSplitField（解析代墊/分攤語法）
 │   │   │   ├── splitbillClient.js    # 呼叫獨立部署的 splitbill-service（SPLITBILL_SERVICE_URL / KEY）
 │   │   │   ├── stateCache.js         # 跨面板操作狀態快取（TTL 15 分鐘，自動清除過期項目）
@@ -311,9 +340,14 @@ Mousebot/
 │   └── server.py                     # Flask HTTP 伺服器（含 Session TTL、Rate Limiting）
 ├── utils/
 │   ├── bootSummary.js                # 開機摘要收集器，啟動時統一列印模組狀態表
+│   ├── commandSync.js                # Slash Commands 同步（hash 比對、DEV_GUILD_ID）
 │   ├── config.js                     # 擁有者身分判斷（OWNER_USER_ID、isOwner）
-│   ├── logger.js                     # 統一 log 工具（success / warn / error / debug / info）
-│   └── processGuards.js              # 全域 unhandledRejection / uncaughtException 處理（EXIT_ON_UNCAUGHT）
+│   ├── health.js                     # /healthz 健康檢查端點（Docker HEALTHCHECK）
+│   ├── jsonStore.js                  # data/*.json 原子寫入、.bak 備份、合併寫入
+│   ├── logger.js                     # 統一 log 工具（LOG_LEVEL；success / info / warn / error / debug）
+│   ├── processGuards.js              # 全域 unhandledRejection / uncaughtException / 關閉流程（onShutdown）
+│   └── rateLimiter.js                # 滑動視窗節流器（AI 額度、帳單辨識）
+├── test/                             # node:test 單元測試
 ├── data/                             # 執行期持久化資料（已列入 .gitignore，不提交）
 │   ├── music/
 │   │   └── cache/                    # 線上音樂下載快取
@@ -324,6 +358,9 @@ Mousebot/
 │   ├── replyChance.json              # 各伺服器 AI 隨機插話機率
 │   ├── replyChanceDisabled.json      # 已停用 AI 隨機插話的頻道清單
 │   ├── musicPlayCount.json           # 本地音樂播放次數統計
+│   ├── musicSession.json             # 播放中的歌單快照（重啟後接續播放）
+│   ├── tokenUsage.json               # Gemini token 用量（每日，保留 90 天）
+│   ├── commandHash.json              # 上次註冊的 Slash Commands hash
 │   ├── timeAnnouncerSettings.json    # 各伺服器整點報時開關
 │   └── (steam/epic 通知去重 JSON)
 ├── temp/                             # STT 暫存 .wav 檔（已列入 .gitignore）
@@ -504,7 +541,7 @@ Discord 面板 ──→ splitbillClient.js ──(內部網路 HTTP)──┐
 | `discord.js` | ^14.25 | Discord API 主框架 |
 | `@discordjs/voice` | ^0.19 | 語音頻道串流管理 |
 | `@discordjs/opus` | ^0.10 | Opus 音訊編碼 |
-| `@google/generative-ai` | ^0.24 | Google Gemini AI API（對話、帳單照片辨識） |
+| `@google/genai` | ^2.29 | Google Gemini AI API（對話、帳單照片辨識；統一經由 `handlers/ai/geminiClient.js`） |
 | `groq-sdk` | ^1.1 | Groq Whisper 語音轉文字 |
 | `ffmpeg-static` | ^5.3 | 內建 ffmpeg 二進位（prism-media 播放音訊時優先使用） |
 | `prism-media` | ^1.3 | Opus 解碼（STT 收音）、音訊轉碼 |

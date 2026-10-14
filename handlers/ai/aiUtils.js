@@ -1,4 +1,5 @@
 const { playTTS } = require('../voice/ttsHandler');
+const logger = require('../../utils/logger');
 const sharp = require('sharp'); // 引入 sharp 進行圖片壓縮
 // 關閉 libvips 的 operation cache（預設最多 50MB）：每張圖只處理一次，結果已由下方 imageCache 快取，這層純屬重複
 sharp.cache(false);
@@ -42,7 +43,7 @@ function setAITTSEnabled(guildId, value) {
 
 function clearUserMemory(userId) {
     memoryClearedAt.set(userId, Date.now());
-    console.log(`[Memory] 已清除使用者 ${userId} 的對話記憶`);
+    logger.debug('Memory', `已清除使用者 ${userId} 的對話記憶`);
 }
 
 function getMemoryClearTime(userId) {
@@ -105,7 +106,7 @@ async function fetchFreshUrlFromMessage(url, client) {
         return null;
     } catch (err) {
         // 常見原因：頻道已刪除 / Bot 無權限 / 訊息已被刪除
-        console.warn(`[resolveDiscordImageUrl] Fetch 訊息失敗 (msg:${messageId}):`, err.message);
+        logger.warn('resolveDiscordImageUrl', `Fetch 訊息失敗 (msg:${messageId}):`, err.message);
         return null;
     }
 }
@@ -121,7 +122,7 @@ async function fetchFreshUrlFromMessage(url, client) {
  */
 async function refreshUrlViaAPI(url) {
     if (!process.env.DISCORD_TOKEN) {
-        console.warn('[refreshUrlViaAPI] 未設定 DISCORD_TOKEN，無法呼叫官方 API');
+        logger.warn('refreshUrlViaAPI', '未設定 DISCORD_TOKEN，無法呼叫官方 API');
         return null;
     }
 
@@ -139,7 +140,7 @@ async function refreshUrlViaAPI(url) {
         });
 
         if (!res.ok) {
-            console.warn(`[refreshUrlViaAPI] API 回應失敗: HTTP ${res.status}`);
+            logger.warn('refreshUrlViaAPI', `API 回應失敗: HTTP ${res.status}`);
             return null;
         }
 
@@ -147,7 +148,7 @@ async function refreshUrlViaAPI(url) {
         const refreshed = data?.refreshed_urls?.[0]?.refreshed;
         return refreshed || null;
     } catch (err) {
-        console.warn('[refreshUrlViaAPI] 呼叫失敗:', err.message);
+        logger.warn('refreshUrlViaAPI', '呼叫失敗:', err.message);
         return null;
     }
 }
@@ -161,18 +162,18 @@ async function refreshUrlViaAPI(url) {
 async function resolveDiscordImageUrl(url, client) {
     const freshFromMessage = await fetchFreshUrlFromMessage(url, client);
     if (freshFromMessage) {
-        console.log('[resolveDiscordImageUrl] ✅ 透過重新 Fetch 訊息取得新鮮網址');
+        logger.debug('resolveDiscordImageUrl', '✅ 透過重新 Fetch 訊息取得新鮮網址');
         return freshFromMessage;
     }
 
-    console.log('[resolveDiscordImageUrl] ⚠️ Fetch 訊息失敗，改用 refresh-urls API 嘗試補救');
+    logger.debug('resolveDiscordImageUrl', '⚠️ Fetch 訊息失敗，改用 refresh-urls API 嘗試補救');
     const freshFromAPI = await refreshUrlViaAPI(url);
     if (freshFromAPI) {
-        console.log('[resolveDiscordImageUrl] ✅ 透過 refresh-urls API 取得新鮮網址');
+        logger.debug('resolveDiscordImageUrl', '✅ 透過 refresh-urls API 取得新鮮網址');
         return freshFromAPI;
     }
 
-    console.warn('[resolveDiscordImageUrl] ❌ 兩種策略皆失敗，該圖片確實無法存取');
+    logger.warn('resolveDiscordImageUrl', '兩種策略皆失敗，該圖片確實無法存取');
     return null;
 }
 
@@ -252,7 +253,7 @@ async function safeFetchBuffer(rawUrl, maxBytes) {
 async function fetchImageUrlAsBase64(url) {
     const cached = imageCache.get(url);
     if (cached && (Date.now() - cached.cachedAt) < IMAGE_CACHE_TTL_MS) {
-        console.log(`[Image] 快取命中：${url.slice(0, 60)}...`);
+        logger.debug('Image', `快取命中：${url.slice(0, 60)}...`);
         return { base64: cached.base64, mimeType: cached.mimeType };
     }
 
@@ -285,10 +286,10 @@ async function fetchImageUrlAsBase64(url) {
         const base64 = buffer.toString('base64');
         if (imageCache.size >= IMAGE_CACHE_MAX_ENTRIES) imageCache.delete(imageCache.keys().next().value);
         imageCache.set(url, { base64, mimeType: finalMimeType, cachedAt: Date.now() });
-        console.log(`[Image] 已下載並壓縮快取：${url.slice(0, 60)}...`);
+        logger.debug('Image', `已下載並壓縮快取：${url.slice(0, 60)}...`);
         return { base64, mimeType: finalMimeType };
     } catch (err) {
-        console.error(`[Image] 下載或壓縮圖片失敗：`, err.message);
+        logger.error('Image', `下載或壓縮圖片失敗：`, err.message);
         return null;
     }
 }
@@ -395,7 +396,7 @@ async function fetchAndCacheEmoji(url, mimeType, name, id) {
     try {
         const cached = imageCache.get(url);
         if (cached && (Date.now() - cached.cachedAt) < IMAGE_CACHE_TTL_MS) {
-            console.log(`[Emoji] 快取命中：${name}`);
+            logger.debug('Emoji', `快取命中：${name}`);
             return { mimeType: cached.mimeType, data: cached.base64 };
         } else {
             const response = await fetch(url, { signal: AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS) });
@@ -410,11 +411,11 @@ async function fetchAndCacheEmoji(url, mimeType, name, id) {
             const base64 = buffer.toString('base64');
             if (imageCache.size >= IMAGE_CACHE_MAX_ENTRIES) imageCache.delete(imageCache.keys().next().value);
             imageCache.set(url, { base64, mimeType: finalMimeType, cachedAt: Date.now() });
-            console.log(`[Emoji] 已下載：${name} (${id})`);
+            logger.debug('Emoji', `已下載：${name} (${id})`);
             return { mimeType: finalMimeType, data: base64 };
         }
     } catch (err) {
-        console.warn(`[Emoji] 下載失敗 ${name}:`, err.message);
+        logger.warn('Emoji', `下載失敗 ${name}:`, err.message);
         return null;
     }
 }
@@ -458,7 +459,7 @@ function dedupeInlineParts(parts) {
         seen.add(hash);
         return true;
     });
-    if (removed > 0) console.log(`[Image] 已移除 ${removed} 張重複圖片`);
+    if (removed > 0) logger.debug('Image', `已移除 ${removed} 張重複圖片`);
     return result;
 }
 
@@ -471,7 +472,7 @@ setInterval(() => {
     for (const [url, entry] of imageCache.entries()) {
         if (now - entry.cachedAt >= IMAGE_CACHE_TTL_MS) { imageCache.delete(url); cleared++; }
     }
-    if (cleared > 0) console.log(`[Image Cache] 已清除 ${cleared} 筆過期快取`);
+    if (cleared > 0) logger.debug('Image Cache', `已清除 ${cleared} 筆過期快取`);
 }, IMAGE_CACHE_TTL_MS);
 
 setInterval(() => {
@@ -480,7 +481,7 @@ setInterval(() => {
     for (const [channelId, entry] of historyCache.entries()) {
         if (now - entry.cachedAt >= HISTORY_CACHE_TTL_MS) { historyCache.delete(channelId); cleared++; }
     }
-    if (cleared > 0) console.log(`[History Cache] 已清除 ${cleared} 個過期頻道快取`);
+    if (cleared > 0) logger.debug('History Cache', `已清除 ${cleared} 個過期頻道快取`);
 }, HISTORY_CACHE_TTL_MS);
 
 // ════════════════════════════════════════════════════════
@@ -518,19 +519,19 @@ async function speakWithTTS(source, text, guildId) {
     if (!guildId || !isAITTSEnabled(guildId)) return;
     const voiceChannel = source.member?.voice?.channel;
     if (!voiceChannel) {
-        console.log(`🔇 [TTS] 使用者不在語音頻道，跳過朗讀`);
+        logger.info('TTS', `🔇 使用者不在語音頻道，跳過朗讀`);
         return;
     }
     const ttsText = text.length > TTS_MAX_LENGTH ? text.slice(0, TTS_MAX_LENGTH) : text;
     try {
         const result = await playTTS(guildId, ttsText);
         if (!result.success) {
-            console.warn(`⚠️ [TTS] 朗讀失敗 (reason: ${result.reason})`);
+            logger.warn('TTS', `朗讀失敗 (reason: ${result.reason})`);
         } else {
-            console.log(`🔊 [TTS] 朗讀中 (engine: ${result.engine}, queued: ${result.queued})`);
+            logger.debug('TTS', `🔊 朗讀中 (engine: ${result.engine}, queued: ${result.queued})`);
         }
     } catch (err) {
-        console.error('❌ [TTS] 呼叫 playTTS 發生錯誤:', err.message);
+        logger.error('TTS', '呼叫 playTTS 發生錯誤:', err.message);
     }
 }
 

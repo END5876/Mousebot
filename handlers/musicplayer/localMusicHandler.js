@@ -8,7 +8,6 @@ const {
 } = require('@discordjs/voice');
 const {
   EmbedBuilder,
-  SlashCommandBuilder,
   MessageFlags,
 } = require('discord.js');
 const fs = require('fs');
@@ -16,6 +15,7 @@ const path = require('path');
 
 const { registerEngine } = require('./unifiedQueue');
 const logger = require('../../utils/logger');
+const { readJson, createDebouncedWriter } = require('../../utils/jsonStore');
 const libraryClient = require('./musicLibraryClient');
 
 // ── 音樂資料夾路徑 ────────────────────────────────────────
@@ -45,31 +45,21 @@ const PLAYCOUNT_PATH = path.join(__dirname, '..', '..', 'data', 'musicPlayCount.
 /** @type {Map<string, number>} filename → 播放次數 */
 let playCountMap = new Map();
 
-function ensureDataDir() {
-  const dir = path.dirname(PLAYCOUNT_PATH);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+function loadPlayCounts() {
+  const raw = readJson(PLAYCOUNT_PATH, {});
+  playCountMap = new Map(Object.entries(raw && typeof raw === 'object' ? raw : {}));
+  logger.debug('LocalMusic', `已載入 ${playCountMap.size} 筆播放次數紀錄`);
 }
 
-function loadPlayCounts() {
-  try {
-    if (fs.existsSync(PLAYCOUNT_PATH)) {
-      const raw = JSON.parse(fs.readFileSync(PLAYCOUNT_PATH, 'utf-8'));
-      playCountMap = new Map(Object.entries(raw));
-      logger.debug('LocalMusic', `已載入 ${playCountMap.size} 筆播放次數紀錄`);
-    }
-  } catch (err) {
-    logger.warn('LocalMusic', `播放次數紀錄載入失敗：${err.message}`);
-    playCountMap = new Map();
-  }
-}
+// 每播一首就要存一次，合併短時間內的多次寫入（程序結束時自動補寫）
+const playCountWriter = createDebouncedWriter(
+  PLAYCOUNT_PATH,
+  () => Object.fromEntries(playCountMap),
+  { debounceMs: 5000, label: 'LocalMusic' }
+);
 
 function savePlayCounts() {
-  try {
-    ensureDataDir();
-    fs.writeFileSync(PLAYCOUNT_PATH, JSON.stringify(Object.fromEntries(playCountMap), null, 2), 'utf-8');
-  } catch (err) {
-    console.error('❌ [LocalMusic] 播放次數紀錄儲存失敗：', err.message);
-  }
+  playCountWriter.schedule();
 }
 
 function getPlayCount(filename) {
@@ -153,7 +143,7 @@ function _getMusicFilesLocalWalk() {
 function _scanMusicFilesLocalWalk() {
   try {
     if (!fs.existsSync(MUSIC_DIR)) {
-      console.warn('⚠️ data/music 資料夾不存在，嘗試建立...');
+      logger.warn('LocalMusic', 'data/music 資料夾不存在，嘗試建立...');
       fs.mkdirSync(MUSIC_DIR, { recursive: true });
       return [];
     }
@@ -189,7 +179,7 @@ function _scanMusicFilesLocalWalk() {
 
     return files;
   } catch (err) {
-    console.error('❌ 讀取 data/music 資料夾失敗:', err);
+    logger.error('LocalMusic', '讀取 data/music 資料夾失敗:', err);
     return [];
   }
 }
@@ -203,7 +193,6 @@ function _scanMusicFilesLocalWalk() {
 //  提供播放次數，見 musicLibraryClient.js / library-service）。
 // ════════════════════════════════════════════════════════
 let _libraryListCache = [];
-let _libraryListRefreshTimer = null;
 let _libraryListRefreshInFlight = null;
 
 function _libraryFileToLocalEntry(f) {
@@ -286,15 +275,15 @@ async function playStream(guildId, item, player, { silent = false, countPlay = t
   if (!fs.existsSync(item.filePath)) {
     if (libraryClient.isConfigured()) {
       try {
-        if (!silent) console.log(`⬇️ [LocalMusic] 本地無此檔案，向共用音樂庫下載: ${item.filename}`);
+        if (!silent) logger.info('LocalMusic', `⬇️ 本地無此檔案，向共用音樂庫下載: ${item.filename}`);
         await libraryClient.downloadToFile(item.filename, item.filePath);
       } catch (err) {
-        console.error(`❌ [LocalMusic] 向共用音樂庫下載失敗: ${item.filename} (${err.message})`);
+        logger.error('LocalMusic', `向共用音樂庫下載失敗: ${item.filename} (${err.message})`);
         player.emit('error', new Error(`找不到檔案: ${item.filename}`));
         return;
       }
     } else {
-      console.error(`❌ [LocalMusic] 找不到檔案: ${item.filePath}`);
+      logger.error('LocalMusic', `找不到檔案: ${item.filePath}`);
       player.emit('error', new Error(`找不到檔案: ${item.filename}`));
       return;
     }
@@ -317,7 +306,7 @@ async function playStream(guildId, item, player, { silent = false, countPlay = t
   }
 
   if (!silent) {
-    console.log(`🎵 [LocalMusic] 播放: ${item.title} (${guildId})`);
+    logger.info('LocalMusic', `🎵 播放: ${item.title} (${guildId})`);
   }
 }
 
@@ -367,7 +356,7 @@ function setupLocalMusicEngine(client) {
     // getMusicFiles() 可能還是空陣列，屬於可接受的暫時性狀態），
     // 之後每 20 秒背景刷新一次。
     _refreshLibraryList();
-    _libraryListRefreshTimer = setInterval(_refreshLibraryList, LIBRARY_LIST_REFRESH_MS);
+    setInterval(_refreshLibraryList, LIBRARY_LIST_REFRESH_MS);
     logger.debug('LocalMusic', `已啟用共用音樂庫模式（${process.env.MUSIC_LIB_URL}），本地清單每 ${LIBRARY_LIST_REFRESH_MS / 1000} 秒刷新一次`);
   } else {
     logger.debug('LocalMusic', '未設定 MUSIC_LIB_URL，使用原本的本地磁碟音樂庫模式');

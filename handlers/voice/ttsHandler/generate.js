@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('path');
+const logger = require('../../../utils/logger');
 const { getActiveModel } = require('./models');
 const { getCached, putCache } = require('./cache');
 const {
@@ -30,17 +31,17 @@ async function generateTTS(text, filename, guildId) {
       await generateSoVITS(text, sovitsFile, guildId);
       // SoVITS 成功：標記健康
       reportSovitsSuccess();
-      console.log(`✅ [SoVITS][${model.name}] 生成成功: ${text.slice(0, 20)}...`);
+      logger.debug('SoVITS', `✅ [${model.name}] 生成成功: ${text.slice(0, 20)}...`);
       const result = { file: sovitsFile, engine: 'sovits', model: model.name };
       putCache(text, model.key, result);
       return result;
     } catch (err) {
       // SoVITS 失敗：標記不可用，下次直接走 fallback
       reportSovitsFailure();
-      console.warn(`⚠️ [SoVITS] 失敗 (${err.message})，切換至 edge-tts`);
+      logger.warn('SoVITS', `失敗 (${err.message})，切換至 edge-tts`);
     }
   } else {
-    console.log(`⚡ [SoVITS] 已知不可用，直接使用 edge-tts`);
+    logger.info('SoVITS', `⚡ 已知不可用，直接使用 edge-tts`);
   }
 
   if (!getHasEdgeTTS()) throw new Error('SoVITS 不可用且 edge-tts 未安裝');
@@ -48,7 +49,7 @@ async function generateTTS(text, filename, guildId) {
   const voice    = resolveVoice(text, guildId);
   const edgeFile = filename.replace(/\.\w+$/, '_edge.mp3');
   await generateEdgeTTS(text, edgeFile, voice);
-  console.log(`✅ [edge-tts] 生成成功: ${text.slice(0, 20)}...`);
+  logger.debug('edge-tts', `✅ 生成成功: ${text.slice(0, 20)}...`);
   const result = { file: edgeFile, engine: 'edge', voice };
   putCache(text, model.key, result);
   return result;

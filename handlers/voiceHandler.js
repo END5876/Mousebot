@@ -25,6 +25,8 @@ const {
 } = require('./voice/sttHandler');
 
 const { getGeminiResponseVoice } = require('./ai/aiHandler');
+const logger = require('../utils/logger');
+const { isQuotaError, quotaMessage } = require('./ai/aiQuota');
 const { playTTS } = require('./voice/ttsHandler');
 const bootSummary = require('../utils/bootSummary');
 
@@ -161,7 +163,7 @@ async function handleJoin(interaction) {
         });
 
         connection.on(VoiceConnectionStatus.Ready, () => {
-          console.log('✅ 語音連接已就緒');
+          logger.success('Voice', '語音連接已就緒');
         });
 
         connection.on(VoiceConnectionStatus.Disconnected, async () => {
@@ -172,7 +174,7 @@ async function handleJoin(interaction) {
             ]);
           } catch (error) {
             connection.destroy();
-            console.log('❌ 語音連接已斷開');
+            logger.warn('Voice', '語音連接已斷開');
             cleanupGuild(interaction.guildId);
 
             if (sttActiveGuilds.has(interaction.guildId)) {
@@ -185,14 +187,14 @@ async function handleJoin(interaction) {
         });
 
         await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
-        console.log(`✅ 已加入語音頻道：${voiceChannel.name} (${voiceChannel.guild.name})`);
+        logger.success('Voice', `已加入語音頻道：${voiceChannel.name} (${voiceChannel.guild.name})`);
 
         await interaction.reply(
           `✅ 已加入語音頻道：**${voiceChannel.name}**\n💡 可用 \`/voice stt start\`（喚醒詞）或 \`/voice record-button\`（按鈕手動錄音）`
         );
 
       } catch (error) {
-        console.error('加入語音頻道時發生錯誤：', error);
+        logger.error('Voice', '加入語音頻道時發生錯誤：', error);
         await interaction.reply({
           content: '❌ 加入語音頻道時發生錯誤',
           flags: MessageFlags.Ephemeral
@@ -236,7 +238,7 @@ async function handleLeave(interaction) {
 
       connection.destroy();
 
-      console.log(`👋 已離開語音頻道 (${interaction.guild.name})`);
+      logger.info('Voice', `👋 已離開語音頻道 (${interaction.guild.name})`);
       await interaction.reply('👋 已離開語音頻道');
 }
 
@@ -312,9 +314,13 @@ async function handleStt(interaction, sub) {
               await channel.send(`🤖 **機器鳥**：${aiReply}`);
 
               const result = await playTTS(guildId, aiReply);
-              if (!result.success) console.warn(`[STT] TTS 失敗：${result.reason}`);
+              if (!result.success) logger.warn('STT', `TTS 失敗：${result.reason}`);
             } catch (err) {
-              console.error('[STT Callback] 錯誤：', err.message);
+              if (isQuotaError(err)) {
+                await channel.send(quotaMessage(err)).catch(() => {});
+                return;
+              }
+              logger.error('STT Callback', '錯誤：', err.message);
               await channel.send('❌ 處理語音指令時發生錯誤');
             }
           }
@@ -466,7 +472,7 @@ function setupVoiceCommands(client) {
           const conn = getVoiceConnection(guildId);
           if (conn && getActiveLayer(guildId) !== 'silence') {
             startSilenceLayer(guildId);
-            console.log(`🔇 自動開始播放靜音音頻 (guildId: ${guildId})`);
+            logger.info('Voice', `🔇 自動開始播放靜音音頻 (guildId: ${guildId})`);
           }
           silenceTimers.delete(guildId);
         }, 5 * 60 * 1000);
@@ -571,7 +577,7 @@ function setupVoiceCommands(client) {
         await manualRecordOnce(guildId, userId, interaction.member, interaction.channel);
 
       } catch (err) {
-        console.error('[heyjqn] 按鈕流程錯誤:', err);
+        logger.error('heyjqn', '按鈕流程錯誤:', err);
         await interaction.followUp({
           content: `❌ 手動錄音失敗：${err.message}`,
           flags: MessageFlags.Ephemeral
@@ -587,7 +593,7 @@ function setupVoiceCommands(client) {
               components: [buildHeyJqnButton(guildId, false)],
             });
           } catch (e) {
-            console.warn('[heyjqn] 恢復按鈕失敗:', e.message);
+            logger.warn('heyjqn', '恢復按鈕失敗:', e.message);
           }
         }
       }

@@ -11,3 +11,6 @@ start.bat
 README.md
 __pycache__
 *.pyc
+test
+.github
+eslint.config.js

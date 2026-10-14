@@ -8,6 +8,7 @@ const {
 } = require('discord.js');
 
 const { activeSearchMessages } = require('../state');
+const logger = require('../../../../utils/logger');
 const { enqueue, updateControlPanel } = require('../playback');
 const { _formatDuration, _resolveEntryUrl } = require('./urlUtils');
 
@@ -135,7 +136,7 @@ async function _handleAddPlaylist(interaction, baseUrl, playlistInfo, guildId) {
 
   await interaction.editReply({ embeds: [embed], components: [] });
   await updateControlPanel(guildId, interaction.channel);
-  console.log(`✅ [UnifiedQueue] playlist: ${addedCount} 首已加入佇列, ${skippedCount} 首跳過 (${guildId})`);
+  logger.success('UnifiedQueue', `playlist: ${addedCount} 首已加入佇列, ${skippedCount} 首跳過 (${guildId})`);
 }
 
 module.exports = {

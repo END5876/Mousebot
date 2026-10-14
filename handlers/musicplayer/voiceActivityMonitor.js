@@ -13,7 +13,8 @@
 //   一般模式（觸發後 stopMonitoring 並讓 onStop 離開頻道）已停用，
 //   相關程式碼保留在 _trigger() 內以註解方式留存，之後若要恢復可以參考。
 
-const fs   = require('fs');
+const { readJson, writeJsonAtomic } = require('../../utils/jsonStore');
+const logger = require('../../utils/logger');
 const path = require('path');
 
 const ALONE_TIMEOUT_MS   = 30 * 60 * 1000; // 30 分鐘：頻道內只剩機器人
@@ -32,34 +33,17 @@ const ENABLED_GUILDS_PATH = path.resolve(__dirname, '../../data/voiceMonitorEnab
 // guildId -> boolean（未設定時預設為 true，即預設開啟，延續現有行為）
 let enabledGuilds = new Map();
 
-function _ensureDataDir() {
-  const dir = path.dirname(ENABLED_GUILDS_PATH);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-}
-
 function _loadEnabledGuilds() {
-  try {
-    if (fs.existsSync(ENABLED_GUILDS_PATH)) {
-      const raw = JSON.parse(fs.readFileSync(ENABLED_GUILDS_PATH, 'utf-8'));
-      enabledGuilds = new Map(Object.entries(raw));
-      console.log(`[VoiceMonitor] 已載入 ${enabledGuilds.size} 筆閒置監控開關設定`);
-    }
-  } catch (err) {
-    console.warn('[VoiceMonitor] 載入閒置監控開關設定失敗，使用預設值:', err.message);
-    enabledGuilds = new Map();
-  }
+  const raw = readJson(ENABLED_GUILDS_PATH, {});
+  enabledGuilds = new Map(Object.entries(raw && typeof raw === 'object' ? raw : {}));
+  logger.debug('VoiceMonitor', `已載入 ${enabledGuilds.size} 筆閒置監控開關設定`);
 }
 
 function _saveEnabledGuilds() {
   try {
-    _ensureDataDir();
-    fs.writeFileSync(
-      ENABLED_GUILDS_PATH,
-      JSON.stringify(Object.fromEntries(enabledGuilds), null, 2),
-      'utf-8'
-    );
+    writeJsonAtomic(ENABLED_GUILDS_PATH, Object.fromEntries(enabledGuilds));
   } catch (err) {
-    console.error('[VoiceMonitor] 儲存閒置監控開關設定失敗:', err.message);
+    logger.error('VoiceMonitor', `儲存閒置監控開關設定失敗：${err.message}`);
   }
 }
 
@@ -78,7 +62,7 @@ function isEnabled(guildId) {
 function setEnabled(guildId, enabled) {
   enabledGuilds.set(guildId, !!enabled);
   _saveEnabledGuilds();
-  console.log(`⚙️ [VoiceMonitor] guild ${guildId} 閒置監控功能已設定為: ${enabled ? '開啟' : '關閉'}`);
+  logger.info('VoiceMonitor', `⚙️ guild ${guildId} 閒置監控功能已設定為: ${enabled ? '開啟' : '關閉'}`);
 }
 
 /**
@@ -139,7 +123,7 @@ function _ensureGlobalVoiceStateListener(client) {
     }
   });
 
-  console.log('✅ [VoiceMonitor] 全域 voiceStateUpdate 監聽器已註冊（單例，僅一次）');
+  logger.success('VoiceMonitor', '全域 voiceStateUpdate 監聽器已註冊（單例，僅一次）');
 }
 
 /**
@@ -151,7 +135,7 @@ function _ensureGlobalVoiceStateListener(client) {
  */
 function startMonitoring({ guildId, connection, channel, client, onStop, persistent = true }) {
   if (!isEnabled(guildId)) {
-    console.log(`⏸️ [VoiceMonitor] guild ${guildId} 的閒置監控功能已關閉，不啟動監控`);
+    logger.info('VoiceMonitor', `⏸️ guild ${guildId} 的閒置監控功能已關閉，不啟動監控`);
     return;
   }
 
@@ -216,14 +200,14 @@ function startMonitoring({ guildId, connection, channel, client, onStop, persist
   }, CHECK_INTERVAL_MS);
 
   monitors.set(guildId, state);
-  console.log(`👀 [VoiceMonitor] 開始監控 guild ${guildId} 的語音活動${persistent ? '（常駐模式，觸發後不離開頻道）' : ''}`);
+  logger.info('VoiceMonitor', `👀 開始監控 guild ${guildId} 的語音活動${persistent ? '（常駐模式，觸發後不離開頻道）' : ''}`);
 }
 
 function _trigger(guildId, reason) {
   const state = monitors.get(guildId);
   if (!state) return;
 
-  console.log(`⏹️ [VoiceMonitor] 觸發自動停止 (${guildId})：${reason}`);
+  logger.info('VoiceMonitor', `⏹️ 觸發自動停止 (${guildId})：${reason}`);
   const cb = state.onStop;
 
   // ── 常駐模式（目前唯一使用的模式）────────────────────────
@@ -258,7 +242,7 @@ function stopMonitoring(guildId) {
   //   因為全域監聽器透過 monitors Map 動態判斷，
   //   guild 被刪除後自然不會再被處理到（monitors.delete 在下方執行）
   monitors.delete(guildId);
-  console.log(`🛑 [VoiceMonitor] 停止監控 guild ${guildId}`);
+  logger.info('VoiceMonitor', `🛑 停止監控 guild ${guildId}`);
 }
 
 /**

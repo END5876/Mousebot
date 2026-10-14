@@ -5,7 +5,7 @@ const {
   StringSelectMenuBuilder
 } = require('discord.js');
 const { formatMoneyDisplay } = require('../../utils/calculator');
-const { SlidingWindowRateLimiter } = require('../../utils/rateLimiter');
+const { SlidingWindowRateLimiter } = require('../../../../utils/rateLimiter');
 
 // ────────────────────────────────────────────────────────────────
 // ⏱️ 帳單掃描相關的時間/數量限制與共用小工具

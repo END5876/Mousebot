@@ -2,10 +2,12 @@ require('dotenv').config();
 // 必須最早安裝：之後載入的任何模組在載入期間丟出的錯誤也要被接住
 const processGuards = require('./utils/processGuards');
 processGuards.install();
-const { Client, GatewayIntentBits, REST, Routes, Collection, MessageFlags } = require('discord.js');
+const { Client, GatewayIntentBits, Collection, MessageFlags } = require('discord.js');
 const logger = require('./utils/logger');
 const bootSummary = require('./utils/bootSummary');
 const { OWNER_USER_IDS } = require('./utils/config');
+const { syncCommands } = require('./utils/commandSync');
+const { startHealthServer } = require('./utils/health');
 
 // ── 導入所有處理器 ─────────────────────────────────────────
 const { setupVoiceCommands }     = require('./handlers/voiceHandler');
@@ -22,7 +24,7 @@ const { setupTimeAnnouncer }     = require('./handlers/notice/timeAnnouncer');
 const { setupSplitbillCommands } = require('./handlers/splitbill/index');
 
 // ── 重構後的音樂模組 ───────────────────────────────────────
-const { setupUnifiedCommands }   = require('./handlers/musicplayer/unifiedQueue');
+const { setupUnifiedCommands, resumeSavedSessions } = require('./handlers/musicplayer/unifiedQueue');
 const { setupOnlineMusicEngine } = require('./handlers/musicplayer/onlineMusicHandler');
 const { setupLocalMusicEngine }  = require('./handlers/musicplayer/localMusicHandler');
 
@@ -62,6 +64,13 @@ setupTimeAnnouncer(client);
 // ── 🆕 注入分帳介面與唯一的 /splitbill 指令 ───────────────
 setupSplitbillCommands(client);
 
+// ── 音樂：指令與本地引擎在登入前就註冊 ────────────────────
+// 過去要等 clientReady 後才註冊 /play、/music，這段期間有人下指令會得到「找不到指令」。
+// 本地引擎不依賴網路可立即注入；線上引擎（需檢查 yt-dlp / bgutil）在 ready 後非同步注入，
+// 注入前呼叫線上功能時各呼叫點會回覆「引擎初始化中」。
+setupLocalMusicEngine(client);
+setupUnifiedCommands(client);
+
 // ── Slash Command 互動處理 ─────────────────────────────────
 client.on('interactionCreate', async interaction => {
 
@@ -72,7 +81,7 @@ client.on('interactionCreate', async interaction => {
       try {
         await command.autocomplete(interaction);
       } catch (err) {
-        console.error('❌ Autocomplete 錯誤：', err);
+        logger.error('Interaction', `Autocomplete 錯誤：${err.message}`);
       }
     }
     return;
@@ -83,14 +92,14 @@ client.on('interactionCreate', async interaction => {
 
   const command = client.commands.get(interaction.commandName);
   if (!command) {
-    console.warn(`⚠️ 找不到指令：/${interaction.commandName}`);
+    logger.warn('Interaction', `找不到指令：/${interaction.commandName}`);
     return;
   }
 
   try {
     await command.execute(interaction, client);
   } catch (error) {
-    console.error(`❌ 執行指令 /${interaction.commandName} 時發生錯誤：`, error);
+    logger.error('Interaction', `執行指令 /${interaction.commandName} 時發生錯誤：${error.stack || error.message}`);
     const reply = {
       content: '❌ 執行指令時發生錯誤，請稍後再試。',
       flags: MessageFlags.Ephemeral,
@@ -99,25 +108,34 @@ client.on('interactionCreate', async interaction => {
     const send = interaction.replied || interaction.deferred
       ? interaction.followUp(reply)
       : interaction.reply(reply);
-    await send.catch(err => console.error('❌ 回覆錯誤訊息失敗：', err.message));
+    await send.catch(err => logger.error('Interaction', `回覆錯誤訊息失敗：${err.message}`));
   }
 });
 
 // ── 註冊 Slash Commands 到 Discord ────────────────────────
+// 指令內容沒變就不重新 PUT；設定 DEV_GUILD_ID 時改註冊到測試伺服器（立即生效）。
 async function registerSlashCommands() {
-  const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   const commands = [...client.commands.values()].map(cmd => cmd.data.toJSON());
+  const devGuildId = process.env.DEV_GUILD_ID?.trim() || null;
 
   try {
-    logger.debug('Boot', '正在註冊 Slash Commands...');
-    await rest.put(
-      Routes.applicationCommands(process.env.CLIENT_ID),
-      { body: commands }
+    logger.debug('Boot', '正在同步 Slash Commands...');
+    const { skipped, scope, count } = await syncCommands({
+      commands,
+      token: process.env.DISCORD_TOKEN,
+      clientId: process.env.CLIENT_ID,
+      devGuildId,
+      force: process.env.FORCE_COMMAND_SYNC === '1',
+    });
+    const where = scope === 'global' ? '全域' : `測試伺服器 ${devGuildId}`;
+    bootSummary.report(
+      'Slash Commands 註冊',
+      'ok',
+      skipped ? `${count} 個指令無變動，略過註冊（${where}）` : `已同步 ${count} 個指令到 Discord（${where}）`
     );
-    bootSummary.report('Slash Commands 註冊', 'ok', `已同步 ${commands.length} 個指令到 Discord`);
   } catch (err) {
     bootSummary.report('Slash Commands 註冊', 'off', `註冊失敗: ${err.message}`);
-    console.error('❌ Slash Commands 註冊失敗:', err);
+    logger.error('Boot', `Slash Commands 註冊失敗：${err.stack || err.message}`);
   }
 }
 
@@ -125,30 +143,34 @@ async function registerSlashCommands() {
 client.once('clientReady', async () => {
   logger.success('Discord', `已登入為 ${client.user.tag}（${client.guilds.cache.size} 個伺服器）`);
 
-  // ── 音樂引擎初始化（需 async，在 ready 後執行）──────────
-  // 順序重要：先注入引擎，再載入統一指令
-  await setupOnlineMusicEngine(); // 1. 注入 online 引擎（含 yt-dlp 檢查）
-  setupLocalMusicEngine(client);  // 2. 注入 local 引擎（/music local list 由 setupUnifiedCommands 註冊）
-  setupUnifiedCommands(client);   // 3. 載入合併後的 /music 指令
-
   client.user.setPresence({
     activities: [{ name: '逼逼 機油好難喝', type: 2 }],
     status: 'online'
   });
 
-  await registerSlashCommands();
+  // 線上音樂引擎（含 yt-dlp / bgutil 檢查）與指令同步彼此獨立，並行處理
+  await Promise.all([
+    setupOnlineMusicEngine(),
+    registerSlashCommands(),
+  ]);
 
   // ── 所有模組都已回報狀態，統一印出開機摘要 ────────────
   bootSummary.print();
+
+  // ── 接續重啟前的音樂播放（需在線上引擎注入之後）──────
+  const resumed = await resumeSavedSessions(client);
+  if (resumed > 0) logger.success('MusicSession', `已恢復 ${resumed} 個伺服器的播放`);
 });
+
+startHealthServer(client);
 
 // ── 錯誤處理 ──────────────────────────────────────────────
 client.on('error', error => {
-  console.error('❌ Discord 客戶端錯誤：', error);
+  logger.error('Discord', `客戶端錯誤：${error.stack || error.message}`);
 });
 
 // ── 登入 ──────────────────────────────────────────────────
 client.login(process.env.DISCORD_TOKEN).catch(error => {
-  console.error('❌ 登入失敗：', error);
+  logger.error('Discord', `登入失敗：${error.message}`);
   process.exit(1);
 });

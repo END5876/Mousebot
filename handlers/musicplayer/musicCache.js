@@ -130,10 +130,10 @@ function evictCacheIfNeeded() {
       const oldest = files.shift();
       fs.unlinkSync(oldest.fp);
       totalMB -= oldest.size / 1024 / 1024;
-      console.log(`🗑️ [Cache] 快取已滿，刪除舊檔: ${path.basename(oldest.fp)}`);
+      logger.info('Cache', `🗑️ 快取已滿，刪除舊檔: ${path.basename(oldest.fp)}`);
     }
   } catch (err) {
-    console.error('❌ [Cache] 快取清理失敗:', err);
+    logger.error('Cache', '快取清理失敗:', err);
   }
 }
 
@@ -163,7 +163,7 @@ function downloadAndCache(url, title, ytdlpArgs, onProgress) {
     const platform = url.includes('youtube.com') || url.includes('youtu.be')
       ? 'YouTube' : 'Bilibili';
 
-    console.log(`⬇️ [${platform}] 開始下載: ${filename}`);
+    logger.info(platform, `⬇️ 開始下載: ${filename}`);
     const ytdlp = spawn(ytdlpPath, finalArgs, { windowsHide: true });
 
     let errorOutput = '';
@@ -183,7 +183,7 @@ function downloadAndCache(url, title, ytdlpArgs, onProgress) {
       if (code !== 0) {
         safeUnlink(rawTmp);
         safeUnlink(`${rawTmp}.part`);
-        console.error(`❌ [${platform}] 下載失敗:`, errorOutput.slice(-300));
+        logger.error(platform, `下載失敗:`, errorOutput.slice(-300));
         reject(new Error(`下載失敗 (code: ${code}): ${errorOutput.slice(-200)}`));
         return;
       }
@@ -200,7 +200,7 @@ function downloadAndCache(url, title, ytdlpArgs, onProgress) {
           safeUnlink(rawTmp);
           fs.renameSync(mp3Tmp, filePath);
           const sizeMB = (fs.statSync(filePath).size / 1024 / 1024).toFixed(2);
-          console.log(`✅ [${platform}] 下載完成: ${filename} (${sizeMB} MB${normalized ? '，已正規化響度' : '，未正規化'})`);
+          logger.success(platform, `下載完成: ${filename} (${sizeMB} MB${normalized ? '，已正規化響度' : '，未正規化'})`);
           resolve(filePath);
         })
         .catch(err => {

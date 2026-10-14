@@ -73,9 +73,9 @@ async function switchSoVITSWeights(gptWeights, sovitsWeights) {
     req.end();
   });
 
-  console.log(`🔄 [SoVITS] 切換 GPT: ${gptWeights}`);
+  logger.info('SoVITS', `🔄 切換 GPT: ${gptWeights}`);
   await callAPI(`/set_gpt_weights?weights_path=${encodeURIComponent(gptWeights)}`);
-  console.log(`🔄 [SoVITS] 切換 SoVITS: ${sovitsWeights}`);
+  logger.info('SoVITS', `🔄 切換 SoVITS: ${sovitsWeights}`);
   await callAPI(`/set_sovits_weights?weights_path=${encodeURIComponent(sovitsWeights)}`);
 }
 
@@ -93,7 +93,7 @@ async function checkSoVITSHealth() {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       req.destroy();
-      if (sovitsHealthy) console.warn('⚠️ [SoVITS] 健康檢查逾時，標記為不可用');
+      if (sovitsHealthy) logger.warn('SoVITS', '健康檢查逾時，標記為不可用');
       sovitsHealthy = false;
       resolve(false);
     }, SOVITS_CONNECT_TIMEOUT_MS);
@@ -103,14 +103,14 @@ async function checkSoVITSHealth() {
       (res) => {
         clearTimeout(timer);
         res.resume();
-        if (!sovitsHealthy) console.log('✅ [SoVITS] 服務已恢復');
+        if (!sovitsHealthy) logger.success('SoVITS', '服務已恢復');
         sovitsHealthy = true;
         resolve(true);
       }
     );
     req.on('error', () => {
       clearTimeout(timer);
-      if (sovitsHealthy) console.warn('⚠️ [SoVITS] 健康檢查失敗，標記為不可用');
+      if (sovitsHealthy) logger.warn('SoVITS', '健康檢查失敗，標記為不可用');
       sovitsHealthy = false;
       resolve(false);
     });
@@ -163,7 +163,7 @@ async function generateSoVITS(text, filename, guildId) {
       } else {
         socket.on('connect', () => {
           clearTimeout(connectTimer);
-          console.log('🔌 [SoVITS] TCP 連線成功，等待推理完成...');
+          logger.debug('SoVITS', '🔌 TCP 連線成功，等待推理完成...');
         });
       }
     });

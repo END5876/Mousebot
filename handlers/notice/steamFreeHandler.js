@@ -49,7 +49,7 @@ async function getSteamTWInfo(steamAppId) {
       description: description || null
     };
   } catch (e) {
-    console.warn(`⚠️ [SteamFree] 查詢 Steam 台灣資訊失敗 (AppID: ${steamAppId}):`, e.message);
+    logger.warn('SteamFree', `查詢 Steam 台灣資訊失敗 (AppID: ${steamAppId}):`, e.message);
     return {};
   }
 }
@@ -102,7 +102,7 @@ async function getSteamFreeGames() {
     }
     return games;
   } catch (e) {
-    console.error('⚠️ [SteamFree] 獲取限免遊戲失敗（已耗盡重試次數）:', e.message);
+    logger.error('SteamFree', '獲取限免遊戲失敗（已耗盡重試次數）:', e.message);
     return [];
   }
 }

@@ -6,7 +6,6 @@ const {
     selectMode,
     getModeName,
     setUserMode,
-    getUserModeOverride,
     getAvailableModes,
 } = require('./modeSelector');
 const promptStore = require('./promptStore');
@@ -26,7 +25,6 @@ const {
     processCustomEmojis,
     processImageUrls,
     processEmbeds,
-    hasMissingSignature,
     withTyping, speakWithTTS, splitMessage,
     replaceMentions, 
 } = require('./aiUtils');
@@ -44,11 +42,21 @@ const { generateGuguArticle, getGuguErrorMessage } = require('./gugugagaGenerato
 const bootSummary = require('../../utils/bootSummary');
 const { isOwner } = require('../../utils/config');
 const { hasCustomResponse } = require('../responseHandler');
+const { isQuotaError, quotaMessage, describeLimits } = require('./aiQuota');
+const { MODEL_NAME } = require('./geminiClient');
+const logger = require('../../utils/logger');
 
 // 每則訊息都會跑一次的正規表示式：原本 `[^\s)\]>]+.*\.` 的兩段貪婪量詞在長訊息上會
 // 造成 O(n²) 回溯；改成單段非空白匹配，語意相同（網址中任一處出現圖片副檔名）。
 const LIKELY_IMAGE_LINK_RE = /https?:\/\/\S+\.(?:png|jpe?g|webp|heic|heif|gif)(?:\?\S*)?|cdn\.discordapp\.com\/attachments\//i;
 
+
+// 被 AI 額度擋下時回覆一則提示，數秒後自動刪除，避免連續觸發時洗版
+const QUOTA_NOTICE_TTL_MS = 10 * 1000;
+async function replyQuotaNotice(message, error) {
+    const sent = await message.reply({ content: quotaMessage(error), allowedMentions: { repliedUser: false } }).catch(() => null);
+    if (sent) setTimeout(() => sent.delete().catch(() => {}), QUOTA_NOTICE_TTL_MS).unref?.();
+}
 
 // ════════════════════════════════════════════════════════
 //  /ai 單一指令，底下掛 ask / clear / tts / mode / chance(group) / gugu
@@ -171,9 +179,8 @@ const aiCommand = {
 // ── /ai ask ──────────────────────────────────────────────
 async function handleAsk(interaction) {
     if (!process.env.GEMINI_API_KEY) {
-        console.error('❌ 未設定 API Key');
-        await interaction.deferReply();
-        return interaction.deleteReply().catch(() => {});
+        logger.error('AI', '未設定 GEMINI_API_KEY');
+        return interaction.reply({ content: '❌ AI 功能未啟用。', flags: MessageFlags.Ephemeral });
     }
 
     const userId     = interaction.user.id;
@@ -224,7 +231,11 @@ async function handleAsk(interaction) {
 
         await speakWithTTS(interaction, answer, guildId);
     } catch (error) {
-        console.error('Slash command /ai error:', error.message);
+        if (isQuotaError(error)) {
+            await interaction.editReply({ content: quotaMessage(error) }).catch(() => {});
+            return;
+        }
+        logger.error('AI', `/ai ask 錯誤：${error.message}`);
         await interaction.deleteReply().catch(() => {});
     }
 }
@@ -383,13 +394,13 @@ async function handlePromptEdit(interaction) {
                 clearMemoryMessage: submitted.fields.getTextInputValue('clearMemoryMessage'),
             });
         }
-        console.log(`[PromptStore] ${submitted.user.username} 更新了 ${target}`);
+        logger.info('PromptStore', `${submitted.user.username} 更新了 ${target}`);
         await submitted.reply({
             content: `✅ 已${existing || isShared ? '更新' : '新增'} \`${target}\` 的 prompt（${prompt.trim().length} 字），立即生效。`,
             flags: MessageFlags.Ephemeral,
         });
     } catch (err) {
-        console.error('[PromptStore] 寫入失敗:', err);
+        logger.error('PromptStore', `寫入失敗：${err.message}`);
         await submitted.reply({
             content: `❌ 儲存失敗：${err.message}`,
             flags: MessageFlags.Ephemeral,
@@ -476,10 +487,9 @@ async function handleGugu(interaction) {
     await interaction.reply({ content: '⏳ 我操了老鐵...' });
 
     try {
-        const article = await generateGuguArticle(topic);
+        const article = await generateGuguArticle(topic, interaction.user.id);
         await interaction.editReply({ content: article });
     } catch (error) {
-        console.error('生成咕咕嘎嘎文章時發生錯誤:', error);
         await interaction.editReply({ content: getGuguErrorMessage(error) });
     }
 }
@@ -493,7 +503,9 @@ function setupAICommands(client) {
     bootSummary.report(
         'AI 對話 (/ai)',
         process.env.GEMINI_API_KEY ? 'ok' : 'off',
-        process.env.GEMINI_API_KEY ? `Gemini API 已連線，${getAvailableModes().length} 種人格模式可用` : '未設定 GEMINI_API_KEY，AI 功能停用'
+        process.env.GEMINI_API_KEY
+            ? `Gemini (${MODEL_NAME}) 已連線，${getAvailableModes().length} 種人格模式可用；額度：${describeLimits()}`
+            : '未設定 GEMINI_API_KEY，AI 功能停用'
     );
 
     client.on('messageCreate', async message => {
@@ -555,7 +567,8 @@ function setupAICommands(client) {
                     }
                     await speakWithTTS(message, answer, guildId);
                 } catch (error) {
-                    console.error('Refer-only mention reply error:', error.message);
+                    if (isQuotaError(error)) await replyQuotaNotice(message, error);
+                    else logger.error('AI', `引用 @ 回覆錯誤：${error.message}`);
                 }
                 return;
             }
@@ -573,13 +586,14 @@ function setupAICommands(client) {
                     recordBotMessageContext(sentMsg.id, mode, userId, userName);
                     await speakWithTTS(message, answer, guildId);
                 } catch (error) {
-                    console.error('Greet reply error:', error.message);
+                    if (isQuotaError(error)) await replyQuotaNotice(message, error);
+                    else logger.error('AI', `打招呼回覆錯誤：${error.message}`);
                 }
                 return;
             }
 
             if (!process.env.GEMINI_API_KEY) {
-                console.error('❌ 未設定 API Key');
+                logger.error('AI', '未設定 GEMINI_API_KEY');
                 return;
             }
 
@@ -627,7 +641,8 @@ function setupAICommands(client) {
                 }
                 await speakWithTTS(message, answer, guildId);
             } catch (error) {
-                console.error('Mention reply error:', error.message);
+                if (isQuotaError(error)) await replyQuotaNotice(message, error);
+                else logger.error('AI', `@ 回覆錯誤：${error.message}`);
             }
 
         // ── 隨機回覆 ──
@@ -687,7 +702,7 @@ function setupAICommands(client) {
                         await speakWithTTS(message, shortReply, guildId);
                     }
                 } catch (error) {
-                    console.error('Random reply error:', error.message);
+                    logger.error('AI', `隨機回覆錯誤：${error.message}`);
                 }
             }
         }

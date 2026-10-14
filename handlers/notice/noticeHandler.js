@@ -3,6 +3,7 @@
 // 為單一 /notify 指令（check / channel），並啟動雙平台的定時輪詢。
 
 const { SlashCommandBuilder, ChannelType, PermissionFlagsBits, MessageFlags } = require('discord.js');
+const logger = require('../../utils/logger');
 const { createNoticeService, createPollingLoop } = require('./noticeService');
 const bootSummary = require('../../utils/bootSummary');
 
@@ -128,7 +129,7 @@ async function handleCheck(interaction) {
       // 兩則「沒有偵測到」的訊息已經個別送出，這裡不用再補充
     }
   } catch (err) {
-    console.error('⚠️ [Notify] /notify check 指令執行失敗:', err.message);
+    logger.error('Notify', '/notify check 指令執行失敗:', err.message);
     await interaction.editReply('❌ 查詢時發生錯誤，請稍後再試。').catch(() => {});
   }
 }

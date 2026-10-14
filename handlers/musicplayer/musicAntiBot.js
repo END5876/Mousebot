@@ -199,11 +199,11 @@ function rotateYtClient(guildId) {
   const next    = current + 1;
   if (next < YT_CLIENT_STRATEGIES.length) {
     ytClientIndex.set(guildId, next);
-    console.log(`🔄 [YouTube] 切換 client: ${YT_CLIENT_STRATEGIES[current].name} → ${YT_CLIENT_STRATEGIES[next].name}`);
+    logger.info('YouTube', `🔄 切換 client: ${YT_CLIENT_STRATEGIES[current].name} → ${YT_CLIENT_STRATEGIES[next].name}`);
     return true;
   }
   ytClientIndex.set(guildId, 0);
-  console.warn('⚠️ [YouTube] 所有 client 均失敗，重置為 default');
+  logger.warn('YouTube', '所有 client 均失敗，重置為 default');
   return false;
 }
 
@@ -232,7 +232,7 @@ function buildYouTubeArgs(url, strategy, streamMode = true) {
 
   if (strategy.needsPO && YT_PO_TOKEN) {
     args.push('--extractor-args', `youtube:po_token=mweb.gvs+${YT_PO_TOKEN}`);
-    console.log(`🔑 [YouTube] 附加 PO Token (${YT_PO_TOKEN.slice(0, 8)}...)`);
+    logger.debug('YouTube', `🔑 附加 PO Token (${YT_PO_TOKEN.slice(0, 8)}...)`);
   }
 
   if (strategy.name !== 'tv_simply') {

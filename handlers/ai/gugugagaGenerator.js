@@ -1,11 +1,8 @@
-const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
 const promptStore = require('./promptStore');
 const { recordUsage } = require('./tokenTracker');
-
-// 初始化 API
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-const MODEL_NAME = "gemini-3.1-flash-lite";
+const { generate } = require('./geminiClient');
+const { consumeQuota, isQuotaError, quotaMessage } = require('./aiQuota');
+const logger = require('../../utils/logger');
 
 const GENERATION_CONFIG = {
     temperature: 1.2,
@@ -14,28 +11,14 @@ const GENERATION_CONFIG = {
     maxOutputTokens: 8192,
 };
 
-function getGuguModel() {
-    return genAI.getGenerativeModel({
-        model: MODEL_NAME,
-        systemInstruction: promptStore.getMode('gugu')?.prompt ?? '',
-        safetySettings: [
-            { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-        ],
-        generationConfig: GENERATION_CONFIG
-    });
-}
-
 /**
  * 生成咕咕嘎嘎風格文章
  * @param {string} topic - 用戶提供的主題
  * @returns {Promise<string>} 生成的文章
  */
-async function generateGuguArticle(topic) {
+async function generateGuguArticle(topic, userId = null) {
     try {
-        const model = getGuguModel();
+        consumeQuota(userId);
 
         const prompt = `請根據以下主題，創作一篇完整的「咕咕嘎嘎體」文章：
 
@@ -53,12 +36,16 @@ async function generateGuguArticle(topic) {
 
 請直接生成文章，不要有任何前綴說明。`;
 
-        const result = await model.generateContent(prompt);
-        recordUsage('gugu', result.response);
-        return result.response.text();
+        const response = await generate({
+            systemInstruction: promptStore.getMode('gugu')?.prompt ?? '',
+            contents: prompt,
+            config: GENERATION_CONFIG,
+        });
+        recordUsage('gugu', response, { userId });
+        return response.text ?? '';
 
     } catch (error) {
-        console.error('咕咕嘎嘎生成錯誤:', error);
+        if (!isQuotaError(error)) logger.error('Gugu', `咕咕嘎嘎生成錯誤: ${error.message}`);
         throw error;
     }
 }
@@ -67,6 +54,7 @@ async function generateGuguArticle(topic) {
  * 統一錯誤訊息處理
  */
 function getErrorMessage(error) {
+    if (isQuotaError(error)) return quotaMessage(error);
     let msg = '❌ 我草了老鐵...生成失敗了：' + error.message;
     if (error.message.includes('quota')) {
         msg += '\n\n⚠️ API 配額用完了，這攻略線崩了啊🤔 咕咕嘎嘎';

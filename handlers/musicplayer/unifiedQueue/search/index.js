@@ -51,7 +51,7 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
 
   if (isUrl) {
     const engine = _engines.bilibili;
-    if (!engine) return interaction.editReply('❌ 串流引擎未就緒');
+    if (!engine) return interaction.editReply('⏳ 線上音樂引擎初始化中，請稍後再試');
 
     // YouTube 網址沒有 list= 參數就不可能是播放清單，直接跳過偵測（省一次 yt-dlp）
     const needPlaylistCheck = typeof engine.checkPlaylist === 'function' && !_isYouTubeWithoutList(input);

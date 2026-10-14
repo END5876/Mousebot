@@ -2,6 +2,7 @@
 // Guild / User 狀態管理、音訊訂閱 / 退訂、Idle 清理
 
 const { EndBehaviorType } = require('@discordjs/voice');
+const logger = require('../../utils/logger');
 const prism = require('prism-media');
 
 const {
@@ -188,7 +189,7 @@ function startUserIdleCleanup(guildId, state) {
     }
 
     for (const uid of toRemove) {
-      console.log(`[STT] 清理閒置使用者音訊訂閱：${uid}`);
+      logger.debug('STT', `清理閒置使用者音訊訂閱：${uid}`);
       unsubscribeUser(guildId, uid);
     }
   }, STT_USER_CLEANUP_INTERVAL_MS);
@@ -241,7 +242,7 @@ function subscribeUser(guildId, userId, member) {
 
     userState.stream = pcmStream;
   } catch (err) {
-    console.error(`[STT] 建立音訊訂閱失敗 [${userId}]: ${err.message}`);
+    logger.error('STT', `建立音訊訂閱失敗 [${userId}]: ${err.message}`);
     unsubscribeUser(guildId, userId);
     return;
   }
@@ -271,7 +272,7 @@ function subscribeUser(guildId, userId, member) {
   });
 
   pcmStream.on('error', (err) => {
-    console.error(`[STT] PCM 錯誤 [${userId}]: ${err.message}`);
+    logger.error('STT', `PCM 錯誤 [${userId}]: ${err.message}`);
     unsubscribeUser(guildId, userId);
   });
 
@@ -280,7 +281,7 @@ function subscribeUser(guildId, userId, member) {
   opusStream.once('close', onEndLike);
   opusStream.once('error', () => onEndLike());
 
-  console.log(`[STT] 監聽：${member?.displayName || userId}`);
+  logger.debug('STT', `監聽：${member?.displayName || userId}`);
 }
 
 // ══════════════════════════════════════════════════════════

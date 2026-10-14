@@ -35,7 +35,7 @@ const DEFAULT_VOICE = 'zh-TW-YunJheNeural';
 function detectLanguage(text) {
   if (/[\u3040-\u309F\u30A0-\u30FF]/.test(text)) return 'ja';
   if (/[\u4E00-\u9FFF]/.test(text)) return 'zh';
-  if (/^[A-Za-z0-9\s.,!?'"()\-:;@#$%&*+=/\\\[\]{}|<>~`^_]+$/.test(text.trim())) return 'en';
+  if (/^[A-Za-z0-9\s.,!?'"()\-:;@#$%&*+=/\\[\]{}|<>~`^_]+$/.test(text.trim())) return 'en';
   return 'zh';
 }
 

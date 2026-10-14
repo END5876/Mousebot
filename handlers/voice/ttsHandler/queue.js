@@ -1,6 +1,7 @@
 'use strict';
 
 const { getVoiceConnection } = require('@discordjs/voice');
+const logger = require('../../../utils/logger');
 const fs   = require('fs');
 const path = require('path');
 
@@ -84,7 +85,7 @@ async function processQueue(guildId) {
   try {
     result = await item.readyPromise;
   } catch (err) {
-    console.error(`❌ [TTS] 合成失敗，跳過此段: ${err.message}`);
+    logger.error('TTS', `合成失敗，跳過此段: ${err.message}`);
     queue.shift();
     ttsIsPlaying.delete(guildId);
     if (queue.length === 0) exitTTSLayer(guildId); // ★ 真正清空才離開

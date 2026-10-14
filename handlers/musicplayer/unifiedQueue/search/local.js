@@ -9,6 +9,7 @@ const {
 } = require('discord.js');
 
 const { _engines, activeSearchMessages } = require('../state');
+const logger = require('../../../../utils/logger');
 const { enqueue, ensureConnection, updateControlPanel } = require('../playback');
 
 // ════════════════════════════════════════════════════════
@@ -80,7 +81,7 @@ async function _handlePlayAll(interaction, shuffleOpt) {
 
   await interaction.editReply({ embeds: [embed] });
   await updateControlPanel(guildId, interaction.channel);
-  console.log(`✅ [UnifiedQueue] localAll: ${addedCount} 首已加入佇列 (${guildId})`);
+  logger.success('UnifiedQueue', `localAll: ${addedCount} 首已加入佇列 (${guildId})`);
 }
 
 // ════════════════════════════════════════════════════════
@@ -212,7 +213,7 @@ async function _handleLocalMultiSelect(interaction) {
 
   await interaction.editReply({ embeds: [embed], components: [] });
   await updateControlPanel(guildId, interaction.channel);
-  console.log(`✅ [UnifiedQueue] localMulti: ${addedCount} 首已加入佇列 (${guildId})`);
+  logger.success('UnifiedQueue', `localMulti: ${addedCount} 首已加入佇列 (${guildId})`);
 }
 
 module.exports = {

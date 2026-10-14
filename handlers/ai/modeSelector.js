@@ -1,8 +1,8 @@
 const path = require('path');
-const fs   = require('fs');
 const { LOVER_MODE_USER_IDS, DEVELOPER_MODE_USER_IDS } = require('./aiSettings');
 const promptStore = require('./promptStore');
 const logger = require('../../utils/logger');
+const { readJson, writeJsonAtomic } = require('../../utils/jsonStore');
 
 // ════════════════════════════════════════════════════════
 //  常數
@@ -15,26 +15,14 @@ const MODES_FILE_PATH = path.resolve(__dirname, '../../data/userModes.json');
 
 /** 從 JSON 載入模式表，回傳 Map */
 function loadModes() {
-    try {
-        if (!fs.existsSync(MODES_FILE_PATH)) {
-            fs.writeFileSync(MODES_FILE_PATH, '{}', 'utf-8');
-            logger.debug('ModeSelector', '已建立 userModes.json');
-            return new Map();
-        }
-        const raw = fs.readFileSync(MODES_FILE_PATH, 'utf-8');
-        const obj = JSON.parse(raw);
-        return new Map(Object.entries(obj));
-    } catch (err) {
-        logger.warn('ModeSelector', `載入 userModes.json 失敗：${err.message}`);
-        return new Map();
-    }
+    const obj = readJson(MODES_FILE_PATH, {});
+    return new Map(Object.entries(obj && typeof obj === 'object' ? obj : {}));
 }
 
 /** 將 Map 寫回 JSON */
 function saveModes(map) {
     try {
-        const obj = Object.fromEntries(map);
-        fs.writeFileSync(MODES_FILE_PATH, JSON.stringify(obj, null, 2), 'utf-8');
+        writeJsonAtomic(MODES_FILE_PATH, Object.fromEntries(map));
     } catch (err) {
         logger.error('ModeSelector', `寫入 userModes.json 失敗：${err.message}`);
     }
@@ -60,7 +48,7 @@ function setUserMode(userId, mode) {
         userModeOverride.set(userId, mode);
     }
     saveModes(userModeOverride);
-    console.log(`[ModeSelector] 已更新 ${userId} -> ${mode ?? '(預設)'}`);
+    logger.info('ModeSelector', `已更新 ${userId} -> ${mode ?? '(預設)'}`);
 }
 
 /**

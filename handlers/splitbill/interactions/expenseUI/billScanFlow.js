@@ -4,6 +4,7 @@ const {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle
 } = require('discord.js');
 const { scanBillImage } = require('../../utils/billScanner');
+const logger = require('../../../../utils/logger');
 // processAttachments 內部（fetchImageAsBase64 -> fetchImageUrlAsBase64）已經會把圖片
 // resize 到最長邊 1024px 以內並轉成 webp 再回傳 base64，因此帳單辨識這邊不需要再自己做壓縮。
 const { processAttachments } = require('../../../ai/aiUtils');
@@ -73,7 +74,7 @@ async function startBillScan(interaction, trip, cache) {
       try {
         await msg.reply(payload);
       } catch (replyErr) {
-        console.error('⚠️ 回覆使用者圖片訊息失敗，改用 followUp 補發新訊息:', replyErr.message);
+        logger.error('Splitbill', '回覆使用者圖片訊息失敗，改用 followUp 補發新訊息:', replyErr.message);
         await interaction.followUp(payload).catch(() => {});
       }
     };
@@ -133,7 +134,7 @@ async function startBillScan(interaction, trip, cache) {
           throw new Error('無法讀取這張圖片，請確認是常見圖片格式 (png/jpg/webp)。');
         }
 
-        const result = await scanBillImage(imageParts, tripCurrencies, trip.baseCurrency);
+        const result = await scanBillImage(imageParts, tripCurrencies, trip.baseCurrency, user.id);
 
         const matchedCurrency = tripCurrencies.find((c) => c.toUpperCase() === result.currency) || trip.baseCurrency;
         const currencyNote = matchedCurrency !== result.currency && result.currency
@@ -162,7 +163,7 @@ async function startBillScan(interaction, trip, cache) {
         await deliverResult(view);
         successCount++;
       } catch (err) {
-        console.error(`⚠️ 帳單辨識失敗（${itemLabel || '單張'}）:`, err);
+        logger.error('Splitbill', `帳單辨識失敗（${itemLabel || '單張'}）:`, err);
         const errEmbed = new EmbedBuilder()
           .setColor(0xe74c3c)
           .setTitle(`❌ ${itemLabel}辨識失敗`)
