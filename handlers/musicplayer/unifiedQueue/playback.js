@@ -42,6 +42,11 @@ function _getNotifyChannel(guildId, fallbackChannel) {
   return requestChannels.get(guildId) || fallbackChannel;
 }
 
+// 最近一次點歌的文字頻道（webSync.js 從網頁點歌、更新控制面板時沿用）
+function getRequestChannel(guildId) {
+  return requestChannels.get(guildId) || null;
+}
+
 // ════════════════════════════════════════════════════════
 //  持久化快照（session.js 在寫檔時呼叫）
 // ════════════════════════════════════════════════════════
@@ -725,4 +730,5 @@ module.exports = {
   playRandomLocal,
   resetShuffleBag,
   resumeSavedSessions,
+  getRequestChannel,
 };

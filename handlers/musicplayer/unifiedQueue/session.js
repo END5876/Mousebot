@@ -25,6 +25,9 @@ const MAX_AGE_MS = (Number.parseInt(process.env.MUSIC_RESUME_MAX_AGE_MIN ?? '', 
 
 let snapshotProvider = () => ({});
 let frozen = false;
+// 播放狀態有變動時要通知的對象（webSync.js 把「正在播放」推給共用音樂庫服務的網頁）。
+// 跟寫檔不同：快照凍結、MUSIC_RESUME=0 時照樣通知。
+const changeListeners = new Set();
 
 const writer = createDebouncedWriter(SESSION_PATH, () => snapshotProvider(), {
     debounceMs: 2000,
@@ -37,7 +40,16 @@ function setSnapshotProvider(fn) {
 }
 
 function schedule() {
+    for (const fn of changeListeners) {
+        try { fn(); } catch {}
+    }
     if (ENABLED && !frozen) writer.schedule();
+}
+
+/** 播放 / 佇列 / 循環模式變動時呼叫 fn（呼叫端自行合併頻繁的通知）。回傳取消註冊的函式。 */
+function onChange(fn) {
+    changeListeners.add(fn);
+    return () => changeListeners.delete(fn);
 }
 
 function freezeAndFlush() {
@@ -82,4 +94,4 @@ function takeSavedSessions() {
         }));
 }
 
-module.exports = { setSnapshotProvider, schedule, serializeItem, takeSavedSessions, SESSION_PATH };
+module.exports = { setSnapshotProvider, schedule, onChange, serializeItem, takeSavedSessions, SESSION_PATH };

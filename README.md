@@ -221,6 +221,11 @@ MUSIC_RESUME_MAX_AGE_MIN=15               # 快照超過幾分鐘就不接續
 # 共用音樂庫服務（選填；未設定則只用本機 data/music）
 MUSIC_LIB_URL=                            # 例如 http://<library-service>.internal:3000
 MUSIC_LIB_SECRET=                         # 與音樂庫服務共用的金鑰（x-music-lib-key）
+# 網頁「Bot 正在播放」同步（有設 MUSIC_LIB_URL 時自動啟用）
+WEB_SYNC=1                                # 0 = 關閉
+WEB_SYNC_BOT_NAME=                        # 網頁上顯示的名稱（預設 Bot 使用者名稱）
+WEB_SYNC_BOT_ID=                          # 網頁上識別這台 Bot 的 ID（預設 Discord 應用程式 ID）
+WEB_SYNC_ANNOUNCE=1                       # 網頁操作時在點歌頻道留一行紀錄（0 = 不留）
 WARP_PROXY_URL=                           # Cloudflare WARP Proxy（YouTube 防封用）
 # Bilibili 認證
 BILIBILI_SESSDATA=
@@ -270,7 +275,8 @@ Mousebot/
 │   │   │   │   ├── playlist.js        # 播放清單匯入
 │   │   │   │   ├── autocomplete.js    # Slash Command Autocomplete
 │   │   │   │   └── urlUtils.js
-│   │   │   └── commands.js           # Slash Commands 註冊、控制面板按鈕互動、閒置監控指令
+│   │   │   ├── commands.js           # Slash Commands 註冊、控制面板按鈕互動、閒置監控指令
+│   │   │   └── webSync.js            # 把「正在播放」同步到共用音樂庫服務的網頁，接收網頁的控制指令
 │   │   ├── musicLibraryClient.js     # 共用音樂庫服務客戶端（MUSIC_LIB_URL，選用）
 │   │   ├── localMusicHandler.js      # 本地音樂引擎，支援 mp3/wav/ogg/flac/m4a/aac，播放次數統計
 │   │   ├── musicAntiBot.js           # YouTube/Bilibili 防爬蟲 Headers、Cookies、yt-dlp 參數
