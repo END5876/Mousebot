@@ -124,8 +124,19 @@ if (isConfigured()) {
   logger.debug('MusicLibraryClient', `共用音樂庫服務位址: ${LIB_URL}`);
 }
 
+// 給 unifiedQueue/webSync.js（網頁「正在播放」同步）用：沿用同一組服務位址與金鑰
+function getBaseUrl() {
+  return LIB_URL;
+}
+
+function authHeaders(extra = {}) {
+  return _headers(extra);
+}
+
 module.exports = {
   isConfigured,
+  getBaseUrl,
+  authHeaders,
   fetchList,
   checkExists,
   downloadToFile,

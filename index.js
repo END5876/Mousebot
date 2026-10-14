@@ -24,7 +24,7 @@ const { setupTimeAnnouncer }     = require('./handlers/notice/timeAnnouncer');
 const { setupSplitbillCommands } = require('./handlers/splitbill/index');
 
 // ── 重構後的音樂模組 ───────────────────────────────────────
-const { setupUnifiedCommands, resumeSavedSessions } = require('./handlers/musicplayer/unifiedQueue');
+const { setupUnifiedCommands, resumeSavedSessions, startWebSync } = require('./handlers/musicplayer/unifiedQueue');
 const { setupOnlineMusicEngine } = require('./handlers/musicplayer/onlineMusicHandler');
 const { setupLocalMusicEngine }  = require('./handlers/musicplayer/localMusicHandler');
 
@@ -155,6 +155,9 @@ client.once('clientReady', async () => {
   ]);
 
   // ── 所有模組都已回報狀態，統一印出開機摘要 ────────────
+  // 網頁「正在播放」同步（要在開機摘要之前，才會列進摘要表）
+  startWebSync(client);
+
   bootSummary.print();
 
   // ── 接續重啟前的音樂播放（需在線上引擎注入之後）──────

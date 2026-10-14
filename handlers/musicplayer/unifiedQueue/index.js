@@ -9,6 +9,7 @@
 //   playback.js  — 控制面板、播放器生命週期、佇列播放、語音連線管理
 //   search.js    — /play 核心邏輯、網址清理、全部本地音樂、線上搜尋、Autocomplete
 //   commands.js  — Slash Commands 註冊、控制面板按鈕互動
+//   webSync.js   — 把「正在播放」同步到共用音樂庫服務的網頁，接收網頁的控制指令
 
 const { registerEngine } = require('./state');
 const {
@@ -23,6 +24,7 @@ const {
 } = require('./playback');
 const { handleAutocomplete } = require('./search');
 const { setupUnifiedCommands } = require('./commands');
+const webSync = require('./webSync');
 
 module.exports = {
   registerEngine,
@@ -36,4 +38,5 @@ module.exports = {
   ensureConnection,
   playRandomLocal,
   resumeSavedSessions,
+  startWebSync: webSync.start,
 };
