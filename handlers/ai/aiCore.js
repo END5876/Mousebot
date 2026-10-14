@@ -15,6 +15,7 @@ const {
     getMemoryClearTime, getBotMessageContext,
     processAttachments,
     processImageUrls,
+    processEmbeds,
     dedupeInlineParts,
     splitMessage,
 } = require('./aiUtils');
@@ -30,6 +31,43 @@ const DISCORD_MESSAGE_SAFE_LENGTH = 1900; // 與 splitMessage 預設上限一致
 // ════════════════════════════════════════════════════════
 //  工具函式：將 imageParts 陣列轉換為 Gemini API 格式
 // ════════════════════════════════════════════════════════
+// GIF 選單 / 收藏送出的訊息只是一串連結，畫面在 embed 裡：
+// Tenor 等 GIF 服務是 gifv，Discord 自己存的圖檔 / GIF 連結是 image
+const MEDIA_EMBED_TYPES = new Set(['gifv', 'image']);
+
+function getMediaEmbeds(msg) {
+    return (msg.embeds ?? []).filter(e => MEDIA_EMBED_TYPES.has(e.data?.type ?? e.type) && e.url);
+}
+
+function isGifEmbed(embed) {
+    return (embed.data?.type ?? embed.type) === 'gifv' || /\.gif(?:\?|$)/i.test(embed.url);
+}
+
+// 把媒體連結換成標記，免得模型對著網址裡的 ID 吐槽
+function maskMediaUrls(text, embeds) {
+    if (!text) return text;
+    let masked = text;
+    for (const e of embeds) masked = masked.replaceAll(e.url, isGifEmbed(e) ? '[GIF]' : '[圖片]');
+    return masked;
+}
+
+// 逐一讀 embed 預覽（GIF 只會是第一幀；收藏裡的 Discord 連結簽名常已過期，embed 的 proxy 網址比較可靠），
+// 預覽讀不到再直接抓網址；都失敗就安靜略過，不給模型任何「讀取失敗」的提示，免得它拿來吐槽
+async function processMediaEmbeds(text, embeds) {
+    const results = await Promise.all(embeds.map(async e => {
+        const preview = await processEmbeds([e]);
+        if (preview.length > 0) return preview;
+        return (await processImageUrls(e.url)).filter(p => p.type === 'image');
+    }));
+    const loaded = embeds.filter((_, i) => results[i].length > 0);
+    return {
+        text: maskMediaUrls(text, embeds),
+        parts: results.flat(),
+        gifLoaded: loaded.some(isGifEmbed),
+        imageLoaded: loaded.some(e => !isGifEmbed(e)),
+    };
+}
+
 function toGeminiPart(part) {
     if (part.type === 'text')  return { text: part.text };
     if (part.type === 'image') return { inlineData: { mimeType: part.mimeType, data: part.data } };
@@ -218,7 +256,7 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
             const parts = [];
             attachmentPartsList[index].forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } }));
 
-            const textContent = msg.cleanContent || msg.content;
+            const textContent = maskMediaUrls(msg.cleanContent || msg.content, getMediaEmbeds(msg));
             if (textContent?.trim().length > 0) {
                 // 歷史紀錄中，明確標示發言者
                 if (msg.author.id === botId) {
@@ -268,7 +306,10 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
 
     if (refMsg) {
         const refAuthor  = refMsg.author.username;
-        const refContent = refMsg.cleanContent?.trim() || refMsg.content?.trim();
+        const refMedia   = await processMediaEmbeds(
+            refMsg.cleanContent?.trim() || refMsg.content?.trim(), getMediaEmbeds(refMsg)
+        );
+        const refContent = refMedia.text;
         const isSelf     = refMsg.author.id === botId;
         let refText      = '';
 
@@ -299,6 +340,11 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
             );
             refText += refContent ? ' [附帶圖片]' : ' [一張圖片]';
         }
+
+        // GIF / 圖片連結：用 embed 預覽讓模型看到畫面
+        refMedia.parts.forEach(part => parts.push(toGeminiPart(part)));
+        if (refMedia.gifLoaded)   refText += ' [一張 GIF 動圖，附上的是它的第一幀畫面]';
+        if (refMedia.imageLoaded) refText += ' [附帶網址圖片]';
 
         // 解析引用訊息中的網址圖片，依 type 分流處理
         if (refContent) {
