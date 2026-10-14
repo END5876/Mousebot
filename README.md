@@ -131,6 +131,7 @@ CLIENT_ID=your_discord_application_id
 GEMINI_API_KEY=your_gemini_api_key
 GEMINI_MODEL=                             # 選填，預設 gemini-3.1-flash-lite
 GEMINI_VISION_MODEL=                      # 選填，帳單辨識用模型，預設同 GEMINI_MODEL
+GEMINI_SEARCH_GUILD_IDS=                  # 選填，啟用 Google 搜尋接地的伺服器 ID（逗號分隔）；未設定則停用
 
 # ── AI 額度（選填，0 = 不限制；擁有者不受單人限制） ─────────────────────
 AI_USER_RATE_LIMIT=8                      # 每人在視窗內最多呼叫次數
@@ -261,7 +262,8 @@ Mousebot/
 │   │   ├── geminiClient.js           # 唯一的 Gemini 入口（@google/genai、GEMINI_MODEL、safetySettings）
 │   │   ├── gugugagaGenerator.js      # 咕咕嘎嘎文章生成
 │   │   ├── modeSelector.js           # 使用者模式選擇與持久化（data/userModes.json）
-│   │   └── promptStore.js            # prompt 存放區：載入 data/prompts/*.md、mtime 熱重載、寫入 API
+│   │   ├── promptStore.js            # prompt 存放區：載入 data/prompts/*.md、mtime 熱重載、寫入 API
+│   │   └── searchGrounding.js        # Google 搜尋接地：啟用伺服器、搜尋階段 prompt、來源格式化
 │   ├── musicplayer/
 │   │   ├── unifiedQueue/             # 統一播放佇列模組
 │   │   │   ├── index.js              # 對外進入點（彙整子模組，保持 API 介面一致）

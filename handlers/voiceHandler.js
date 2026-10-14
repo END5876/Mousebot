@@ -310,7 +310,7 @@ async function handleStt(interaction, sub) {
           sttTextChannel,
           async (userId, member, text, channel) => {
             try {
-              const aiReply = await getGeminiResponseVoice(userId, text);
+              const aiReply = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId);
               await channel.send(`🤖 **機器鳥**：${aiReply}`);
 
               const result = await playTTS(guildId, aiReply);
@@ -364,7 +364,7 @@ async function handleRecordButton(interaction) {
       }
 
       ensureManualSession(connection, interaction.guild, interaction.channel, async (userId, member, text, channel) => {
-        const aiReply = await getGeminiResponseVoice(userId, text);
+        const aiReply = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId);
         await channel.send(`🤖 **機器鳥**：${aiReply}`);
         const ttsResult = await playTTS(guildId, aiReply);
         if (!ttsResult.success) {
@@ -565,7 +565,7 @@ function setupVoiceCommands(client) {
 
         // 2) 確保手動 Session
         ensureManualSession(connection, interaction.guild, interaction.channel, async (uid, member, text, channel) => {
-          const aiReply = await getGeminiResponseVoice(uid, text);
+          const aiReply = await getGeminiResponseVoice(uid, text, null, null, null, null, guildId);
           await channel.send(`🤖 **機器鳥**：${aiReply}`);
           const ttsResult = await playTTS(guildId, aiReply);
           if (!ttsResult.success) {

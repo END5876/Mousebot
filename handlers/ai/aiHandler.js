@@ -25,7 +25,7 @@ const {
     processCustomEmojis,
     processImageUrls,
     processEmbeds,
-    withTyping, speakWithTTS, splitMessage,
+    withTyping, speakWithTTS,
     replaceMentions, 
 } = require('./aiUtils');
 
@@ -44,6 +44,7 @@ const { isOwner } = require('../../utils/config');
 const { hasCustomResponse } = require('../responseHandler');
 const { isQuotaError, quotaMessage, describeLimits } = require('./aiQuota');
 const { MODEL_NAME } = require('./geminiClient');
+const { ENABLED_GUILD_IDS: SEARCH_GUILD_IDS } = require('./searchGrounding');
 const logger = require('../../utils/logger');
 
 // 每則訊息都會跑一次的正規表示式：原本 `[^\s)\]>]+.*\.` 的兩段貪婪量詞在長訊息上會
@@ -218,8 +219,7 @@ async function handleAsk(interaction) {
 
         const imageParts = [...emojiParts, ...urlImageParts, ...attachmentParts];
 
-        const answer = await getGeminiResponse(userId, question, imageParts, interaction.channel, interaction.id, botId, null, mode);
-        const chunks = splitMessage(answer);
+        const { text: answer, chunks } = await getGeminiResponse(userId, question, imageParts, interaction.channel, interaction.id, botId, null, mode);
 
         const replyMsg = await interaction.editReply({ content: chunks[0] });
         recordBotMessageContext(replyMsg.id, mode, userId, userName);
@@ -504,7 +504,8 @@ function setupAICommands(client) {
         'AI 對話 (/ai)',
         process.env.GEMINI_API_KEY ? 'ok' : 'off',
         process.env.GEMINI_API_KEY
-            ? `Gemini (${MODEL_NAME}) 已連線，${getAvailableModes().length} 種人格模式可用；額度：${describeLimits()}`
+            ? `Gemini (${MODEL_NAME}) 已連線，${getAvailableModes().length} 種人格模式可用；額度：${describeLimits()}；` +
+              `搜尋接地：${SEARCH_GUILD_IDS.size ? `${SEARCH_GUILD_IDS.size} 個伺服器` : '停用'}`
             : '未設定 GEMINI_API_KEY，AI 功能停用'
     );
 
@@ -557,10 +558,9 @@ function setupAICommands(client) {
                 try {
                     const mode = getUserMode(userId, '');
                     const referPrompt = '使用者引用了一則訊息並 @ 了你，沒有輸入其他文字，請針對被引用的內容做出回應或吐槽。';
-                    const answer = await withTyping(message.channel, () =>
+                    const { text: answer, chunks } = await withTyping(message.channel, () =>
                         getGeminiResponse(userId, referPrompt, [], channel, messageId, botId, message, mode)
                     );
-                    const chunks = splitMessage(answer);
                     for (const chunk of chunks) {
                         const sentMsg = await message.channel.send(chunk);
                         recordBotMessageContext(sentMsg.id, mode, userId, userName);
@@ -579,11 +579,13 @@ function setupAICommands(client) {
                 try {
                     const mode = getUserMode(userId, '');
                     const greetPrompt = '使用者只 @ 了你，沒有說任何話。';
-                    const answer = await withTyping(message.channel, () =>
+                    const { text: answer, chunks } = await withTyping(message.channel, () =>
                         getGeminiResponse(userId, greetPrompt, [], channel, messageId, botId, null, mode)
                     );
-                    const sentMsg = await message.channel.send(answer);
-                    recordBotMessageContext(sentMsg.id, mode, userId, userName);
+                    for (const chunk of chunks) {
+                        const sentMsg = await message.channel.send(chunk);
+                        recordBotMessageContext(sentMsg.id, mode, userId, userName);
+                    }
                     await speakWithTTS(message, answer, guildId);
                 } catch (error) {
                     if (isQuotaError(error)) await replyQuotaNotice(message, error);
@@ -601,7 +603,7 @@ function setupAICommands(client) {
                 const mode = getUserMode(userId, rawQuestion || '圖片');
 
                 // 「正在輸入中」涵蓋圖片下載/壓縮階段，使用者不用乾等
-                const answer = await withTyping(message.channel, async () => {
+                const { text: answer, chunks } = await withTyping(message.channel, async () => {
                     // emoji → 網址圖片、embed、附件三者彼此獨立，並行處理
                     const [{ question, emojiParts, urlImagePartsRaw }, embedParts, attachmentParts] = await Promise.all([
                         processCustomEmojis(rawQuestion).then(async ({ cleanedText, emojiParts }) => ({
@@ -634,7 +636,6 @@ function setupAICommands(client) {
                     return getGeminiResponse(userId, question, imageParts, channel, messageId, botId, message, mode);
                 });
 
-                const chunks = splitMessage(answer);
                 for (const chunk of chunks) {
                     const sentMsg = await message.channel.send(chunk);
                     recordBotMessageContext(sentMsg.id, mode, userId, userName);
@@ -697,9 +698,11 @@ function setupAICommands(client) {
                     });
 
                     if (shortReply) {
-                        const sentMsg = await message.channel.send(shortReply);
-                        recordBotMessageContext(sentMsg.id, mode, userId, userName);
-                        await speakWithTTS(message, shortReply, guildId);
+                        for (const chunk of shortReply.chunks) {
+                            const sentMsg = await message.channel.send(chunk);
+                            recordBotMessageContext(sentMsg.id, mode, userId, userName);
+                        }
+                        await speakWithTTS(message, shortReply.text, guildId);
                     }
                 } catch (error) {
                     logger.error('AI', `隨機回覆錯誤：${error.message}`);
