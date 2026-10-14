@@ -41,8 +41,9 @@ const client = new Client({
   ]
 });
 
-// 致命錯誤（uncaughtException）與 SIGTERM / SIGINT 時，先讓 Discord 連線正常關閉再結束程序
-processGuards.setFatalHook(() => client.destroy());
+// 致命錯誤與 SIGTERM / SIGINT 時刻意不呼叫 client.destroy()：
+// 它會以 close code 1000 關閉 gateway，Discord 隨即讓 session 失效並把 Bot 移出語音頻道。
+// 直接結束程序讓連線中斷，Bot 會留在頻道裡直到 Discord 判定逾時，重啟後重新加入不會出現離開/加入的閃爍。
 
 if (OWNER_USER_IDS.size === 0) {
   bootSummary.report('擁有者權限', 'warn', '未設定 OWNER_USER_ID：/ai mode、/response add|remove、/autojoin 變更頻道將無人可用');

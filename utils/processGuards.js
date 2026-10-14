@@ -11,7 +11,7 @@
 //   uncaughtException  → 記錄完整堆疊後，約 1 秒內以 exit code 1 結束，
 //                        由 supervisord（autorestart=true）重新拉起。
 //   EXIT_ON_UNCAUGHT=0 → 恢復舊行為（只記錄不結束），本機沒有 supervisor 時可用。
-//   SIGTERM / SIGINT   → 先關閉 Discord 連線（最多等 SHUTDOWN_TIMEOUT_MS），再以 process.exit() 結束。
+//   SIGTERM / SIGINT   → 執行 fatalHook（若有設定，最多等 SHUTDOWN_TIMEOUT_MS），再以 process.exit() 結束。
 //                        沒有這個處理時程序是被訊號直接殺掉，process.on('exit') 不會執行，
 //                        tokenTracker 尚未寫入的用量、yt-dlp 子程序清理都會被跳過。
 //   onShutdown(fn)     → 註冊「關閉 Discord 連線之前」要同步執行的動作（例如寫出音樂佇列快照）。
