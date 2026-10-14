@@ -109,8 +109,8 @@ npm start
 
 ```bash
 npm run lint    # ESLint（禁止直接使用 console.*，請改用 utils/logger.js）
-npm test        # node:test 單元測試（分帳計算、JSON 儲存、AI 額度、網址工具…）
-npm run check   # 以上兩者，GitHub Actions 每次 push / PR 都會執行
+npm test        # node:test 單元測試（test/ 只存在本機，不進版本庫）
+npm run check   # 以上兩者（GitHub Actions 每次 push / PR 只跑 lint）
 ```
 
 開發時建議設定 `DEV_GUILD_ID`，Slash Commands 只註冊到測試伺服器、改完立即生效。
@@ -355,7 +355,6 @@ Mousebot/
 │   ├── logger.js                     # 統一 log 工具（LOG_LEVEL；success / info / warn / error / debug）
 │   ├── processGuards.js              # 全域 unhandledRejection / uncaughtException / 關閉流程（onShutdown）
 │   └── rateLimiter.js                # 滑動視窗節流器（AI 額度、帳單辨識）
-├── test/                             # node:test 單元測試
 ├── data/                             # 執行期持久化資料（已列入 .gitignore，不提交）
 │   ├── music/
 │   │   └── cache/                    # 線上音樂下載快取
