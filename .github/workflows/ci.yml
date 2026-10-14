@@ -16,8 +16,8 @@ jobs:
           node-version: 22
           cache: npm
 
-      # @discordjs/opus 等原生模組需要編譯；CI 只跑 lint / 單元測試，不需要語音功能
+      # @discordjs/opus 等原生模組需要編譯；CI 只跑 lint，不需要語音功能
+      # （單元測試 test/ 不進版本庫，只在本機用 npm test 執行）
       - run: npm ci --ignore-scripts
 
       - run: npm run lint
-      - run: npm test
