@@ -1,5 +1,7 @@
-const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
 const { GENERATION_CONFIG } = require('./aiSettings');
+const { generate, MODEL_NAME } = require('./geminiClient');
+const { consumeQuota, isQuotaError } = require('./aiQuota');
+const logger = require('../../utils/logger');
 const { selectMode, getModeName } = require('./modeSelector');
 const promptStore = require('./promptStore');
 const { recordUsage } = require('./tokenTracker');
@@ -15,12 +17,9 @@ const {
 // ════════════════════════════════════════════════════════
 //  設定常數
 // ════════════════════════════════════════════════════════
-const MODEL_NAME           = "gemini-3.1-flash-lite";
 const HISTORY_FETCH_LIMIT  = 30;
 const HISTORY_PAIR_LIMIT   = 12; 
 const HISTORY_TIME_LIMIT_MS = 10 * 60 * 1000;
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // ════════════════════════════════════════════════════════
 //  工具函式：將 imageParts 陣列轉換為 Gemini API 格式
@@ -41,30 +40,28 @@ const FALLBACK_MODE = 'loss';
 function getSystemPrompt(mode) {
     const modeData = promptStore.getMode(mode);
     if (modeData) return modeData.prompt;
-    console.error(`Unknown mode: ${mode}，改用 ${FALLBACK_MODE}`);
+    logger.warn('AI', `未知的模式：${mode}，改用 ${FALLBACK_MODE}`);
     return promptStore.getMode(FALLBACK_MODE)?.prompt ?? '';
 }
 
 function getUserMode(userId, message) {
     const mode = selectMode(userId, message);
-    console.log(`[Mode] User ${userId} -> ${getModeName(mode)}`);
+    logger.debug('Mode', `User ${userId} -> ${getModeName(mode)}`);
     return mode;
 }
 
-function getModel(mode, isVoice = false) {
+function buildSystemInstruction(mode, isVoice = false) {
     const parts = [getSystemPrompt(mode), promptStore.getShared('_general')];
     if (isVoice) parts.push(promptStore.getShared('_voice'));
-    const systemPrompt = parts.filter(Boolean).join('\n\n');
+    return parts.filter(Boolean).join('\n\n');
+}
 
-    return genAI.getGenerativeModel({
-        model: MODEL_NAME,
-        systemInstruction: systemPrompt,
-        safetySettings: [
-            { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-        ]
+/** 把歷史紀錄與本次訊息組成一次 generateContent 呼叫 */
+async function sendWithHistory({ mode, isVoice = false, history, parts, config }) {
+    return generate({
+        systemInstruction: buildSystemInstruction(mode, isVoice),
+        contents: [...history, { role: 'user', parts }],
+        config,
     });
 }
 
@@ -105,12 +102,12 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
         let fetched;
         const cached = historyCache.get(channelId);
         if (cached && (now - cached.cachedAt) < HISTORY_CACHE_TTL_MS) {
-            console.log(`[History Cache] 命中快取：${channelId}`);
+            logger.debug('History', `命中快取：${channelId}`);
             fetched = cached.messages;
         } else {
             fetched = await channel.messages.fetch({ limit: HISTORY_FETCH_LIMIT });
             historyCache.set(channelId, { messages: fetched, cachedAt: now });
-            console.log(`[History Cache] 已更新快取：${channelId}`);
+            logger.debug('History', `已更新快取：${channelId}`);
         }
 
         const currentMsg       = fetched.get(currentMessageId);
@@ -177,10 +174,10 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId)
             finalHistory = [];
         }
 
-        console.log(`[History] 載入 ${finalHistory.length} 筆對話紀錄`);
+        logger.debug('History', `載入 ${finalHistory.length} 筆對話紀錄`);
         return finalHistory;
     } catch (err) {
-        console.error('[History] 抓取頻道歷史失敗：', err.message);
+        logger.warn('History', `抓取頻道歷史失敗：${err.message}`);
         return [];
     }
 }
@@ -266,10 +263,9 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
 // ════════════════════════════════════════════════════════
 async function getGeminiResponse(userId, prompt, imageParts = [], channel = null, messageId = null, botId = null, message = null, mode = null) {
     try {
+        consumeQuota(userId);
         if (!mode) mode = getUserMode(userId, prompt);
-        const model   = getModel(mode);
         const history = channel ? await fetchUserChannelHistory(channel, userId, messageId, botId) : [];
-        const chat    = model.startChat({ history, generationConfig: GENERATION_CONFIG });
 
         // 如果沒有 message (例如斜線指令)，也要加上預設標籤
         const messageParts = message
@@ -279,42 +275,44 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
                 { text: prompt ? `【發言者：使用者】\n${prompt}` : '' }
             ]);
 
-        const result = await chat.sendMessage(messageParts);
-        recordUsage('chat', result.response, { userId, mode });
-        return result.response.text();
+        const response = await sendWithHistory({ mode, history, parts: messageParts, config: GENERATION_CONFIG });
+        recordUsage('chat', response, { userId, mode });
+        return response.text ?? '';
     } catch (error) {
-        console.error(`Gemini Error (${MODEL_NAME}):`, error.message);
+        if (!isQuotaError(error)) logger.error('AI', `Gemini Error (${MODEL_NAME}): ${error.message}`);
         throw error;
     }
 }
 
 async function getGeminiResponseVoice(userId, prompt, channel = null, messageId = null, botId = null, mode = null) {
     try {
+        consumeQuota(userId);
         if (!mode) mode = getUserMode(userId, prompt);
-        const model   = getModel(mode, true);
         const history = channel ? await fetchUserChannelHistory(channel, userId, messageId, botId) : [];
-        const chat    = model.startChat({ history, generationConfig: { ...GENERATION_CONFIG, maxOutputTokens: 150 } });
 
-        const result   = await chat.sendMessage([{ text: prompt }]);
-        const response = result.response.text().trim();
-        recordUsage('voice', result.response, { userId, mode });
-        console.log(`[Voice AI] ${userId}: "${prompt}" → "${response}"`);
+        const result = await sendWithHistory({
+            mode, isVoice: true, history,
+            parts: [{ text: prompt }],
+            config: { ...GENERATION_CONFIG, maxOutputTokens: 150 },
+        });
+        const response = (result.text ?? '').trim();
+        recordUsage('voice', result, { userId, mode });
+        logger.debug('Voice AI', `${userId}: "${prompt}" → "${response}"`);
         return response;
     } catch (error) {
-        console.error(`[Voice AI] Gemini Error:`, error.message);
+        if (!isQuotaError(error)) logger.error('Voice AI', `Gemini Error: ${error.message}`);
         throw error;
     }
 }
 
 async function getShortResponse(userId, promptText, imageParts = [], channel = null, messageId = null, botId = null, message = null, mode = null) {
     try {
+        consumeQuota(userId);
         if (!mode) mode = getUserMode(userId, promptText);
-        const model   = getModel(mode);
         const history = channel ? await fetchUserChannelHistory(channel, userId, messageId, botId) : [];
         const shortPrompt = imageParts.length > 0 && !promptText
             ? `請用大約10~200個字回應或吐槽這張圖片`
             : `請用大約10~200字回應或吐槽訊息：「${promptText}」`;
-        const chat = model.startChat({ history, generationConfig: { ...GENERATION_CONFIG, maxOutputTokens: 300 } });
 
         // 短回覆標籤邏輯
         const messageParts = message
@@ -324,11 +322,15 @@ async function getShortResponse(userId, promptText, imageParts = [], channel = n
                 { text: `【發言者：使用者】\n${shortPrompt}` }
             ]);
 
-        const result = await chat.sendMessage(messageParts);
-        recordUsage('short', result.response, { userId, mode });
-        return result.response.text().trim();
+        const response = await sendWithHistory({
+            mode, history, parts: messageParts,
+            config: { ...GENERATION_CONFIG, maxOutputTokens: 300 },
+        });
+        recordUsage('short', response, { userId, mode });
+        return (response.text ?? '').trim();
     } catch (error) {
-        console.error(`Short Response Error:`, error.message);
+        // 隨機插話被額度擋下時安靜放棄即可
+        if (!isQuotaError(error)) logger.error('AI', `Short Response Error: ${error.message}`);
         return null;
     }
 }

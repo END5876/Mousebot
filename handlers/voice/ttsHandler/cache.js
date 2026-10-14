@@ -1,6 +1,7 @@
 'use strict';
 
 const fs   = require('fs');
+const logger = require('../../../utils/logger');
 const path = require('path');
 
 // LRU 文字快取
@@ -54,7 +55,7 @@ async function getCached(text, modelKey, destDir) {
   ttsCache.delete(key);
   ttsCache.set(key, entry);
 
-  console.log(`⚡ [TTS Cache] 命中: ${text.slice(0, 20)}...`);
+  logger.debug('TTS Cache', `⚡ 命中: ${text.slice(0, 20)}...`);
   return { ...entry, file: newFile };
 }
 

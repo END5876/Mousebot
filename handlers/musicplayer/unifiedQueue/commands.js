@@ -2,6 +2,7 @@
 // 統一佇列 — Slash Commands 註冊、控制面板按鈕互動、閒置監控管理指令
 
 const { getVoiceConnection } = require('@discordjs/voice');
+const logger = require('../../../utils/logger');
 const {
   EmbedBuilder,
   SlashCommandBuilder,
@@ -24,6 +25,7 @@ const {
 } = require('./playback');
 const { handlePlay, handleAutocomplete } = require('./search');
 const bootSummary = require('../../../utils/bootSummary');
+const session = require('./session');
 
 // ════════════════════════════════════════════════════════
 //  setupUnifiedCommands
@@ -202,7 +204,7 @@ function setupUnifiedCommands(client) {
         }
       }
     } catch (err) {
-      console.error('❌ [UnifiedQueue] 按鈕互動錯誤:', err);
+      logger.error('UnifiedQueue', '按鈕互動錯誤:', err);
       try { await interaction.reply({ content: '❌ 操作失敗', flags: MessageFlags.Ephemeral }); } catch {}
     }
   });
@@ -371,6 +373,7 @@ async function handleMusicLoop(interaction) {
   const next = cur === 'off' ? 'one' : cur === 'one' ? 'all' : 'off';
   loopSettings.set(interaction.guildId, next);
   if (next === 'all') resetLoopAllCycle(interaction.guildId);
+  session.schedule();
 
   const loopText = next === 'one' ? '🔂 單曲循環已開啟' : next === 'all' ? '🔁 列表循環已開啟' : '❌ 循環已關閉';
   const description = next === 'one' ? '當前歌曲將會不斷重複播放' : next === 'all' ? '播放完所有歌曲後將重新開始' : '播放完當前歌曲後繼續播放佇列';
@@ -450,6 +453,7 @@ async function handleMusicClear(interaction) {
   }
   const count = queue.length;
   queues.set(interaction.guildId, []);
+  session.schedule();
   await interaction.reply({ content: `🗑️ 已清空佇列 (${count} 首)` });
 }
 

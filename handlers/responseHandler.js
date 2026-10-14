@@ -1,7 +1,9 @@
 const { SlashCommandBuilder, MessageFlags, PermissionFlagsBits } = require('discord.js');
+const logger = require('../utils/logger');
 const fs   = require('fs');
 const path = require('path');
 const bootSummary = require('../utils/bootSummary');
+const { writeJsonAtomic } = require('../utils/jsonStore');
 const { isOwner } = require('../utils/config');
 
 // ── 常數 ────────────────────────────────────────────────
@@ -40,7 +42,7 @@ function loadResponses() {
     } else if (!cache) {
       throw err; // 第一次載入就壞掉：讓啟動摘要回報 warn
     } else {
-      console.warn('⚠️ [Response] responses.json 讀取失敗，沿用記憶體中的舊版本:', err.message);
+      logger.warn('Response', 'responses.json 讀取失敗，沿用記憶體中的舊版本:', err.message);
     }
   }
   return cache;
@@ -48,10 +50,7 @@ function loadResponses() {
 
 // 原子寫入（暫存檔 + rename），避免寫到一半被讀到或程序中斷造成檔案損毀
 function saveResponses(data) {
-  fs.mkdirSync(path.dirname(DATA_PATH), { recursive: true });
-  const tmp = `${DATA_PATH}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
-  fs.renameSync(tmp, DATA_PATH);
+  writeJsonAtomic(DATA_PATH, data);
   cache = data;
   cacheMtime = fs.statSync(DATA_PATH).mtimeMs;
   lastCheck = Date.now();
@@ -111,9 +110,9 @@ function setupCustomResponses(client) {
 
       // 值可能是用 | 分隔產生的陣列，需逐則送出
       await sendResponse(message.channel, match.response);
-      console.log(`🎯 觸發${match.type === 'exact' ? '完全' : '包含'}匹配回應: "${match.keyword}"`);
+      logger.info('Response', `🎯 觸發${match.type === 'exact' ? '完全' : '包含'}匹配回應: "${match.keyword}"`);
     } catch (err) {
-      console.error('❌ [Response] 自動回應處理失敗:', err.message);
+      logger.error('Response', '自動回應處理失敗:', err.message);
     }
   });
 

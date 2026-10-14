@@ -13,6 +13,7 @@ const {
   StreamType,
 } = require('@discordjs/voice');
 const logger = require('../../utils/logger');
+const { readJson, writeJsonAtomic } = require('../../utils/jsonStore');
 const bootSummary = require('../../utils/bootSummary');
 const { nowPlaying } = require('../musicplayer/unifiedQueue/state');
 const { restoreActiveLayer } = require('../audioManager');
@@ -22,36 +23,27 @@ const SOUND_DIR = path.join(__dirname, '../../data/timeAnnouncer');
 // ── 每伺服器開關設定的 JSON 永久化 ──────────────────────────
 // 預設為「關閉」，只記錄被明確開啟過的伺服器 ID，
 // 這樣新加入的伺服器不會自動開始整點報時，需手動 /timeannounce 開啟。
-const DATA_DIR = path.join(__dirname, '../../data');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-const SETTINGS_FILE = path.join(DATA_DIR, 'timeAnnouncerSettings.json');
+const SETTINGS_FILE = path.join(__dirname, '../../data/timeAnnouncerSettings.json');
 
 let enabledGuildIds = new Set();
 
 // ── 讀取設定檔 ────────────────────────────────────────────
 function loadSettings() {
-  if (!fs.existsSync(SETTINGS_FILE)) return;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
-    if (Array.isArray(parsed.enabledGuilds)) {
-      enabledGuildIds = new Set(parsed.enabledGuilds);
-    }
-    logger.debug('HourlyReport', `已載入報時開關設定，${enabledGuildIds.size} 個伺服器已開啟`);
-  } catch (e) {
-    logger.warn('HourlyReport', `讀取報時開關設定失敗: ${e.message}`);
+  const parsed = readJson(SETTINGS_FILE, {}) || {};
+  if (Array.isArray(parsed.enabledGuilds)) {
+    enabledGuildIds = new Set(parsed.enabledGuilds);
   }
+  logger.debug('HourlyReport', `已載入報時開關設定，${enabledGuildIds.size} 個伺服器已開啟`);
 }
 loadSettings();
 
-// ── 儲存設定檔（非同步寫入，避免阻塞） ────────────────────
+// ── 儲存設定檔 ────────────────────────────────────────────
 function saveSettings() {
-  fs.writeFile(
-    SETTINGS_FILE,
-    JSON.stringify({ enabledGuilds: [...enabledGuildIds] }, null, 2),
-    (e) => {
-      if (e) console.error('⚠️ [HourlyReport] 儲存報時開關設定失敗:', e.message);
-    }
-  );
+  try {
+    writeJsonAtomic(SETTINGS_FILE, { enabledGuilds: [...enabledGuildIds] });
+  } catch (e) {
+    logger.error('HourlyReport', `儲存報時開關設定失敗: ${e.message}`);
+  }
 }
 
 /**

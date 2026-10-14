@@ -1,6 +1,7 @@
 'use strict';
 
 const { MessageFlags } = require('discord.js');
+const logger = require('../../utils/logger');
 const bootSummary = require('../../utils/bootSummary');
 const splitbillCmd = require('./commands/splitbill');
 const splitbillQuickCmd = require('./commands/splitbillQuick');
@@ -127,7 +128,7 @@ function setupSplitbillCommands(client) {
         await handleSelectInteraction(interaction);
       }
     } catch (error) {
-      console.error('⚠️ Splitbill UI 發生異常錯誤:', error);
+      logger.error('Splitbill', 'Splitbill UI 發生異常錯誤:', error);
       const errorMsg = `❌ 操作失敗：${error.message || '未知錯誤'}`;
 
       if (interaction.replied || interaction.deferred) {

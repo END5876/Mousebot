@@ -1,4 +1,5 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const logger = require('../../utils/logger');
 const { fetchJson } = require('./noticeService');
 
 // ── 常數設定 ──────────────────────────────────────────────
@@ -16,7 +17,7 @@ async function getEpicFreeGames() {
 
     const elements = data?.data?.Catalog?.searchStore?.elements;
     if (!Array.isArray(elements)) {
-      console.warn('[EpicFree] ⚠️ API 回傳格式異常，elements 非陣列，實際結構:', JSON.stringify(data)?.slice(0, 200));
+      logger.warn('EpicFree', 'API 回傳格式異常，elements 非陣列，實際結構:', JSON.stringify(data)?.slice(0, 200));
       return [];
     }
 
@@ -77,7 +78,7 @@ async function getEpicFreeGames() {
 
     return freeGames;
   } catch (e) {
-    console.error('⚠️ [EpicFree] 獲取 Epic 限免遊戲失敗:', e.message);
+    logger.error('EpicFree', '獲取 Epic 限免遊戲失敗:', e.message);
     return [];
   }
 }

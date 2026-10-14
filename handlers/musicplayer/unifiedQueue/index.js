@@ -19,6 +19,7 @@ const {
   isPlaying,
   getNowPlaying,
   playRandomLocal,
+  resumeSavedSessions,
 } = require('./playback');
 const { handleAutocomplete } = require('./search');
 const { setupUnifiedCommands } = require('./commands');
@@ -34,4 +35,5 @@ module.exports = {
   updateControlPanel,
   ensureConnection,
   playRandomLocal,
+  resumeSavedSessions,
 };

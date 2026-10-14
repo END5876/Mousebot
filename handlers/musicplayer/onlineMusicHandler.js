@@ -81,7 +81,7 @@ function formatDuration(seconds) {
 function cleanupProcess(guildId) {
   const old = activeProcesses.get(guildId);
   if (old && !old.killed) {
-    console.log('🧹 清理舊的 yt-dlp 進程');
+    logger.info('OnlineMusic', '🧹 清理舊的 yt-dlp 進程');
     try {
       old.kill('SIGTERM');
       setTimeout(() => { if (!old.killed) old.kill('SIGKILL'); }, 1000);
@@ -106,7 +106,7 @@ async function getInfo(url, { signal } = {}) {
     const timer = setTimeout(() => {
       if (finished) return;
       finished = true;
-      console.warn(`⚠️ [getInfo] 逾時（超過 ${GET_INFO_TIMEOUT_MS / 1000}s），強制終止: ${url}`);
+      logger.warn('getInfo', `逾時（超過 ${GET_INFO_TIMEOUT_MS / 1000}s），強制終止: ${url}`);
       try { ytdlp.kill('SIGKILL'); } catch {}
       reject(new Error('取得影片資訊逾時，請確認網址是否正確或稍後再試'));
     }, GET_INFO_TIMEOUT_MS);
@@ -128,7 +128,7 @@ async function getInfo(url, { signal } = {}) {
       clearTimeout(timer);
 
       if (code !== 0) {
-        console.error('yt-dlp 錯誤輸出:', errorData);
+        logger.error('OnlineMusic', 'yt-dlp 錯誤輸出:', errorData);
         if (antiBot.isYouTubeUrl(url)) {
           const classified = antiBot.classifyYouTubeError(errorData);
           reject(new Error(`[YouTube] ${classified.msg}`));
@@ -176,7 +176,7 @@ async function checkPlaylist(url) {
     const timer = setTimeout(() => {
       if (finished) return;
       finished = true;
-      console.warn(`⚠️ [checkPlaylist] 逾時，視為非播放清單: ${url}`);
+      logger.warn('checkPlaylist', `逾時，視為非播放清單: ${url}`);
       try { ytdlp.kill('SIGKILL'); } catch {}
       fallback();
     }, GET_INFO_TIMEOUT_MS);
@@ -190,7 +190,7 @@ async function checkPlaylist(url) {
       clearTimeout(timer);
 
       if (code !== 0 || !data.trim()) {
-        console.warn('⚠️ [checkPlaylist] 偵測失敗，視為非播放清單:', errorData.slice(-150));
+        logger.warn('checkPlaylist', '偵測失敗，視為非播放清單:', errorData.slice(-150));
         return fallback();
       }
 
@@ -258,7 +258,7 @@ function _searchOnePlatform(searchPrefix, keyword, limit, fast = false, signal) 
     const timer = setTimeout(() => {
       if (finished) return;
       finished = true;
-      console.warn(`⚠️ [Search] ${searchPrefix} 搜尋逾時（超過 ${timeoutMs / 1000}s），強制終止`);
+      logger.warn('Search', `${searchPrefix} 搜尋逾時（超過 ${timeoutMs / 1000}s），強制終止`);
       try { ytdlp.kill('SIGKILL'); } catch {}
       resolve([]);
     }, timeoutMs);
@@ -284,7 +284,7 @@ function _searchOnePlatform(searchPrefix, keyword, limit, fast = false, signal) 
         const classified = isYT
           ? antiBot.classifyYouTubeError(errorData)
           : antiBot.classifyBilibiliError(errorData);
-        console.warn(`⚠️ [Search] ${searchPrefix} 搜尋失敗 (code=${code}): ${classified.msg}`);
+        logger.warn('Search', `${searchPrefix} 搜尋失敗 (code=${code}): ${classified.msg}`);
         resolve([]); // 失敗回空陣列，不讓另一平台的搜尋結果被拖累
         return;
       }
@@ -327,7 +327,7 @@ function _searchOnePlatform(searchPrefix, keyword, limit, fast = false, signal) 
       if (finished) return;
       finished = true;
       clearTimeout(timer);
-      console.warn(`⚠️ [Search] ${searchPrefix} 執行 yt-dlp 失敗: ${err.message}`);
+      logger.warn('Search', `${searchPrefix} 執行 yt-dlp 失敗: ${err.message}`);
       resolve([]);
     });
   });
@@ -363,16 +363,16 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
     const cachedPath = await cache.getCachedPath(item.url, item.title);
 
     if (cachedPath) {
-      if (!silent) console.log(`✅ [Cache] 快取命中，直接播放: ${path.basename(cachedPath)}`);
+      if (!silent) logger.debug('Cache', `✅ 快取命中，直接播放: ${path.basename(cachedPath)}`);
       _playFromFile(guildId, item, player, cachedPath, silent);
       return;
     }
 
     if (tooLongToCache) {
       const reason = !item.durationSec ? '未知長度/直播' : `長度超過 7 分鐘`;
-      if (!silent) console.log(`⏭️ [${platform}] ${reason}，跳過背景下載，僅串流: ${item.title}`);
+      if (!silent) logger.info(platform, `⏭️ ${reason}，跳過背景下載，僅串流: ${item.title}`);
     } else {
-      if (!silent) console.log(`🔄 [${platform}] 快取未命中，啟動即時串流播放: ${item.title}`);
+      if (!silent) logger.info(platform, `🔄 快取未命中，啟動即時串流播放: ${item.title}`);
     }
 
     _fallbackStream(guildId, item, player, retryCount, silent);
@@ -381,7 +381,7 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
       if (!downloadingUrls.has(item.url)) {
         downloadingUrls.add(item.url);
 
-        if (!silent) console.log(`⬇️ [${platform}] 背景開始下載快取...`);
+        if (!silent) logger.info(platform, `⬇️ 背景開始下載快取...`);
 
         const dlArgs = antiBot.isYouTubeUrl(item.url)
           ? antiBot.buildYouTubeArgs(
@@ -400,32 +400,32 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
           (progress) => {
             if (progress - lastProgress >= 20) {
               lastProgress = progress;
-              if (!silent) console.log(`⬇️ [${platform}] 背景下載進度: ${progress.toFixed(1)}%`);
+              if (!silent) logger.debug(platform, `⬇️ 背景下載進度: ${progress.toFixed(1)}%`);
             }
           },
         )
         .then((filePath) => {
           // downloadAndCache 完成時已經做完響度正規化（失敗則為一般轉檔），檔案可直接使用
-          if (!silent) console.log(`✅ [Cache] 背景下載完成，已儲存至: ${path.basename(filePath)}`);
+          if (!silent) logger.success('Cache', `背景下載完成，已儲存至: ${path.basename(filePath)}`);
 
           // 同步上傳到共用音樂庫，讓其他 Bot 也能直接取用，不必重新下載一次。
           // 未設定 MUSIC_LIB_URL 時 pushToSharedLibrary() 會直接是 no-op。
           cache.pushToSharedLibrary(filePath, path.basename(filePath));
         })
         .catch((err) => {
-          if (!silent) console.error(`⚠️ [Cache] 背景下載失敗: ${err.message}`);
+          if (!silent) logger.error('Cache', `背景下載失敗: ${err.message}`);
         })
         .finally(() => {
           downloadingUrls.delete(item.url);
         });
 
       } else {
-        if (!silent) console.log(`⏳ 此 URL 已經在背景下載中，跳過重複下載任務。`);
+        if (!silent) logger.info('OnlineMusic', `⏳ 此 URL 已經在背景下載中，跳過重複下載任務。`);
       }
     }
 
   } catch (err) {
-    if (!silent) console.error(`❌ [${platform}] 播放前發生錯誤: ${err.message}`);
+    if (!silent) logger.error(platform, `播放前發生錯誤: ${err.message}`);
     _handleStreamError(guildId, item, player, retryCount, err.message, silent);
   }
 }
@@ -439,9 +439,9 @@ function _playFromFile(guildId, item, player, filePath, silent) {
 
     player.play(resource);
     errorCounts.set(guildId, 0);
-    if (!silent) console.log(`🎵 [OnlineMusic] 本地播放: ${path.basename(filePath)}`);
+    if (!silent) logger.info('OnlineMusic', `🎵 本地播放: ${path.basename(filePath)}`);
   } catch (err) {
-    if (!silent) console.error('❌ [OnlineMusic] 本地播放失敗:', err);
+    if (!silent) logger.error('OnlineMusic', '本地播放失敗:', err);
     _handleStreamError(guildId, item, player, 0, err.message, silent);
   }
 }
@@ -450,13 +450,13 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
   const isYT     = antiBot.isYouTubeUrl(item.url);
   const platform = isYT ? 'YouTube' : 'Bilibili';
 
-  if (!silent) console.log(`🔄 [${platform}] 切換串流模式: ${item.title}`);
+  if (!silent) logger.debug(platform, `🔄 切換串流模式: ${item.title}`);
 
   let streamArgs;
 
   if (isYT) {
     const { strategy } = antiBot.getYtClientStrategy(guildId);
-    if (!silent) console.log(`🎯 [YouTube] 使用 client: ${strategy.name} (${strategy.desc})`);
+    if (!silent) logger.debug('YouTube', `🎯 使用 client: ${strategy.name} (${strategy.desc})`);
     streamArgs = antiBot.buildYouTubeArgs(item.url, strategy, true);
   } else {
     streamArgs = antiBot.buildBilibiliArgs(item.url, true);
@@ -474,7 +474,7 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
   ytdlp.stderr.on('data', data => {
     const err = data.toString();
     if (!err.includes('Deleting original file')) {
-      if (!silent) console.error(`[${platform}] yt-dlp stderr:`, err);
+      if (!silent) logger.error(platform, `yt-dlp stderr:`, err);
       errorOutput += err;
       if (!err.includes('unable to write data') &&
           !err.includes('Broken pipe') &&
@@ -487,15 +487,15 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
   ytdlp.on('error', err => { hasError = true; errorOutput = err.message; });
 
   ytdlp.on('close', (code, signal) => {
-    if (!silent) console.log(`[${platform}] yt-dlp 進程結束 (code: ${code}, signal: ${signal})`);
+    if (!silent) logger.debug(platform, `yt-dlp 進程結束 (code: ${code}, signal: ${signal})`);
 
     if (code !== 0 && !dataReceived && hasError) {
       if (isYT) {
         const classified = antiBot.classifyYouTubeError(errorOutput);
-        if (!silent) console.warn(`⚠️ [YouTube] ${classified.msg}`);
+        if (!silent) logger.warn('YouTube', `${classified.msg}`);
 
         if (classified.rotate && antiBot.rotateYtClient(guildId)) {
-          if (!silent) console.log('🔄 [YouTube] 使用備用 client 重試...');
+          if (!silent) logger.info('YouTube', '🔄 使用備用 client 重試...');
           setTimeout(() => _fallbackStream(guildId, item, player, retryCount, silent), 1000);
           return;
         }
@@ -510,7 +510,7 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
   });
 
   resource.playStream?.on('error', err => {
-    if (!silent) console.error('音頻流錯誤:', err);
+    if (!silent) logger.error('OnlineMusic', '音頻流錯誤:', err);
   });
 
   player.play(resource);
@@ -522,24 +522,24 @@ function _handleStreamError(guildId, item, player, retryCount, errorMessage, sil
   errorCounts.set(guildId, currentErrors);
 
   if (!silent) {
-    console.error(`❌ 串流錯誤 (${currentErrors}/${MAX_CONSECUTIVE_ERRORS}): ${errorMessage}`);
+    logger.error('OnlineMusic', `串流錯誤 (${currentErrors}/${MAX_CONSECUTIVE_ERRORS}): ${errorMessage}`);
   }
 
   if (currentErrors >= MAX_CONSECUTIVE_ERRORS) {
-    if (!silent) console.error('❌ 連續錯誤過多，停止播放');
+    if (!silent) logger.error('OnlineMusic', '連續錯誤過多，停止播放');
     player.emit('error', new Error(`連續發生 ${currentErrors} 次錯誤，已停止播放`));
     stopAll(guildId);
     return;
   }
 
   if (retryCount < MAX_RETRIES) {
-    if (!silent) console.log(`⏳ ${RETRY_DELAY / 1000} 秒後重試 (${retryCount + 1}/${MAX_RETRIES})...`);
+    if (!silent) logger.info('OnlineMusic', `⏳ ${RETRY_DELAY / 1000} 秒後重試 (${retryCount + 1}/${MAX_RETRIES})...`);
     setTimeout(
       () => playStream(guildId, item, player, { retryCount: retryCount + 1, silent }),
       RETRY_DELAY,
     );
   } else {
-    if (!silent) console.error('❌ 重試次數已用盡，通知上層跳過');
+    if (!silent) logger.error('OnlineMusic', '重試次數已用盡，通知上層跳過');
     player.emit('error', new Error(`播放失敗（已重試 ${MAX_RETRIES} 次）：${errorMessage.substring(0, 100)}`));
   }
 }
@@ -585,7 +585,7 @@ async function setupOnlineMusicEngine() {
 //  防殭屍進程保護 (Zombie Process Protection)
 // ════════════════════════════════════════════════════════
 process.on('exit', () => {
-  for (const [guildId, childProcess] of activeProcesses.entries()) {
+  for (const childProcess of activeProcesses.values()) {
     if (!childProcess.killed) {
       try {
         childProcess.kill('SIGKILL');

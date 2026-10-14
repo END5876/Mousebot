@@ -1,6 +1,6 @@
-const fs   = require('fs');
 const path = require('path');
 const logger = require('../../utils/logger');
+const { readJson, createDebouncedWriter } = require('../../utils/jsonStore');
 
 // ════════════════════════════════════════════════════════
 //  路徑與設定
@@ -19,21 +19,14 @@ const SAVE_DEBOUNCE_MS = 10 * 1000;
 //   }
 // }
 let usage = {};
-let saveTimer = null;
 
 // ════════════════════════════════════════════════════════
 //  載入 / 儲存
 // ════════════════════════════════════════════════════════
 function load() {
-    try {
-        if (fs.existsSync(USAGE_PATH)) {
-            usage = JSON.parse(fs.readFileSync(USAGE_PATH, 'utf-8')) ?? {};
-            logger.debug('TokenTracker', `已載入 ${Object.keys(usage).length} 天的用量紀錄`);
-        }
-    } catch (err) {
-        logger.warn('TokenTracker', `載入失敗，從空白開始：${err.message}`);
-        usage = {};
-    }
+    const data = readJson(USAGE_PATH, {});
+    usage = data && typeof data === 'object' ? data : {};
+    logger.debug('TokenTracker', `已載入 ${Object.keys(usage).length} 天的用量紀錄`);
 }
 
 function pruneOldDays() {
@@ -43,25 +36,11 @@ function pruneOldDays() {
     }
 }
 
-function saveNow() {
-    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-    try {
-        pruneOldDays();
-        fs.mkdirSync(path.dirname(USAGE_PATH), { recursive: true });
-        fs.writeFileSync(USAGE_PATH, JSON.stringify(usage, null, 2), 'utf-8');
-    } catch (err) {
-        logger.warn('TokenTracker', `寫入失敗：${err.message}`);
-    }
-}
-
-// 每次呼叫都寫檔太頻繁，累積一段時間再一次寫入
-function scheduleSave() {
-    if (saveTimer) return;
-    saveTimer = setTimeout(saveNow, SAVE_DEBOUNCE_MS);
-    saveTimer.unref?.();
-}
-
-process.on('exit', () => { if (saveTimer) saveNow(); });
+// 每次呼叫都寫檔太頻繁，累積一段時間再一次寫入（程序結束時自動補寫）
+const writer = createDebouncedWriter(USAGE_PATH, () => {
+    pruneOldDays();
+    return usage;
+}, { debounceMs: SAVE_DEBOUNCE_MS, label: 'TokenTracker' });
 
 // ════════════════════════════════════════════════════════
 //  累加
@@ -91,7 +70,7 @@ function recordUsage(source, response, { userId = null, mode = null } = {}) {
     const meta = response?.usageMetadata;
     const label = [source, userId && `user:${userId}`, mode && `mode:${mode}`].filter(Boolean).join(' / ');
     if (!meta) {
-        console.log(`[Token] (${label}) ⚠️ 無法取得 usageMetadata`);
+        logger.warn('Token', `(${label}) 無法取得 usageMetadata`);
         return;
     }
 
@@ -104,9 +83,8 @@ function recordUsage(source, response, { userId = null, mode = null } = {}) {
         total:    meta.totalTokenCount         ?? 0,
     };
 
-    console.log(
-        `[Token] (${label})\n` +
-        `        輸入: ${counts.prompt} (快取 ${counts.cached}) | 輸出: ${counts.output} | ` +
+    logger.debug('Token',
+        `(${label}) 輸入: ${counts.prompt} (快取 ${counts.cached}) | 輸出: ${counts.output} | ` +
         `思考: ${counts.thoughts} | 總計: ${counts.total}`
     );
 
@@ -115,9 +93,19 @@ function recordUsage(source, response, { userId = null, mode = null } = {}) {
     addTo(day.bySource, source, counts);
     if (mode)   addTo(day.byMode, mode, counts);
     if (userId) addTo(day.byUser, userId, counts);
-    scheduleSave();
+    writer.schedule();
+}
+
+/** 今日全體已使用的 token 總數 */
+function getTodayTotal() {
+    return usage[dateKey()]?.total?.total ?? 0;
+}
+
+/** 今日指定使用者已使用的 token 總數 */
+function getTodayUserTotal(userId) {
+    return usage[dateKey()]?.byUser?.[userId]?.total ?? 0;
 }
 
 load();
 
-module.exports = { recordUsage };
+module.exports = { recordUsage, getTodayTotal, getTodayUserTotal };

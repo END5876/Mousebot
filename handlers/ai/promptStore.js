@@ -47,7 +47,7 @@ let lastCheck = 0;
 // ── 解析 / 序列化 ─────────────────────────────────────────
 
 function parseModeFile(key, raw) {
-    const text = raw.replace(/^﻿/, '').replace(/\r\n/g, '\n');
+    const text = raw.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
     const meta = {};
     let body = text;
 
@@ -100,7 +100,7 @@ function refresh(force = false) {
             }
             const res = readIfChanged(file, shared[key]?.mtimeMs);
             if (!res) continue;
-            shared[key] = { text: res.raw.replace(/^﻿/, '').replace(/\r\n/g, '\n').trim(), mtimeMs: res.mtimeMs };
+            shared[key] = { text: res.raw.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').trim(), mtimeMs: res.mtimeMs };
             if (!force) logger.success('PromptStore', `已重新載入 ${key}.md`);
         } catch (err) {
             logger.warn('PromptStore', `讀取 ${key}.md 失敗，沿用舊版：${err.message}`);

@@ -178,7 +178,7 @@ function setupTTSCommands(client) {
           }
           await interaction.editReply({ content: `✅ 已切換至 **${model.name}**！` });
         } catch (err) {
-          console.error('❌ 切換模型失敗:', err.message);
+          logger.error('TTS', '切換模型失敗:', err.message);
           await interaction.editReply({ content: `❌ 切換失敗：${err.message}` });
         }
       }
@@ -196,7 +196,7 @@ function setupTTSCommands(client) {
         const voiceLabel = EDGE_VOICE_CHOICES.find(v => v.value === voice)?.name ?? voice;
 
         activeEdgeVoices.set(guildId, voice);
-        console.log(`🎙️ [edge-tts][${guildId}] 切換聲音 → ${voice}`);
+        logger.info('edge-tts', `🎙️ [${guildId}] 切換聲音 → ${voice}`);
 
         await interaction.reply({
           content:

@@ -1,4 +1,5 @@
 'use strict';
+const logger = require('../../../utils/logger');
 
 /**
  * 將金額四捨五入到小數第 2 位（避免浮點數誤差）
@@ -387,7 +388,7 @@ async function loadRateTable(from) {
       fxCache.set(from, { rates: data.rates, ts: Date.now() });
       return data.rates;
     } catch (error) {
-      console.error(`⚠️ 即時匯率抓取失敗 (${from}):`, error.message);
+      logger.error('Splitbill', `即時匯率抓取失敗 (${from}):`, error.message);
       return hit ? hit.rates : null; // 抓取失敗時，寧可用過期的舊表也不要直接放棄
     } finally {
       fxInflight.delete(from);

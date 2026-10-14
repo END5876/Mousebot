@@ -6,7 +6,7 @@ const {
 } = require('discord.js');
 const { memberDisplay } = require('../../utils/tripHelper');
 const splitbillClient = require('../../utils/splitbillClient');
-const { formatAmountConversion, formatParticipantsList } = require('./helpers');
+const { formatAmountConversion, formatParticipantsList, parseLedgerSuffix } = require('./helpers');
 const { parseScanItemSuffix, scanItemCacheUserId, buildScanResultView, SCAN_CURRENCY_CUSTOM_VALUE } = require('./billScan');
 const { renderSplitMethodUI, completeExpenseLogging } = require('./expenseCompletion');
 

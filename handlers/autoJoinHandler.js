@@ -1,4 +1,4 @@
-const fs = require('node:fs');
+const { readJson, writeJsonAtomic } = require('../utils/jsonStore');
 const path = require('node:path');
 
 const {
@@ -47,25 +47,20 @@ const MAX_REJOIN_ATTEMPTS = 3;
 
 // .env 僅作為尚未建立設定檔時的初始預設值。
 function loadConfig() {
-  try {
-    const saved = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-
-    return {
-      enabled: typeof saved.enabled === 'boolean' ? saved.enabled : true,
-      targetChannelId: saved.targetChannelId || null,
-      targetGuildId: saved.targetGuildId || null,
-    };
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      console.error('❌ 讀取自動加入設定失敗，改用預設設定:', error);
-    }
-
+  const saved = readJson(CONFIG_PATH, null);
+  if (!saved || typeof saved !== 'object') {
     return {
       enabled: true,
       targetChannelId: process.env.TARGET_VOICE_CHANNEL_ID || null,
       targetGuildId: null,
     };
   }
+
+  return {
+    enabled: typeof saved.enabled === 'boolean' ? saved.enabled : true,
+    targetChannelId: saved.targetChannelId || null,
+    targetGuildId: saved.targetGuildId || null,
+  };
 }
 
 let config = loadConfig();
@@ -86,25 +81,7 @@ const recovery = { connection: null, since: null, attempts: 0 };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function saveConfig(nextConfig) {
-  fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
-
-  const temporaryPath = `${CONFIG_PATH}.tmp`;
-
-  try {
-    fs.writeFileSync(
-      temporaryPath,
-      JSON.stringify(nextConfig, null, 2) + '\n',
-      'utf8'
-    );
-    fs.renameSync(temporaryPath, CONFIG_PATH);
-  } catch (error) {
-    try {
-      fs.unlinkSync(temporaryPath);
-    } catch {
-      // 暫存檔可能不存在。
-    }
-    throw error;
-  }
+  writeJsonAtomic(CONFIG_PATH, nextConfig);
 
   // 寫入成功後才更新記憶體中的設定。
   config = nextConfig;
@@ -118,13 +95,13 @@ function bindProcessGuards(client) {
 
   if (client.listenerCount('error') === 0) {
     client.on('error', error => {
-      console.error('❌ Discord client 錯誤:', error);
+      logger.error('AutoJoin', 'Discord client 錯誤:', error);
     });
   }
 
   if (client.listenerCount('shardError') === 0) {
     client.on('shardError', error => {
-      console.error('❌ Discord shard 錯誤:', error);
+      logger.error('AutoJoin', 'Discord shard 錯誤:', error);
     });
   }
 }
@@ -187,13 +164,12 @@ function destroyConnection(guildId, expected, { announceLeave = false } = {}) {
 
   try {
     current.destroy(announceLeave);
-    console.log(
-      announceLeave
-        ? '🧹 已銷毀語音連線並離開頻道'
-        : '🧹 已丟棄舊語音連線（未通知 Discord 離開）'
+    logger.info(
+      'AutoJoin',
+      announceLeave ? '🧹 已銷毀語音連線並離開頻道' : '🧹 已丟棄舊語音連線（未通知 Discord 離開）'
     );
   } catch (error) {
-    console.warn('⚠️ 銷毀連線時發生錯誤:', error.message);
+    logger.warn('AutoJoin', '銷毀連線時發生錯誤:', error.message);
   }
 
   // 舊連線的監控已失效，新連線就緒後再啟動。
@@ -221,7 +197,7 @@ function startPersistentMonitor(client, channel, connection) {
 // 目標已改到其他伺服器，且新伺服器連線已就緒時，才清理舊伺服器的連線。
 function settleManagedGuild(guildId) {
   if (managedGuildId && managedGuildId !== guildId) {
-    console.log(`🧹 目標已移至其他伺服器，清理舊伺服器 (${managedGuildId}) 的連線`);
+    logger.info('AutoJoin', `🧹 目標已移至其他伺服器，清理舊伺服器 (${managedGuildId}) 的連線`);
     destroyConnection(managedGuildId, undefined, { announceLeave: true });
   }
 
@@ -257,7 +233,7 @@ function ensureListeners(client, connection, guildId) {
   listenedConnections.add(connection);
 
   connection.on('error', error => {
-    console.error('❌ 語音連線錯誤:', error?.message || error);
+    logger.error('AutoJoin', '語音連線錯誤:', error?.message || error);
   });
 
   connection.on(VoiceConnectionStatus.Disconnected, () => {
@@ -298,7 +274,7 @@ async function establishNewConnection(client, channel) {
     await entersState(connection, VoiceConnectionStatus.Ready, READY_TIMEOUT_MS);
   } catch (error) {
     // 不立刻銷毀：交給恢復流程（等待 → rejoin → 最後才重建）。
-    console.error('❌ 等待語音連線就緒失敗:', error.message);
+    logger.error('AutoJoin', '等待語音連線就緒失敗:', error.message);
     return;
   }
 
@@ -341,7 +317,7 @@ async function ensureConnected(client) {
 
   try {
     if (!targetChannelId) {
-      console.warn('⚠️ 尚未設定自動加入的目標語音頻道');
+      logger.warn('AutoJoin', '尚未設定自動加入的目標語音頻道');
       return;
     }
 
@@ -350,7 +326,7 @@ async function ensureConnected(client) {
       .catch(() => null);
 
     if (!channel || !channel.isVoiceBased()) {
-      console.warn(`⚠️ 找不到目標語音頻道: ${targetChannelId}`);
+      logger.warn('AutoJoin', `找不到目標語音頻道: ${targetChannelId}`);
       return;
     }
 
@@ -360,7 +336,7 @@ async function ensureConnected(client) {
     const guildId = channel.guild.id;
 
     if (config.targetGuildId && config.targetGuildId !== guildId) {
-      console.warn('⚠️ 目標頻道與儲存的伺服器不一致');
+      logger.warn('AutoJoin', '目標頻道與儲存的伺服器不一致');
       return;
     }
 
@@ -393,7 +369,7 @@ async function ensureConnected(client) {
       PermissionFlagsBits.ViewChannel,
       PermissionFlagsBits.Connect,
     ])) {
-      console.warn(`⚠️ Bot 無權限檢視或加入語音頻道: ${channel.name}`);
+      logger.warn('AutoJoin', `Bot 無權限檢視或加入語音頻道: ${channel.name}`);
       return;
     }
 
@@ -401,7 +377,7 @@ async function ensureConnected(client) {
 
     // 2. 連線就緒但在其他頻道（同伺服器變更目標、被人移動）→ 用原連線移動，不銷毀。
     if (status === VoiceConnectionStatus.Ready) {
-      console.log(`🔀 透過既有連線移動到目標頻道: ${channel.name}`);
+      logger.info('AutoJoin', `🔀 透過既有連線移動到目標頻道: ${channel.name}`);
 
       const moved = connection.rejoin({
         channelId: channel.id,
@@ -410,7 +386,7 @@ async function ensureConnected(client) {
       });
 
       if (!moved) {
-        console.warn('⚠️ 無法透過既有連線移動，交由恢復流程處理');
+        logger.warn('AutoJoin', '無法透過既有連線移動，交由恢復流程處理');
         return;
       }
 
@@ -442,8 +418,9 @@ async function ensureConnected(client) {
     if (recovery.attempts < MAX_REJOIN_ATTEMPTS) {
       recovery.attempts += 1;
 
-      console.warn(
-        `⚠️ 語音連線未恢復 (${status})，嘗試以原連線重新加入 ` +
+      logger.warn(
+        'AutoJoin',
+        `語音連線未恢復 (${status})，嘗試以原連線重新加入 ` +
           `(${recovery.attempts}/${MAX_REJOIN_ATTEMPTS})`
       );
 
@@ -462,7 +439,7 @@ async function ensureConnected(client) {
           REJOIN_READY_TIMEOUT_MS
         );
       } catch (error) {
-        console.warn('⚠️ 原連線重新加入後仍未就緒:', error.message);
+        logger.warn('AutoJoin', '原連線重新加入後仍未就緒:', error.message);
         return;
       }
 
@@ -474,7 +451,7 @@ async function ensureConnected(client) {
     }
 
     // 最後手段：多次 rejoin 失敗，銷毀並建立新連線。
-    console.warn('⚠️ 多次重新加入失敗，銷毀並重建語音連線');
+    logger.warn('AutoJoin', '多次重新加入失敗，銷毀並重建語音連線');
 
     // 確認要銷毀的仍是這條連線，已被取代就不動。
     if (!destroyConnection(guildId, connection)) return;
@@ -489,7 +466,7 @@ async function ensureConnected(client) {
 
     await establishNewConnection(client, channel);
   } catch (error) {
-    console.error('❌ 自動加入失敗:', error);
+    logger.error('AutoJoin', '自動加入失敗:', error);
   } finally {
     isReconciling = false;
 
@@ -527,7 +504,7 @@ function stopAutoJoinCheck() {
   clearInterval(checkInterval);
   checkInterval = null;
   resetRecovery();
-  console.log('🛑 自動加入檢查已停止');
+  logger.info('AutoJoin', '🛑 自動加入檢查已停止');
 }
 
 /* ------------------------------------------------------------------ */
@@ -810,7 +787,7 @@ function setupAutoJoinCommands(client) {
         });
       }
     } catch (error) {
-      console.error('❌ 處理自動加入選單失敗:', error);
+      logger.error('AutoJoin', '處理自動加入選單失敗:', error);
 
       const response = {
         content: '❌ 操作失敗；請確認 Bot 有權限寫入設定檔，然後再試一次。',

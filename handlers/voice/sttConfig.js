@@ -2,6 +2,7 @@
 // 環境變數、常數設定、工具函式、Semaphore
 
 const http = require('http');
+const logger = require('../../utils/logger');
 const fs   = require('fs');
 const path = require('path');
 const axios = require('axios');
@@ -149,10 +150,10 @@ function cleanupStaleTempFiles(maxAgeMs = 10 * 60 * 1000) {
     }
 
     if (count > 0) {
-      console.log(`[STT] 🧹 清理殘留 temp 檔案：${count} 個`);
+      logger.info('STT', `🧹 清理殘留 temp 檔案：${count} 個`);
     }
   } catch (err) {
-    console.warn(`[STT] temp 清理失敗：${err.message}`);
+    logger.warn('STT', `temp 清理失敗：${err.message}`);
   }
 }
 
@@ -244,7 +245,7 @@ async function detectWakeword(guildId, userId, pcmBuffer, reset = false) {
     );
     return { ...response.data, processed: response.data?.processed !== false };
   } catch (err) {
-    console.error(`[STT] OWW 偵測失敗 (${userId}): ${err.message}`);
+    logger.error('STT', `OWW 偵測失敗 (${userId}): ${err.message}`);
     return { detected: false, processed: false };
   } finally {
     owwSemaphore.release();

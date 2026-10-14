@@ -9,6 +9,7 @@ const {
   getVoiceConnection,
 } = require('@discordjs/voice');
 const { Readable } = require('stream');
+const logger = require('../utils/logger');
 
 // ── 優先級常數 ────────────────────────────────────────
 const PRIORITY = { SILENCE: 0, MUSIC: 1, TTS: 2 };
@@ -75,7 +76,7 @@ function startSilenceLayer(guildId) {
     _subscribe(guildId, player);
     state.activeLayer = 'silence';
   }
-  console.log(`🔇 [AudioManager] 靜音層啟動 (${guildId})`);
+  logger.debug('AudioManager', `🔇 靜音層啟動 (${guildId})`);
 }
 
 function stopSilenceLayer(guildId) {
@@ -87,7 +88,7 @@ function stopSilenceLayer(guildId) {
   if (state.activeLayer === 'silence') {
     state.activeLayer = null;
   }
-  console.log(`⏹️ [AudioManager] 靜音層停止 (${guildId})`);
+  logger.debug('AudioManager', `⏹️ 靜音層停止 (${guildId})`);
 }
 
 // ════════════════════════════════════════════════════
@@ -113,7 +114,7 @@ function setMusicPlayer(guildId, player, onEnd, silent = false) {
 
   // TTS 播放中 → 音樂先暫停等待
   if (state.activeLayer === 'tts') {
-    if (!silent) console.log(`⏸️ [AudioManager] TTS 播放中，音樂等待 (${guildId})`);
+    if (!silent) logger.debug('AudioManager', `⏸️ TTS 播放中，音樂等待 (${guildId})`);
     state.musicPaused = true;
     return;
   }
@@ -123,7 +124,7 @@ function setMusicPlayer(guildId, player, onEnd, silent = false) {
   state.musicPaused = false;
 
   if (!silent) {
-    console.log(`🎵 [AudioManager] 音樂層啟動 (${guildId})`);
+    logger.debug('AudioManager', `🎵 音樂層啟動 (${guildId})`);
   }
 }
 
@@ -137,7 +138,7 @@ function stopMusicLayer(guildId) {
   if (state.activeLayer === 'music') {
     _fallbackToSilence(guildId);
   }
-  console.log(`⏹️ [AudioManager] 音樂層停止 (${guildId})`);
+  logger.debug('AudioManager', `⏹️ 音樂層停止 (${guildId})`);
 }
 
 // ════════════════════════════════════════════════════
@@ -160,7 +161,7 @@ function _ensureTTSPlayer(guildId) {
   state.players.tts = player;
 
   player.on('error', (err) => {
-    console.error(`❌ [AudioManager] TTS 播放錯誤 (${guildId}):`, err.message);
+    logger.error('AudioManager', `TTS 播放錯誤 (${guildId}):`, err.message);
   });
 
   return player;
@@ -178,14 +179,14 @@ function enterTTSLayer(guildId) {
   if (state.activeLayer === 'tts') return true; // 已在 TTS 層，避免重複切換
 
   if (state.activeLayer === 'music' && state.players.music) {
-    console.log(`⏸️ [AudioManager] 音樂暫停，TTS 插播 (${guildId})`);
+    logger.debug('AudioManager', `⏸️ 音樂暫停，TTS 插播 (${guildId})`);
     state.musicPaused = true;
   }
 
   const player = _ensureTTSPlayer(guildId);
   _subscribe(guildId, player);
   state.activeLayer = 'tts';
-  console.log(`🎙️ [AudioManager] 進入 TTS 層 (${guildId})`);
+  logger.debug('AudioManager', `🎙️ 進入 TTS 層 (${guildId})`);
   return true;
 }
 
@@ -198,7 +199,6 @@ function enterTTSLayer(guildId) {
  * @param {Function} onSegmentEnd  此片段播完的回調
  */
 function playTTSSegment(guildId, filename, onSegmentEnd) {
-  const state = getState(guildId);
   const connection = getVoiceConnection(guildId);
   if (!connection) return false;
 
@@ -240,7 +240,7 @@ function _restoreAfterTTS(guildId) {
     _subscribe(guildId, state.players.music);
     state.activeLayer = 'music';
     state.musicPaused = false;
-    console.log(`▶️ [AudioManager] 恢復音樂播放 (${guildId})`);
+    logger.debug('AudioManager', `▶️ 恢復音樂播放 (${guildId})`);
   } else {
     _fallbackToSilence(guildId);
   }
@@ -251,7 +251,7 @@ function _fallbackToSilence(guildId) {
   if (state.players.silence) {
     _subscribe(guildId, state.players.silence);
     state.activeLayer = 'silence';
-    console.log(`🔇 [AudioManager] 退回靜音層 (${guildId})`);
+    logger.debug('AudioManager', `🔇 退回靜音層 (${guildId})`);
   } else {
     state.activeLayer = null;
   }
@@ -266,7 +266,7 @@ function cleanupGuild(guildId) {
     try { player.stop(); } catch {}
   }
   guildStates.delete(guildId);
-  console.log(`🧹 [AudioManager] 清理完成 (${guildId})`);
+  logger.debug('AudioManager', `🧹 清理完成 (${guildId})`);
 }
 
 // ════════════════════════════════════════════════════

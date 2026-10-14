@@ -1,4 +1,5 @@
 const { EmbedBuilder, SlashCommandBuilder, MessageFlags, PermissionFlagsBits } = require('discord.js');
+const logger = require('../utils/logger');
 const bootSummary = require('../utils/bootSummary');
 
 const SAY_AUTHORIZED_ID = process.env.SAY_AUTHORIZED_ID;
@@ -25,7 +26,7 @@ function setupBasicCommands(client) {
             const target = content.replace('有什麼了不起', '').trim();
             if (target) {
                 message.channel.send(`${target}有什麼了不起 爛${target}🙁🤙`);
-                console.log(`🙁 了不起回應: ${target}`);
+                logger.info('Command', `🙁 了不起回應: ${target}`);
             }
         }
     });
@@ -114,21 +115,21 @@ function setupBasicCommands(client) {
             if (sub === 'code') {
                 const code = interaction.options.getInteger('code');
                 await interaction.reply({ content: `https://nhentai.net/g/${code}/` });
-                console.log(`🔞 nhentai 查詢: ${code}`);
+                logger.info('Command', `🔞 nhentai 查詢: ${code}`);
                 return;
             }
 
             if (sub === 'search') {
                 const query = interaction.options.getString('query');
                 await interaction.reply({ content: `https://nhentai.net/search/?q=${encodeURIComponent(query)}` });
-                console.log(`🔍 nhentai 搜尋: ${query}`);
+                logger.info('Command', `🔍 nhentai 搜尋: ${query}`);
                 return;
             }
 
             if (sub === 'random') {
                 const randomCode = getRandom(620000);
                 await interaction.reply({ content: `https://nhentai.net/g/${randomCode}/` });
-                console.log(`🎲 nhentai 隨機: ${randomCode}`);
+                logger.info('Command', `🎲 nhentai 隨機: ${randomCode}`);
                 return;
             }
         }
@@ -160,7 +161,7 @@ function setupBasicCommands(client) {
                 flags: MessageFlags.Ephemeral
             });
             await interaction.channel.send(sayText);
-            console.log(`💬 Say 指令: ${sayText}`);
+            logger.info('Command', `💬 Say 指令: ${sayText}`);
         }
     });
 

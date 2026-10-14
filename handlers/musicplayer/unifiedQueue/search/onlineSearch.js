@@ -9,7 +9,7 @@ const {
 } = require('discord.js');
 
 const { _engines, activeSearchMessages } = require('../state');
-const { updateControlPanel } = require('../playback');
+const { updateControlPanel, enqueue } = require('../playback');
 
 // ════════════════════════════════════════════════════════
 //  共用的「已加入佇列 / 開始播放」回覆
@@ -93,7 +93,7 @@ function _buildSearchComponents(results) {
 async function _handleOnlineSearch(interaction, keyword, guildId) {
   const engine = _engines.bilibili;
   if (!engine || typeof engine.searchMulti !== 'function') {
-    return interaction.editReply('❌ 線上搜尋引擎未就緒（缺少 searchMulti）');
+    return interaction.editReply('⏳ 線上音樂引擎初始化中，請稍後再試');
   }
 
   await interaction.editReply({

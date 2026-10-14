@@ -1,6 +1,6 @@
-const fs   = require('fs');
 const path = require('path');
 const logger = require('../../utils/logger');
+const { readJson, writeJsonAtomic } = require('../../utils/jsonStore');
 
 // ════════════════════════════════════════════════════════
 //  路徑設定
@@ -22,42 +22,18 @@ let chanceMap = new Map();
 let disabledChannels = new Set();
 
 // ════════════════════════════════════════════════════════
-//  工具：確保目錄存在
-// ════════════════════════════════════════════════════════
-function ensureDir(filePath) {
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-}
-
-// ════════════════════════════════════════════════════════
 //  載入
 // ════════════════════════════════════════════════════════
 function loadReplyChance() {
-    try {
-        if (fs.existsSync(CHANCE_PATH)) {
-            const data = JSON.parse(fs.readFileSync(CHANCE_PATH, 'utf-8'));
-            chanceMap  = new Map(Object.entries(data));
-            logger.debug('ReplyChance', `已載入 ${chanceMap.size} 筆伺服器設定`);
-        } else {
-            logger.debug('ReplyChance', '找不到設定檔，使用預設值');
-        }
-    } catch (err) {
-        logger.warn('ReplyChance', `載入失敗，使用預設值：${err.message}`);
-    }
+    const data = readJson(CHANCE_PATH, {});
+    chanceMap  = new Map(Object.entries(data && typeof data === 'object' ? data : {}));
+    logger.debug('ReplyChance', `已載入 ${chanceMap.size} 筆伺服器設定`);
 }
 
 function loadDisabledChannels() {
-    try {
-        if (fs.existsSync(DISABLED_PATH)) {
-            const data = JSON.parse(fs.readFileSync(DISABLED_PATH, 'utf-8'));
-            disabledChannels = new Set(Array.isArray(data) ? data : []);
-            logger.debug('ReplyChance', `已載入 ${disabledChannels.size} 個停用頻道`);
-        } else {
-            logger.debug('ReplyChance', '找不到頻道停用設定檔，預設全部啟用');
-        }
-    } catch (err) {
-        logger.warn('ReplyChance', `頻道停用設定載入失敗：${err.message}`);
-    }
+    const data = readJson(DISABLED_PATH, []);
+    disabledChannels = new Set(Array.isArray(data) ? data : []);
+    logger.debug('ReplyChance', `已載入 ${disabledChannels.size} 個停用頻道`);
 }
 
 // ════════════════════════════════════════════════════════
@@ -65,21 +41,19 @@ function loadDisabledChannels() {
 // ════════════════════════════════════════════════════════
 function saveReplyChance() {
     try {
-        ensureDir(CHANCE_PATH);
-        fs.writeFileSync(CHANCE_PATH, JSON.stringify(Object.fromEntries(chanceMap), null, 2), 'utf-8');
-        console.log('[ReplyChance] 已儲存伺服器機率設定');
+        writeJsonAtomic(CHANCE_PATH, Object.fromEntries(chanceMap));
+        logger.debug('ReplyChance', '已儲存伺服器機率設定');
     } catch (err) {
-        console.error('[ReplyChance] 儲存失敗：', err.message);
+        logger.error('ReplyChance', `儲存失敗：${err.message}`);
     }
 }
 
 function saveDisabledChannels() {
     try {
-        ensureDir(DISABLED_PATH);
-        fs.writeFileSync(DISABLED_PATH, JSON.stringify([...disabledChannels], null, 2), 'utf-8');
-        console.log('[ReplyChance] 已儲存頻道停用設定');
+        writeJsonAtomic(DISABLED_PATH, [...disabledChannels]);
+        logger.debug('ReplyChance', '已儲存頻道停用設定');
     } catch (err) {
-        console.error('[ReplyChance] 頻道停用設定儲存失敗：', err.message);
+        logger.error('ReplyChance', `頻道停用設定儲存失敗：${err.message}`);
     }
 }
 

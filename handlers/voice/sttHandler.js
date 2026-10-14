@@ -2,10 +2,12 @@
 // 核心流程：喚醒偵測、錄音、Groq STT、AI 回覆 + 公開 API
 
 const { createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
+const logger = require('../../utils/logger');
 const fs   = require('fs');
 const path = require('path');
 const Groq = require('groq-sdk');
 const { getGeminiResponseVoice } = require('../../handlers/ai/aiHandler');
+const { isQuotaError, quotaMessage } = require('../ai/aiQuota');
 
 // 將 ttsHandler 移至頂層 require，避免每次喚醒都在熱路徑上執行動態載入
 const { playTTS } = require('./ttsHandler');
@@ -14,7 +16,7 @@ const { restoreActiveLayer } = require('../audioManager');
 const {
   WAKEUP_VOICE_PATH, TEMP_DIR,
   RECORD_MAX_MS, RECORD_SILENCE_MS, WAKEUP_COOLDOWN_MS,
-  RMS_THRESHOLD, DETECT_WINDOW_MS, DETECT_INTERVAL_MS,
+  RMS_THRESHOLD, DETECT_INTERVAL_MS,
   VAD_VOICE_RATIO_MIN, MIN_AUDIO_DURATION_MS, START_DELAY_MS,
   NO_SPEECH_THRESHOLD, SILENCE_CHECK_MS,
   ensureTempDir, cleanupStaleTempFiles, safeUnlink, writeWav,
@@ -98,7 +100,7 @@ async function transcribeWithGroq(wavFilePath) {
       ) / transcription.segments.length;
 
       if (avgNoSpeech > NO_SPEECH_THRESHOLD) {
-        console.warn(`[STT] 幻覺過濾 (no_speech=${avgNoSpeech.toFixed(2)})`);
+        logger.warn('STT', `幻覺過濾 (no_speech=${avgNoSpeech.toFixed(2)})`);
         return '';
       }
     }
@@ -121,7 +123,7 @@ function waitForRecordEnd(state, userState, label = '') {
       if (silenceChecker) clearInterval(silenceChecker);
       state.isRecording = false;
       state.recordTimer = null;
-      console.log(`[STT]${label} ⏱️ 錄音上限到 (${RECORD_MAX_MS}ms)`);
+      logger.info('STT', `⏱️ ${label} 錄音上限到 (${RECORD_MAX_MS}ms)`);
       resolve();
     }, RECORD_MAX_MS);
 
@@ -142,7 +144,7 @@ function waitForRecordEnd(state, userState, label = '') {
         clearInterval(silenceChecker);
         state.isRecording = false;
         state.recordTimer = null;
-        console.log(`[STT]${label} 🔇 靜音截止 (${totalElapsedMs}ms)`);
+        logger.info('STT', `🔇 ${label} 靜音截止 (${totalElapsedMs}ms)`);
         resolve();
       }
     }, SILENCE_CHECK_MS);
@@ -180,7 +182,7 @@ async function processPCMToText(guildId, userId, recordedChunks, textChannel) {
   try {
     text = await transcribeWithGroq(wavFile);
   } catch (err) {
-    console.error(`[STT] Groq 失敗: ${err.message}`);
+    logger.error('STT', `Groq 失敗: ${err.message}`);
     await textChannel?.send('❌ 語音辨識失敗，請稍後再試').catch(() => {});
     return { ok: false, reason: 'stt_failed' };
   } finally {
@@ -245,11 +247,11 @@ async function triggerDetection(guildId, userId) {
     clearDetectBuffer(userState);
 
     const name = userState.member?.displayName || userId;
-    console.log(`[STT] ✅ 喚醒 ${name} (prob=${result.prob_score?.toFixed(3)})`);
+    logger.success('STT', `喚醒 ${name} (prob=${result.prob_score?.toFixed(3)})`);
 
     await handleWakeup(guildId, userId, userState.member);
   } catch (err) {
-    console.error(`[STT] triggerDetection 錯誤: ${err.message}`);
+    logger.error('STT', `triggerDetection 錯誤: ${err.message}`);
     // 音訊已取出卻沒送成功（例如 Semaphore 佇列已滿），下次改送整個視窗
     if (payloadTaken) {
       const latest = guildStates.get(guildId)?.users?.get(userId);
@@ -300,7 +302,7 @@ async function handleWakeup(guildId, userId, member) {
     if (!currentState?.active) return;
 
     const finalName = currentState.guild.members.cache.get(userId)?.displayName || '使用者';
-    console.log(`[STT] 📝 ${finalName}：${sttResult.text}`);
+    logger.info('STT', `📝 ${finalName}：${sttResult.text}`);
     await textChannel?.send(`🗣️ "**${finalName}**" ：${sttResult.text}`).catch(() => {});
 
     userState.cooldownUntil = Date.now() + WAKEUP_COOLDOWN_MS;
@@ -315,14 +317,18 @@ async function handleWakeup(guildId, userId, member) {
         // playTTS 已在頂層 require，此處直接使用
         const ttsResult = await playTTS(guildId, aiReply);
         if (ttsResult.success) {
-          console.log(`🔊 [STT→TTS] 朗讀中 (engine: ${ttsResult.engine}, queued: ${ttsResult.queued})`);
+          logger.debug('STT→TTS', `🔊 朗讀中 (engine: ${ttsResult.engine}, queued: ${ttsResult.queued})`);
         } else {
-          console.warn(`⚠️ [STT→TTS] 朗讀失敗 (reason: ${ttsResult.reason})`);
+          logger.warn('STT→TTS', `朗讀失敗 (reason: ${ttsResult.reason})`);
         }
       }
     } catch (err) {
-      console.error(`[STT] AI 回覆錯誤: ${err.message}`);
-      await textChannel?.send('❌ AI 回覆失敗').catch(() => {});
+      if (isQuotaError(err)) {
+        await textChannel?.send(quotaMessage(err)).catch(() => {});
+      } else {
+        logger.error('STT', `AI 回覆錯誤: ${err.message}`);
+        await textChannel?.send('❌ AI 回覆失敗').catch(() => {});
+      }
     }
   } finally {
     exitExclusiveMode(guildId);
@@ -340,7 +346,7 @@ function ensureManualSession(connection, guild, textChannel, onWakeup) {
     state = createGuildState(connection, guild, textChannel, onWakeup, { manualOnly: true });
     guildStates.set(guildId, state);
     startUserIdleCleanup(guildId, state);
-    console.log(`[STT][manual] 建立手動 Session：${guild.name}`);
+    logger.info('STT', `[manual] 建立手動 Session：${guild.name}`);
   } else {
     state.active      = true;
     state.connection  = connection  || state.connection;
@@ -440,10 +446,10 @@ function startSTTListening(connection, guild, textChannel, onWakeup) {
         existing.textChannel = textChannel || existing.textChannel;
         if (onWakeup) existing.onWakeup = onWakeup;
         startUserIdleCleanup(guildId, existing);
-        console.log(`[STT] ${guildId} 已在監聽中（已更新 textChannel）`);
+        logger.info('STT', `${guildId} 已在監聽中（已更新 textChannel）`);
         return;
       }
-      console.log(`[STT] ${guildId} 偵測到新 connection，先停止舊監聽再重新建立`);
+      logger.info('STT', `${guildId} 偵測到新 connection，先停止舊監聽再重新建立`);
       stopSTTListening(guildId);
     } else {
       guildStates.delete(guildId);
@@ -511,8 +517,9 @@ function startSTTListening(connection, guild, textChannel, onWakeup) {
   if (process.env.STT_DEBUG_MEM === '1') {
     state._memTimer = setInterval(() => {
       const m = process.memoryUsage();
-      console.log(
-        `[MEM][${guildId}] ` +
+      logger.debug(
+        'MEM',
+        `[${guildId}] ` +
         `rss=${(m.rss / 1024 / 1024).toFixed(1)}MB ` +
         `heap=${(m.heapUsed / 1024 / 1024).toFixed(1)}MB ` +
         `ext=${(m.external / 1024 / 1024).toFixed(1)}MB ` +
@@ -521,7 +528,7 @@ function startSTTListening(connection, guild, textChannel, onWakeup) {
     }, 30000);
   }
 
-  console.log(`[STT] 開始監聽：${guild.name}`);
+  logger.debug('STT', `開始監聽：${guild.name}`);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -554,7 +561,7 @@ function stopSTTListening(guildId) {
   }
 
   guildStates.delete(guildId);
-  console.log(`[STT] 停止監聽：${guildId}`);
+  logger.debug('STT', `停止監聽：${guildId}`);
 }
 
 module.exports = {

@@ -6,10 +6,10 @@
  * 由 AI 自動判讀項目名稱、金額與幣別，減少手動輸入。
  */
 
-const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold, GoogleGenerativeAIAbortError } = require('@google/generative-ai');
 const { recordUsage } = require('../../ai/tokenTracker');
-
-const MODEL_NAME = 'gemini-3.1-flash-lite';
+const { generate, VISION_MODEL_NAME } = require('../../ai/geminiClient');
+const { consumeQuota, isQuotaError, quotaMessage } = require('../../ai/aiQuota');
+const logger = require('../../../utils/logger');
 
 // 🆕 語言辨識 + 翻譯的保險機制：即使 prompt 已經要求「原文若是中文就不用翻譯」，
 // AI 偶爾還是可能手滑照抄一份「翻譯」出來（尤其簡體/繁體中文之間最容易被誤判成
@@ -24,17 +24,6 @@ function isChineseLanguageLabel(lang) {
 // 一旦 Google 端網路異常延遲或掛住，使用者就會被卡在辨識畫面上無限期等待。
 // 這裡用 AbortController 主動中斷請求，確保無論如何最多等待這個時間就會得到結果或錯誤訊息。
 const GEMINI_REQUEST_TIMEOUT_MS = 30 * 1000;
-
-let genAI = null;
-function getClient() {
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error('尚未設定 GEMINI_API_KEY，帳單辨識功能無法使用。');
-  }
-  if (!genAI) {
-    genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  }
-  return genAI;
-}
 
 // 讓 Gemini 直接輸出結構化 JSON，避免自己再手刻脆弱的文字解析
 const RESPONSE_SCHEMA = {
@@ -96,28 +85,23 @@ function buildPrompt(tripCurrencies, baseCurrency) {
  * @param {Array<{mimeType: string, data: string}>} imageParts base64 圖片資料（沿用 aiUtils.processAttachments 的輸出格式）
  * @param {string[]} tripCurrencies 該行程目前已設定的幣別清單，作為 AI 判斷幣別時的參考
  * @param {string} baseCurrency 行程基準幣別
+ * @param {string|null} [userId] 發起辨識的使用者（用量統計 / AI 額度用）
  * @returns {Promise<{description: string, amount: number|null, currency: string, date: string, confidence: string, language: string, descriptionTranslated: string, isForeignLanguage: boolean}>}
  */
-async function scanBillImage(imageParts, tripCurrencies = [], baseCurrency = 'TWD') {
+async function scanBillImage(imageParts, tripCurrencies = [], baseCurrency = 'TWD', userId = null) {
   if (!imageParts || !imageParts.length) {
     throw new Error('沒有可辨識的圖片內容，請確認上傳的是常見圖片格式 (png/jpg/webp)。');
   }
 
-  const client = getClient();
-  const model = client.getGenerativeModel({
-    model: MODEL_NAME,
-    safetySettings: [
-      { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-      { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-      { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-      { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
-    ],
-    generationConfig: {
-      responseMimeType: 'application/json',
-      responseSchema: RESPONSE_SCHEMA,
-      temperature: 0.2
-    }
-  });
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error('尚未設定 GEMINI_API_KEY，帳單辨識功能無法使用。');
+  }
+  try {
+    consumeQuota(userId);
+  } catch (err) {
+    if (isQuotaError(err)) throw new Error(quotaMessage(err));
+    throw err;
+  }
 
   const parts = [
     { text: buildPrompt(tripCurrencies, baseCurrency) },
@@ -133,20 +117,26 @@ async function scanBillImage(imageParts, tripCurrencies = [], baseCurrency = 'TW
   const timeoutId = setTimeout(() => controller.abort(), GEMINI_REQUEST_TIMEOUT_MS);
 
   try {
-    const result = await model.generateContent(
-      { contents: [{ role: 'user', parts }] },
-      // signal 讓我們可以主動中斷卡住的請求；timeout 則讓 SDK 內部的 fetch 也遵守同一個上限，
+    response = await generate({
+      model: VISION_MODEL_NAME,
+      contents: [{ role: 'user', parts }],
+      config: {
+        responseMimeType: 'application/json',
+        responseJsonSchema: RESPONSE_SCHEMA,
+        temperature: 0.2
+      },
+      // signal 讓我們可以主動中斷卡住的請求；timeoutMs 則讓 SDK 內部的 fetch 也遵守同一個上限，
       // 兩者一起設可以涵蓋「請求送出前就卡住」與「回應遲遲不來」兩種情況。
-      { signal: controller.signal, timeout: GEMINI_REQUEST_TIMEOUT_MS }
-    );
-    response = result.response;
-    recordUsage('billScan', response);
+      signal: controller.signal,
+      timeoutMs: GEMINI_REQUEST_TIMEOUT_MS
+    });
+    recordUsage('billScan', response, { userId });
   } catch (err) {
-    if (err instanceof GoogleGenerativeAIAbortError || err?.name === 'AbortError') {
-      console.error(`[billScanner] Gemini API 呼叫逾時（超過 ${GEMINI_REQUEST_TIMEOUT_MS / 1000} 秒）`);
+    if (controller.signal.aborted || err?.name === 'AbortError') {
+      logger.error('billScanner', `Gemini API 呼叫逾時（超過 ${GEMINI_REQUEST_TIMEOUT_MS / 1000} 秒）`);
       throw new Error(`辨識逾時（超過 ${GEMINI_REQUEST_TIMEOUT_MS / 1000} 秒未回應），請稍後再試一次，或改用手動輸入。`);
     }
-    console.error('[billScanner] Gemini API 呼叫失敗:', err.message);
+    logger.error('billScanner', `Gemini API 呼叫失敗: ${err.message}`);
     throw new Error('辨識服務暫時發生問題，請稍後再試一次。');
   } finally {
     clearTimeout(timeoutId);
@@ -154,9 +144,9 @@ async function scanBillImage(imageParts, tripCurrencies = [], baseCurrency = 'TW
 
   let parsed;
   try {
-    parsed = JSON.parse(response.text());
+    parsed = JSON.parse(response.text ?? '');
   } catch (err) {
-    console.error('[billScanner] JSON 解析失敗:', err.message);
+    logger.error('billScanner', `JSON 解析失敗: ${err.message}`);
     throw new Error('AI 回傳格式異常，無法解析帳單內容，請再試一次或改用手動輸入。');
   }
 

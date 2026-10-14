@@ -14,12 +14,27 @@
 //   SIGTERM / SIGINT   → 先關閉 Discord 連線（最多等 SHUTDOWN_TIMEOUT_MS），再以 process.exit() 結束。
 //                        沒有這個處理時程序是被訊號直接殺掉，process.on('exit') 不會執行，
 //                        tokenTracker 尚未寫入的用量、yt-dlp 子程序清理都會被跳過。
+//   onShutdown(fn)     → 註冊「關閉 Discord 連線之前」要同步執行的動作（例如寫出音樂佇列快照）。
+//                        斷線本身會觸發各模組的清理邏輯（stopAll 等），快照必須在那之前寫出。
+
+const logger = require('./logger');
 
 const SHUTDOWN_TIMEOUT_MS = 3000;
 
 let installed = false;
 let exiting = false;
 let fatalHook = null;
+const shutdownHooks = [];
+
+function onShutdown(fn) {
+  if (typeof fn === 'function') shutdownHooks.push(fn);
+}
+
+function runShutdownHooks() {
+  for (const fn of shutdownHooks) {
+    try { fn(); } catch (err) { logger.error('Process', '關閉前處理失敗：', err); }
+  }
+}
 
 function setFatalHook(fn) {
   fatalHook = typeof fn === 'function' ? fn : null;
@@ -30,17 +45,18 @@ function install() {
   installed = true;
 
   process.on('unhandledRejection', (reason) => {
-    console.error('❌ 未處理的 Promise 拒絕：', reason);
+    logger.error('Process', '未處理的 Promise 拒絕：', reason);
   });
 
   process.on('uncaughtException', (error, origin) => {
-    console.error(`❌ 未捕捉的例外 (${origin})：`, error);
+    logger.error('Process', `未捕捉的例外 (${origin})：`, error);
 
     if (process.env.EXIT_ON_UNCAUGHT === '0') return;
     if (exiting) return;
     exiting = true;
 
-    console.error('⛔ 程序狀態可能已不一致，將於 1 秒內結束並交由 supervisord 重啟');
+    logger.error('Process', '程序狀態可能已不一致，將於 1 秒內結束並交由 supervisord 重啟');
+    runShutdownHooks();
     try { fatalHook?.(); } catch {}
     setTimeout(() => process.exit(1), 1000);
   });
@@ -54,7 +70,8 @@ async function gracefulShutdown(signal) {
   if (exiting) return;
   exiting = true;
 
-  console.log(`⏹️ 收到 ${signal}，正在關閉...`);
+  logger.info('Process', `⏹️ 收到 ${signal}，正在關閉...`);
+  runShutdownHooks();
   const timeout = new Promise(resolve => setTimeout(resolve, SHUTDOWN_TIMEOUT_MS));
   try {
     await Promise.race([Promise.resolve(fatalHook?.()), timeout]);
@@ -63,4 +80,4 @@ async function gracefulShutdown(signal) {
   process.exit(0);
 }
 
-module.exports = { install, setFatalHook };
+module.exports = { install, setFatalHook, onShutdown };
