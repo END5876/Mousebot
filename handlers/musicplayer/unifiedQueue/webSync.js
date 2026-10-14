@@ -13,6 +13,8 @@
 //
 // 網頁可以做的事（都只限 Bot 目前在語音頻道裡的伺服器）：
 //   skip / stop / loop{mode} / randomPlay{on} / clearQueue / removeQueue{index,key} / enqueue{item,next}
+//   enqueueMany{items,next,skipped}：一次加入多首（網頁的多選、整份播放清單）。線上歌曲直接用網頁帶來的
+//     標題／作者／長度，不逐首跑 yt-dlp（同 /play 匯入播放清單：避免短時間大量請求觸發平台反爬蟲），播放時才取得完整資訊
 //   邏輯與控制面板按鈕（commands.js 的 uq_*）一致；每個操作都會在該伺服器最近點歌的文字頻道留一行紀錄，
 //   讓頻道裡的人知道是誰從網頁動了播放（WEB_SYNC_ANNOUNCE=0 可關閉）。
 //
@@ -25,7 +27,8 @@
 // 這個 repo 與 Mousebot / Mousebot-lite 的 unifiedQueue 相同，兩邊的 webSync.js 也保持一致。
 
 const axios = require('axios');
-const { getVoiceConnection } = require('@discordjs/voice');
+const { getVoiceConnection, getVoiceConnections, VoiceConnectionStatus } = require('@discordjs/voice');
+const { PermissionFlagsBits } = require('discord.js');
 const libraryClient = require('../musicLibraryClient');
 const voiceMonitor = require('../voiceActivityMonitor');
 const session = require('./session');
@@ -38,7 +41,7 @@ const {
   randomPlaySettings,
   resetLoopAllCycle,
 } = require('./state');
-const { stopAll, enqueue, updateControlPanel, resetShuffleBag, getRequestChannel } = require('./playback');
+const { stopAll, enqueue, updateControlPanel, resetShuffleBag, getRequestChannel, adoptExistingConnection } = require('./playback');
 const processGuards = require('../../../utils/processGuards');
 const bootSummary = require('../../../utils/bootSummary');
 const logger = require('../../../utils/logger');
@@ -98,11 +101,49 @@ const itemKey = (item) => {
   return !w ? '' : w.kind === 'lib' ? `lib:${w.filename}` : `on:${w.url}`;
 };
 
+// ── 語音狀態 ──────────────────────────────────────────
+// connection：以 @discordjs/voice 目前登記的連線為準。autojoin 恢復連線時會丟掉舊物件、建一條新的，
+//   音樂播放的 connections 裡可能還留著那個已銷毀的舊物件，不能拿它判斷。
+// channelId：Bot「實際」所在的語音頻道，以 Discord 回報的語音狀態（members.me.voice）為準。
+//   被踢出 / 斷線時，連線物件上的 joinConfig.channelId 不會被清掉（@discordjs/voice 只在有值時更新），
+//   只看它會以為 Bot 還在原本的頻道。拿不到成員快取時才退回連線物件上的值。
+// 兩者都有才算「在語音頻道」（可以點歌）。
+const isAlive = (c) => !!c && c.state?.status !== VoiceConnectionStatus.Destroyed;
+
+function voiceInfo(guildId) {
+  const guild = client.guilds.cache.get(guildId);
+  const registered = getVoiceConnection(guildId);
+  const mapped = connections.get(guildId);
+  const connection = isAlive(registered) ? registered : isAlive(mapped) ? mapped : null;
+  if (connection) watchConnection(connection);
+  const me = guild?.members?.me;
+  const channelId = me ? (me.voice?.channelId || null) : (connection?.joinConfig?.channelId || null);
+  return { connection, channelId: connection ? channelId : null };
+}
+
+// 連線狀態一變（就緒、斷線、銷毀）就推送，不必等 30 秒的心跳。
+// autojoin 只換連線物件、沒有離開頻道時不會有 voiceStateUpdate，只能靠這個。
+const watched = new WeakSet();
+function watchConnection(connection) {
+  if (watched.has(connection) || typeof connection.on !== 'function') return;
+  watched.add(connection);
+  connection.on('stateChange', (oldState, newState) => {
+    if (oldState.status !== newState.status) schedulePush();
+  });
+}
+
+// 給網頁看的連線狀態：ready / connecting（含 signalling）/ disconnected
+function voiceStatusOf(connection) {
+  const st = connection?.state?.status;
+  if (st === VoiceConnectionStatus.Ready) return 'ready';
+  if (st === VoiceConnectionStatus.Disconnected) return 'disconnected';
+  return st ? 'connecting' : '';
+}
+
 function buildGuildState(guildId) {
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return null;
-  const connection = connections.get(guildId) || getVoiceConnection(guildId);
-  const channelId = connection?.joinConfig?.channelId;
+  const { connection, channelId } = voiceInfo(guildId);
   const np = nowPlaying.get(guildId);
   if (!np && !channelId) return null;
 
@@ -112,6 +153,7 @@ function buildGuildState(guildId) {
     guildId,
     guildName: guild.name,
     voiceChannel: channelId ? (guild.channels.cache.get(channelId)?.name || '') : '',
+    voice: channelId ? voiceStatusOf(connection) : '',
     current: toWebItem(np?.item),
     status: np ? (playerState?.status || 'playing') : 'idle',
     positionMs: playerState?.resource?.playbackDuration || 0,
@@ -123,7 +165,8 @@ function buildGuildState(guildId) {
 }
 
 function buildState() {
-  const ids = new Set([...nowPlaying.keys(), ...connections.keys()]);
+  // 除了音樂播放自己的連線，也要包含 autojoin、/voice 加入的（它們不會出現在 connections 裡）
+  const ids = new Set([...nowPlaying.keys(), ...connections.keys(), ...getVoiceConnections().keys()]);
   return {
     name: botName,
     guilds: [...ids].map(buildGuildState).filter(Boolean),
@@ -167,14 +210,56 @@ const fail = (message) => { throw new CommandError(message); };
 
 function announce(guildId, text) {
   if (!ANNOUNCE) return;
-  const ch = getRequestChannel(guildId);
+  const guild = client.guilds.cache.get(guildId);
+  const ch = guild ? notifyChannelFor(guild, voiceInfo(guildId).channelId) : null;
   if (ch && typeof ch.send === 'function') ch.send(`🌐 網頁播放器：${text}`).catch(() => {});
+}
+
+// 網頁點歌時的通知頻道：最近點歌的文字頻道 → 沒有的話用語音頻道內建的文字聊天（Bot 有權限發言時）
+// → 都沒有就不發訊息。autojoin 進來、還沒人用過 /play 的伺服器就是第二種情況。
+function notifyChannelFor(guild, channelId) {
+  const ch = getRequestChannel(guild.id);
+  if (ch) return ch;
+  const vc = channelId ? guild.channels.cache.get(channelId) : null;
+  const me = guild.members?.me;
+  if (vc?.isTextBased?.() && me && vc.permissionsFor(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) return vc;
+  return null;
 }
 
 async function refreshPanel(guildId) {
   const ch = getRequestChannel(guildId);
   if (ch) await updateControlPanel(guildId, ch);
   else session.schedule();
+}
+
+const parseDur = (v) => {
+  const p = String(v || '').split(':').map(Number);
+  return p.length > 1 && p.every(Number.isFinite) ? p.reduce((a, b) => a * 60 + b, 0) : 0;
+};
+
+// 批量加入的線上歌曲：不呼叫 getInfo，格式同 search/playlist.js 的 _handleAddPlaylist
+function onlineItemFromWeb(raw) {
+  return {
+    url: raw.url,
+    title: raw.title || '未知標題',
+    author: raw.author || '未知作者',
+    duration: raw.duration || '未知',
+    durationSec: parseDur(raw.duration),
+    thumbnail: null,
+    type: 'bilibili',
+  };
+}
+
+// 網頁點歌前的共同準備：確認 Bot 在語音頻道、接手 autojoin 的連線、決定通知頻道
+function prepareVoice(guildId) {
+  const guild = client.guilds.cache.get(guildId);
+  const { connection, channelId } = voiceInfo(guildId);
+  if (!connection || !channelId) fail('Bot 不在語音頻道，請先在 Discord 用 /play 讓 Bot 加入');
+  const notify = notifyChannelFor(guild, channelId);
+  // autojoin / /voice 加入的連線、或 autojoin 恢復後換掉的新連線：比照 /play，讓音樂播放接手（登記連線、掛閒置監控）
+  if (connections.get(guildId) !== connection) adoptExistingConnection(guild, client, notify);
+  // 沒有可發訊息的頻道時給一個不發訊息的頻道，enqueue 內部的通知不會出錯
+  return notify || { id: null, send: async () => {} };
 }
 
 // 網頁點的歌 → Bot 的曲目格式
@@ -277,11 +362,8 @@ async function execute(cmd) {
     }
 
     case 'enqueue': {
-      const connection = connections.get(guildId) || getVoiceConnection(guildId);
-      if (!connection) fail('Bot 不在語音頻道，請先在 Discord 用 /play 讓 Bot 加入');
+      const channel = prepareVoice(guildId); // 先確認在語音頻道，才去查影片資訊
       const item = await resolveItem(cmd.item);
-      // 沒有點歌頻道（例如重啟後恢復的播放）時給一個不發訊息的頻道，enqueue 內部的通知不會出錯
-      const channel = getRequestChannel(guildId) || { id: null, send: async () => {} };
       const result = await enqueue(guildId, item, channel);
       if (result.queued && cmd.next) {
         const queue = queues.get(guildId) || [];
@@ -291,6 +373,45 @@ async function execute(cmd) {
       const where = !result.queued ? '開始播放' : cmd.next ? '下一首播放' : `加入佇列（第 ${result.position} 首）`;
       announce(guildId, `🎵 ${where}「${item.title}」`);
       return `${where}「${item.title}」`;
+    }
+
+    case 'enqueueMany': {
+      const channel = prepareVoice(guildId);
+      const engine = _engines.local;
+      const files = new Map((engine ? engine.getMusicFiles() : []).map((f) => [f.filename, f]));
+      const items = [];
+      let missing = Number(cmd.skipped) || 0; // 服務端已略過的（檔案不存在、網址不支援）
+      for (const raw of Array.isArray(cmd.items) ? cmd.items : []) {
+        if (raw?.kind === 'lib') {
+          const f = files.get(raw.filename);
+          if (f) items.push({ ...f, title: f.name, type: 'local' }); else missing++;
+        } else if (raw?.kind === 'online' && raw.url) {
+          items.push(onlineItemFromWeb(raw));
+        } else missing++;
+      }
+      if (!items.length) fail('這台 Bot 的音樂庫清單裡沒有這些歌（剛上傳的歌要等清單更新），請稍後再試');
+
+      // 沒在播放：第一首直接開始播（走一般的 enqueue），其餘一次放進佇列，
+      // 不逐首呼叫 enqueue（每首都會記一行 log、觸發一次狀態寫入）
+      let started = null;
+      if (!nowPlaying.has(guildId)) {
+        started = items.shift();
+        await enqueue(guildId, started, channel);
+        if (!nowPlaying.has(guildId)) fail(`無法開始播放「${started.title}」`);
+      }
+      const queue = queues.get(guildId) || [];
+      if (cmd.next) queue.unshift(...items); else queue.push(...items);
+      queues.set(guildId, queue);
+      session.schedule();
+
+      const total = items.length + (started ? 1 : 0);
+      const parts = [];
+      if (started) parts.push(`開始播放「${started.title}」`);
+      if (items.length) parts.push(`${cmd.next ? '插到佇列最前面' : '加入佇列'} ${items.length} 首`);
+      const skippedText = missing ? `（略過 ${missing} 首找不到的歌）` : '';
+      logger.info('UnifiedQueue', `➕ 網頁批量加入 ${total} 首 (${guildId})${skippedText}`);
+      announce(guildId, `🎵 一次點了 ${total} 首：${parts.join('，')}${skippedText}`);
+      return `已送出 ${total} 首：${parts.join('，')}${skippedText}`;
     }
 
     default:
@@ -399,6 +520,7 @@ module.exports = {
   stop,
   // 測試用
   _toWebItem: toWebItem,
+  _buildState: buildState,
   _itemKey: itemKey,
   _execute: execute,
   _setClient(c) { client = c; },
