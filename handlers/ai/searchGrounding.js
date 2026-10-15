@@ -10,10 +10,7 @@
 // 計費（Gemini 3 以上）：按「模型實際執行的搜尋次數」計費，搜尋取回的內容不以輸入 token 計費，
 // 但會出現在 usageMetadata.toolUsePromptTokenCount，tokenTracker 會把它分開記錄。
 
-const MAX_SOURCES = 3;
-// Google 回傳的來源是很長的跳轉網址（單一個可能上千字），來源行必須放得進一則 Discord 訊息
-const MAX_SOURCES_LINE_LENGTH = 1800;
-// Bot 回覆末尾的來源行以此開頭；讀取頻道歷史時據此濾掉，避免模型學著輸出來源格式
+// 舊版 Bot 回覆末尾曾附上來源行；讀取頻道歷史時據此濾掉，避免模型學著輸出來源格式
 const SOURCES_PREFIX = '-# 📎 來源：';
 
 const ENABLED_GUILD_IDS = new Set(
@@ -72,25 +69,6 @@ function getGroundingInfo(response) {
     return { queries, sources };
 }
 
-/**
- * 來源清單 → Discord 小字一行；連結用 <> 包住避免展開預覽。
- * 最多 MAX_SOURCES 個，且整行不超過 MAX_SOURCES_LINE_LENGTH（放不下的來源直接略過）。
- * 沒有來源時回傳空字串。
- */
-function formatSources(sources) {
-    let line = '';
-    let count = 0;
-    for (const { title, uri } of sources ?? []) {
-        if (count >= MAX_SOURCES) break;
-        const link = `[${title.replace(/[[\]]/g, '')}](<${uri}>)`;
-        const next = line ? `${line}・${link}` : `${SOURCES_PREFIX}${link}`;
-        if (next.length > MAX_SOURCES_LINE_LENGTH) continue;
-        line = next;
-        count++;
-    }
-    return line;
-}
-
 /** 移除 Bot 舊回覆中的來源行（建構對話歷史用） */
 function stripSourcesLine(text) {
     return text
@@ -108,7 +86,6 @@ module.exports = {
     FACTS_HEADER,
     isSearchEnabled,
     getGroundingInfo,
-    formatSources,
     stripSourcesLine,
     ENABLED_GUILD_IDS,
 };
