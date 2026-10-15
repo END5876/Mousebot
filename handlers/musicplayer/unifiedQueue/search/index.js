@@ -7,6 +7,7 @@ const { EmbedBuilder } = require('discord.js');
 const { _engines, SEARCH_MARKER } = require('../state');
 const { enqueue, ensureConnection } = require('../playback');
 const voiceMonitor = require('../../voiceActivityMonitor');
+const { isSupportedMediaUrl } = require('../../musicAntiBot');
 
 const { cleanUrl, _isYouTubeWithoutList } = require('./urlUtils');
 const { _handlePlayAll, _handleLocalMultiSelect } = require('./local');
@@ -50,6 +51,8 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
   let item;
 
   if (isUrl) {
+    if (!isSupportedMediaUrl(cleanInput)) return interaction.editReply('❌ 只支援 YouTube 與 Bilibili 的網址');
+
     const engine = _engines.bilibili;
     if (!engine) return interaction.editReply('⏳ 線上音樂引擎初始化中，請稍後再試');
 

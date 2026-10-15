@@ -6,6 +6,7 @@ sharp.cache(false);
 const crypto = require('crypto');
 const dns = require('dns').promises;
 const net = require('net');
+const { PermissionFlagsBits } = require('discord.js');
 
 // ════════════════════════════════════════════════════════
 //  設定常數
@@ -77,9 +78,12 @@ const ATTACHMENT_PATH_PATTERN = /cdn\.discordapp\.com\/attachments\/(\d+)\/(\d+)
  * 策略一：重新 Fetch 該訊息，從 message.attachments / embeds 取得新鮮網址
  * 原理：channel_id / message_id 寫在路徑上，不受簽名過期影響，
  *       重新 fetch 訊息時 discord.js 回傳的網址保證是當下有效的。
+ * 權限：Bot 是用自己的權限去讀訊息，只憑網址上的 ID 就能讀到別的伺服器或私人頻道。
+ *       所以只修復「同一個伺服器、且發問者本人看得到」的頻道，否則交給 refresh-urls
+ *       （那條路要有完整的原始網址，等同發問者自己就能打開）。
  */
-async function fetchFreshUrlFromMessage(url, client) {
-    if (!client) return null;
+async function fetchFreshUrlFromMessage(url, client, viewer) {
+    if (!client || !viewer?.guildId || !viewer?.userId) return null;
     const match = url.match(ATTACHMENT_PATH_PATTERN);
     if (!match) return null;
 
@@ -88,6 +92,9 @@ async function fetchFreshUrlFromMessage(url, client) {
     try {
         const channel = await client.channels.fetch(channelId);
         if (!channel?.messages) return null;
+        if (channel.guildId !== viewer.guildId) return null;
+        const perms = channel.permissionsFor?.(viewer.userId);
+        if (!perms?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory])) return null;
 
         const message = await channel.messages.fetch(messageId);
         if (!message) return null;
@@ -157,10 +164,11 @@ async function refreshUrlViaAPI(url) {
  * 主函式：綜合兩種策略，回傳一個「盡最大努力保證可用」的新鮮網址
  * @param {string} url - 原始（缺簽名）的 Discord 圖片網址
  * @param {import('discord.js').Client} client - discord.js Client 實例
+ * @param {{ guildId: string, userId: string }} [viewer] - 發問者；用來確認他本人看得到原訊息
  * @returns {Promise<string|null>} 成功回傳新鮮網址，全部失敗回傳 null
  */
-async function resolveDiscordImageUrl(url, client) {
-    const freshFromMessage = await fetchFreshUrlFromMessage(url, client);
+async function resolveDiscordImageUrl(url, client, viewer) {
+    const freshFromMessage = await fetchFreshUrlFromMessage(url, client, viewer);
     if (freshFromMessage) {
         logger.debug('resolveDiscordImageUrl', '✅ 透過重新 Fetch 訊息取得新鮮網址');
         return freshFromMessage;
@@ -349,8 +357,9 @@ async function processEmbeds(embeds) {
  *        若有傳入，遇到缺簽名的 Discord 網址時會先嘗試自動修復，
  *        修復成功則正常回傳圖片資料；修復失敗才回傳 missing_signature。
  *        若不傳入 client，行為與修改前完全一致（向後相容）。
+ * @param {{ guildId: string, userId: string }} [viewer] - 發問者；重新讀取原訊息前會確認他看得到該頻道
  */
-async function processImageUrls(content, client) {
+async function processImageUrls(content, client, viewer) {
     if (!content) return [];
 
     const urlRegex = /(https?:\/\/[^\s)\]>]+)/g;
@@ -368,7 +377,7 @@ async function processImageUrls(content, client) {
 
         // 缺簽名的 Discord CDN 網址：先嘗試修復，別急著判死刑
         if (isDiscordCDN && !hasSignature) {
-            const freshUrl = await resolveDiscordImageUrl(url, client);
+            const freshUrl = await resolveDiscordImageUrl(url, client, viewer);
 
             if (freshUrl) {
                 // ✅ 修復成功，當作正常圖片繼續處理
