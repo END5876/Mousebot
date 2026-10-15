@@ -44,6 +44,10 @@ const RECOVERING_GRACE_MS = 20_000;
 const DISCONNECTED_GRACE_MS = 5_000;
 // 原連線 rejoin 的最大次數；全部失敗後才銷毀並重建。
 const MAX_REJOIN_ATTEMPTS = 3;
+// 靜默重建（不通知 Discord 離開）的次數上限；超過後改為真的離開再加入。
+// Discord 認為 bot 仍在同一頻道時，重送同頻道的 op 4 不會再派發 VOICE_SERVER_UPDATE，
+// 連線會永遠卡在 signalling，只有先離開才能讓 Discord 重新分配語音伺服器。
+const MAX_SILENT_REBUILDS = 1;
 
 // .env 僅作為尚未建立設定檔時的初始預設值。
 function loadConfig() {
@@ -77,6 +81,8 @@ let managedGuildId = null;
 const listenedConnections = new WeakSet();
 // 目前連線的恢復進度：首次發現異常的時間與已嘗試 rejoin 的次數。
 const recovery = { connection: null, since: null, attempts: 0 };
+// 連續重建但仍未就緒的次數；連線恢復健康後歸零。
+let failedRebuilds = 0;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -209,6 +215,7 @@ function adoptConnection(client, channel, connection, { restartMonitor }) {
   const guildId = channel.guild.id;
 
   resetRecovery();
+  failedRebuilds = 0;
   settleManagedGuild(guildId);
 
   if (restartMonitor) voiceMonitor.stopMonitoring(guildId);
@@ -451,15 +458,25 @@ async function ensureConnected(client) {
     }
 
     // 最後手段：多次 rejoin 失敗，銷毀並建立新連線。
-    logger.warn('AutoJoin', '多次重新加入失敗，銷毀並重建語音連線');
+    // 先嘗試靜默重建；仍失敗代表 Discord 不肯重新派發語音伺服器，改為真的離開再加入。
+    const announceLeave = failedRebuilds >= MAX_SILENT_REBUILDS;
+    failedRebuilds += 1;
+
+    logger.warn(
+      'AutoJoin',
+      announceLeave
+        ? '多次重新加入失敗，離開頻道後重新加入'
+        : '多次重新加入失敗，銷毀並重建語音連線'
+    );
 
     // 確認要銷毀的仍是這條連線，已被取代就不動。
-    if (!destroyConnection(guildId, connection)) return;
+    if (!destroyConnection(guildId, connection, { announceLeave })) return;
 
     resetRecovery();
     if (!stillWanted()) return;
 
-    await sleep(500);
+    // 真的離開時多等一下，讓 Discord 處理完離開再送加入。
+    await sleep(announceLeave ? 2_000 : 500);
 
     // 等待期間可能已有其他流程建立了連線，交給下一輪處理。
     if (!stillWanted() || getVoiceConnection(guildId)) return;
