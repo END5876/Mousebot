@@ -9,7 +9,7 @@ const { addDeposit } = require('../../utils/deposit');
 const { showMainMenu } = require('../../commands/splitbill');
 const { parseScanItemSuffix, scanItemCacheUserId, buildScanResultView } = require('./billScan');
 const { renderSplitMethodUI, completeExpenseLoggingWithShares } = require('./expenseCompletion');
-const { memberMention } = require('../../utils/tripHelper');
+const { memberMention, isCurrencyCode, CURRENCY_FORMAT_HINT } = require('../../utils/tripHelper');
 
 async function handleModal(interaction, cache) {
     if (interaction.customId.startsWith('exp_modal_scan_custom_currency')) {
@@ -27,8 +27,8 @@ async function handleModal(interaction, cache) {
       const currency = interaction.fields.getTextInputValue('currency').trim().toUpperCase();
       const rateStr = interaction.fields.getTextInputValue('rate');
 
-      if (!/^[A-Z]{2,6}$/.test(currency)) {
-        return interaction.reply({ content: '⚠️ 幣別代碼格式錯誤，請輸入 2~6 個英文字母（例如：EUR）。', flags: MessageFlags.Ephemeral });
+      if (!isCurrencyCode(currency)) {
+        return interaction.reply({ content: `⚠️ 幣別代碼格式錯誤，請輸入 ${CURRENCY_FORMAT_HINT}（例如：EUR）。`, flags: MessageFlags.Ephemeral });
       }
 
       await interaction.deferUpdate();

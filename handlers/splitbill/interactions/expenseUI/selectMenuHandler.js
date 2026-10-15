@@ -38,7 +38,7 @@ async function handleSelectMenu(interaction, cache) {
           .setLabel('幣別代碼 (例如：EUR、SGD、CNY)')
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
-          .setMaxLength(6);
+          .setMaxLength(10);
 
         const rateInput = new TextInputBuilder()
           .setCustomId('rate')

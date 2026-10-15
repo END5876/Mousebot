@@ -7,7 +7,7 @@ const {
 const splitbillClient = require('../utils/splitbillClient');
 const { fetchRealTimeRate, parseMoneyInput } = require('../utils/calculator');
 const { showMainMenu } = require('../commands/splitbill');
-const { canDeleteTrip } = require('../utils/tripHelper');
+const { canDeleteTrip, isCurrencyCode, CURRENCY_FORMAT_HINT } = require('../utils/tripHelper');
 
 const BASELINE_RATES = {
   TWD: 1, JPY: 0.2, USD: 32, KRW: 0.024, EUR: 34.8, THB: 0.89, HKD: 4.1, GBP: 40.5
@@ -110,7 +110,7 @@ module.exports = {
         .setLabel('幣別代碼 (例如：VND、SGD、CNY)')
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
-        .setMaxLength(6);
+        .setMaxLength(10);
       const rateInput = new TextInputBuilder()
         .setCustomId('rate')
         .setLabel(`匯率：1 該幣別 = ? ${trip.baseCurrency}`)
@@ -165,7 +165,7 @@ module.exports = {
       const guildId = interaction.guildId;
 
       const name = interaction.fields.getTextInputValue('name').trim();
-      const baseCur = (interaction.fields.getTextInputValue('baseCur') || 'TWD').toUpperCase();
+      const baseCur = (interaction.fields.getTextInputValue('baseCur').trim() || 'TWD').toUpperCase();
 
       const baseRate = BASELINE_RATES[baseCur] ?? 1;
       const autoRates = { [baseCur]: 1 };
@@ -175,8 +175,8 @@ module.exports = {
         }
       }
 
-      if (!/^[A-Z]{2,6}$/.test(baseCur)) {
-        return interaction.reply({ content: '⚠️ 基準幣別格式錯誤，請輸入 2~6 個英文字母（例如：TWD）。', flags: MessageFlags.Ephemeral });
+      if (!isCurrencyCode(baseCur)) {
+        return interaction.reply({ content: `⚠️ 基準幣別格式錯誤，請輸入 ${CURRENCY_FORMAT_HINT}（例如：TWD）。`, flags: MessageFlags.Ephemeral });
       }
 
       // 🆕 [行程獨立化] 由 service 產生 tripId、補齊預設欄位：建立者＝自己（只有
@@ -216,8 +216,8 @@ module.exports = {
       const currency = interaction.fields.getTextInputValue('currency').trim().toUpperCase();
       const rateStr = interaction.fields.getTextInputValue('rate');
 
-      if (!/^[A-Z]{2,6}$/.test(currency)) {
-        return interaction.reply({ content: '⚠️ 幣別代碼格式錯誤，請輸入 2~6 個英文字母（例如：VND）。', flags: MessageFlags.Ephemeral });
+      if (!isCurrencyCode(currency)) {
+        return interaction.reply({ content: `⚠️ 幣別代碼格式錯誤，請輸入 ${CURRENCY_FORMAT_HINT}（例如：VND）。`, flags: MessageFlags.Ephemeral });
       }
 
       if (trip.rates[currency] !== undefined) {
