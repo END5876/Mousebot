@@ -7,7 +7,7 @@ const promptStore = require('./promptStore');
 const { recordUsage } = require('./tokenTracker');
 const {
     RESEARCH_PROMPT, RESEARCH_CONFIG, RESEARCH_NONE, FACTS_HEADER,
-    isSearchEnabled, getGroundingInfo, formatSources, stripSourcesLine,
+    isSearchEnabled, getGroundingInfo, stripSourcesLine,
 } = require('./searchGrounding');
 
 const {
@@ -26,7 +26,6 @@ const {
 const HISTORY_FETCH_LIMIT  = 30;
 const HISTORY_PAIR_LIMIT   = 12; 
 const HISTORY_TIME_LIMIT_MS = 10 * 60 * 1000;
-const DISCORD_MESSAGE_SAFE_LENGTH = 1900; // 與 splitMessage 預設上限一致
 
 // ════════════════════════════════════════════════════════
 //  工具函式：將 imageParts 陣列轉換為 Gemini API 格式
@@ -105,7 +104,7 @@ function buildSystemInstruction(mode, isVoice = false) {
  * 由模型自行判斷要不要搜尋。實測帶著人格 prompt 時模型幾乎不會主動搜尋（會直接憑記憶編答案），
  * 所以把「判斷與搜尋」拆出來，第二段再由人格用原本的語氣回答。
  *
- * @returns {Promise<{ facts: string, response: object } | null>} 沒有搜尋或失敗時回傳 null
+ * @returns {Promise<string|null>} 整理好的參考資料；沒有搜尋或失敗時回傳 null
  */
 async function researchIfNeeded({ history, parts, guildId, userId, mode }) {
     let response;
@@ -127,49 +126,30 @@ async function researchIfNeeded({ history, parts, guildId, userId, mode }) {
     if (!queries.length || !facts || facts === RESEARCH_NONE) return null;
 
     logger.info('Search', `🔎 ${guildId} 搜尋 ${queries.length} 次：${queries.join(' / ')}（${sources.length} 個來源）`);
-    return { facts, response };
+    return facts;
 }
 
 /**
  * 把歷史紀錄與本次訊息組成一次 generateContent 呼叫。
  * guildId 在搜尋接地名單內時先跑搜尋階段，有搜到資料就附在 system instruction 後面給人格參考。
  *
- * @returns {Promise<{ response: object, grounding: object|null }>}
- *          response：人格的回覆；grounding：搜尋階段的回應（來源連結從這裡取），沒有搜尋時為 null
+ * @returns {Promise<object>} 人格的回覆
  */
 async function sendWithHistory({ mode, isVoice = false, history, parts, config, guildId = null, userId = null }) {
     let systemInstruction = buildSystemInstruction(mode, isVoice);
 
-    const research = isSearchEnabled(guildId)
+    const facts = isSearchEnabled(guildId)
         ? await researchIfNeeded({ history, parts, guildId, userId, mode })
         : null;
-    if (research) {
-        systemInstruction += `\n\n${FACTS_HEADER}\n${research.facts}`;
+    if (facts) {
+        systemInstruction += `\n\n${FACTS_HEADER}\n${facts}`;
     }
 
-    const response = await generate({
+    return generate({
         systemInstruction,
         contents: [...history, { role: 'user', parts }],
         config,
     });
-    return { response, grounding: research?.response ?? null };
-}
-
-/**
- * 回覆文字切成 Discord 訊息，有搜尋來源時附在最後：
- * 來源行接在最後一則放得下就接上，放不下就自成一則（避免來源連結被切斷）。
- * @param {object|null} grounding 搜尋階段的回應
- */
-function buildReplyChunks(text, grounding) {
-    const chunks = splitMessage(text);
-    const sourcesLine = grounding ? formatSources(getGroundingInfo(grounding).sources) : '';
-    if (!sourcesLine) return chunks;
-
-    const last = chunks[chunks.length - 1] ?? '';
-    if (!last) chunks[chunks.length - 1] = sourcesLine;
-    else if (last.length + 1 + sourcesLine.length <= DISCORD_MESSAGE_SAFE_LENGTH) chunks[chunks.length - 1] = `${last}\n${sourcesLine}`;
-    else chunks.push(sourcesLine);
-    return chunks;
 }
 
 // ════════════════════════════════════════════════════════
@@ -406,11 +386,11 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
             ]);
 
         const guildId = channel?.guildId ?? message?.guildId ?? null;
-        const { response, grounding } = await sendWithHistory({ mode, history, parts: messageParts, config: GENERATION_CONFIG, guildId, userId });
+        const response = await sendWithHistory({ mode, history, parts: messageParts, config: GENERATION_CONFIG, guildId, userId });
         recordUsage('chat', response, { userId, mode });
         const text = response.text ?? '';
-        // text：純回答（給 TTS 朗讀）；chunks：切好的 Discord 訊息（含來源行）
-        return { text, chunks: buildReplyChunks(text, grounding) };
+        // text：純回答（給 TTS 朗讀）；chunks：切好的 Discord 訊息
+        return { text, chunks: splitMessage(text) };
     } catch (error) {
         if (!isQuotaError(error)) logger.error('AI', `Gemini Error (${MODEL_NAME}): ${error.message}`);
         throw error;
@@ -423,7 +403,7 @@ async function getGeminiResponseVoice(userId, prompt, channel = null, messageId 
         if (!mode) mode = getUserMode(userId, prompt);
         const history = channel ? await fetchUserChannelHistory(channel, userId, messageId, botId, mode) : [];
 
-        const { response: result } = await sendWithHistory({
+        const result = await sendWithHistory({
             mode, isVoice: true, history,
             parts: [{ text: prompt }],
             config: { ...GENERATION_CONFIG, maxOutputTokens: 150 },
@@ -457,7 +437,7 @@ async function getShortResponse(userId, promptText, imageParts = [], channel = n
                 { text: `【發言者：使用者】\n${shortPrompt}` }
             ]);
 
-        const { response, grounding } = await sendWithHistory({
+        const response = await sendWithHistory({
             mode, history, parts: messageParts, userId,
             config: { ...GENERATION_CONFIG, maxOutputTokens: 300 },
             guildId: channel?.guildId ?? message?.guildId ?? null,
@@ -465,7 +445,7 @@ async function getShortResponse(userId, promptText, imageParts = [], channel = n
         recordUsage('short', response, { userId, mode });
         const text = (response.text ?? '').trim();
         if (!text) return null;
-        return { text, chunks: buildReplyChunks(text, grounding) };
+        return { text, chunks: splitMessage(text) };
     } catch (error) {
         // 隨機插話被額度擋下時安靜放棄即可
         if (!isQuotaError(error)) logger.error('AI', `Short Response Error: ${error.message}`);
