@@ -100,8 +100,33 @@ const ytClientIndex = new Map();
 let YT_COOKIES_FILE   = null;
 let YT_COOKIE_HEADER  = null;
 
+// 一律以解析後的 hostname 判斷：只比對字串的話 https://evil.com/youtube.com 也會被當成 YouTube
+function _hostOf(url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+    return u.hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+const _matchesDomain = (host, domain) => host === domain || host.endsWith(`.${domain}`);
+
 function isYouTubeUrl(url) {
-  return /youtube\.com|youtu\.be/.test(url);
+  const host = _hostOf(url);
+  return !!host && (_matchesDomain(host, 'youtube.com') || host === 'youtu.be');
+}
+
+function isBilibiliUrl(url) {
+  const host = _hostOf(url);
+  return !!host && (_matchesDomain(host, 'bilibili.com') || host === 'b23.tv');
+}
+
+// 只接受 YouTube / Bilibili：其他網址交給 yt-dlp 的 generic extractor 會讓 Bot 去連任意主機
+// （內網服務、攻擊者的網站），而且非 YouTube 的網址過去會帶上 Bilibili 的登入 Cookie
+function isSupportedMediaUrl(url) {
+  return isYouTubeUrl(url) || isBilibiliUrl(url);
 }
 
 // Bilibili 只讀 .env，不使用 data/cookies.txt（該檔供 YouTube 使用）
@@ -256,7 +281,7 @@ function buildYouTubeArgs(url, strategy, streamMode = true) {
     );
   }
 
-  args.push('--no-check-certificate', '--ignore-errors');
+  args.push('--ignore-errors');
 
   args.push(url);
   return args;
@@ -272,7 +297,7 @@ function buildBilibiliArgs(url, streamMode = true) {
   }
 
   args.push('--no-playlist', '--no-warnings');
-  _appendCookieArgs(args, BILIBILI_COOKIES_FILE, BILIBILI_COOKIE_HEADER);
+  if (isBilibiliUrl(url)) _appendCookieArgs(args, BILIBILI_COOKIES_FILE, BILIBILI_COOKIE_HEADER);
 
   args.push(
     '--user-agent', BILIBILI_HEADERS['User-Agent'],
@@ -293,7 +318,6 @@ function buildBilibiliArgs(url, streamMode = true) {
   }
 
   args.push(
-    '--no-check-certificate',
     '--extractor-args', 'bilibili:getcomments=false',
     '--extractor-args', 'bilibili:getdanmaku=false'
   );
@@ -315,7 +339,6 @@ function buildBilibiliSearchArgs() {
     '--referer',    BILIBILI_HEADERS['Referer'],
     '--add-header', `Origin:${BILIBILI_HEADERS['Origin']}`,
     '--add-header', `Accept:${BILIBILI_HEADERS['Accept']}`,
-    '--no-check-certificate',
   );
 
   return args;
@@ -337,7 +360,6 @@ function buildYouTubeSearchArgs() {
   args.push(
     '--user-agent',   YOUTUBE_HEADERS['User-Agent'],
     '--add-header',   `Accept-Language:${YOUTUBE_HEADERS['Accept-Language']}`,
-    '--no-check-certificate',
   );
 
   return args;
@@ -359,14 +381,13 @@ function buildInfoArgs(url) {
     if (strategy.name !== 'tv_simply') {
       _appendCookieArgs(base, YT_COOKIES_FILE, YT_COOKIE_HEADER);
     }
-    base.push('--user-agent', YOUTUBE_HEADERS['User-Agent'], '--no-check-certificate');
+    base.push('--user-agent', YOUTUBE_HEADERS['User-Agent']);
   } else {
-    _appendCookieArgs(base, BILIBILI_COOKIES_FILE, BILIBILI_COOKIE_HEADER);
+    if (isBilibiliUrl(url)) _appendCookieArgs(base, BILIBILI_COOKIES_FILE, BILIBILI_COOKIE_HEADER);
     base.push(
       '--user-agent', BILIBILI_HEADERS['User-Agent'],
       '--referer',    BILIBILI_HEADERS['Referer'],
       '--add-header', `Origin:${BILIBILI_HEADERS['Origin']}`,
-      '--no-check-certificate',
       '--extractor-args', 'bilibili:getcomments=false',
       '--extractor-args', 'bilibili:getdanmaku=false',
       '--sleep-requests',     '2',
@@ -396,14 +417,13 @@ function buildPlaylistCheckArgs(url) {
     if (strategy.name !== 'tv_simply') {
       _appendCookieArgs(base, YT_COOKIES_FILE, YT_COOKIE_HEADER);
     }
-    base.push('--user-agent', YOUTUBE_HEADERS['User-Agent'], '--no-check-certificate');
+    base.push('--user-agent', YOUTUBE_HEADERS['User-Agent']);
   } else {
-    _appendCookieArgs(base, BILIBILI_COOKIES_FILE, BILIBILI_COOKIE_HEADER);
+    if (isBilibiliUrl(url)) _appendCookieArgs(base, BILIBILI_COOKIES_FILE, BILIBILI_COOKIE_HEADER);
     base.push(
       '--user-agent', BILIBILI_HEADERS['User-Agent'],
       '--referer',    BILIBILI_HEADERS['Referer'],
       '--add-header', `Origin:${BILIBILI_HEADERS['Origin']}`,
-      '--no-check-certificate',
       '--extractor-args', 'bilibili:getcomments=false',
       '--extractor-args', 'bilibili:getdanmaku=false'
     );
@@ -458,6 +478,8 @@ function classifyBilibiliError(errorOutput) {
 module.exports = {
   initCookies,
   isYouTubeUrl,
+  isBilibiliUrl,
+  isSupportedMediaUrl,
   YT_CLIENT_STRATEGIES,
   getYtClientStrategy,
   rotateYtClient,

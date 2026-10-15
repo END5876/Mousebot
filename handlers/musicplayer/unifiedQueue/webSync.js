@@ -30,6 +30,7 @@ const axios = require('axios');
 const { getVoiceConnection, getVoiceConnections, VoiceConnectionStatus } = require('@discordjs/voice');
 const { PermissionFlagsBits } = require('discord.js');
 const libraryClient = require('../musicLibraryClient');
+const { isSupportedMediaUrl } = require('../musicAntiBot');
 const voiceMonitor = require('../voiceActivityMonitor');
 const session = require('./session');
 const {
@@ -274,6 +275,7 @@ async function resolveItem(raw) {
   if (raw?.kind === 'online') {
     const engine = _engines.bilibili;
     if (!engine || typeof engine.getInfo !== 'function') fail('線上音樂引擎未就緒');
+    if (!isSupportedMediaUrl(raw.url)) fail('只支援 YouTube 與 Bilibili 的網址');
     let info;
     try { info = await engine.getInfo(raw.url); } catch (err) { fail(`無法取得影片資訊：${err.message}`); }
     return { ...info, type: 'bilibili' };
@@ -385,7 +387,7 @@ async function execute(cmd) {
         if (raw?.kind === 'lib') {
           const f = files.get(raw.filename);
           if (f) items.push({ ...f, title: f.name, type: 'local' }); else missing++;
-        } else if (raw?.kind === 'online' && raw.url) {
+        } else if (raw?.kind === 'online' && isSupportedMediaUrl(raw.url)) {
           items.push(onlineItemFromWeb(raw));
         } else missing++;
       }

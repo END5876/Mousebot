@@ -97,6 +97,7 @@ function cleanupProcess(guildId) {
 async function getInfo(url, { signal } = {}) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error('已取消取得影片資訊'));
+    if (!antiBot.isSupportedMediaUrl(url)) return reject(new Error('只支援 YouTube 與 Bilibili 的網址'));
 
     const args  = antiBot.buildInfoArgs(url);
     const ytdlp = spawn(ytdlpPath, args);
@@ -166,12 +167,13 @@ async function getInfo(url, { signal } = {}) {
 // ════════════════════════════════════════════════════════
 async function checkPlaylist(url) {
   return new Promise((resolve) => {
+    const fallback = () => resolve({ isPlaylist: false, entries: [], title: null, count: 1 });
+    if (!antiBot.isSupportedMediaUrl(url)) return fallback();
+
     const args  = antiBot.buildPlaylistCheckArgs(url);
     const ytdlp = spawn(ytdlpPath, args);
     let data = '', errorData = '';
     let finished = false;
-
-    const fallback = () => resolve({ isPlaylist: false, entries: [], title: null, count: 1 });
 
     const timer = setTimeout(() => {
       if (finished) return;
@@ -354,6 +356,13 @@ async function searchMulti(keyword, limit = 5, fast = false, platforms = ['youtu
 // ════════════════════════════════════════════════════════
 async function playStream(guildId, item, player, { retryCount = 0, silent = false } = {}) {
   cleanupProcess(guildId);
+
+  // 播放清單條目、網頁批量點歌、重啟恢復的佇列都不經過 getInfo，這裡再擋一次
+  if (!antiBot.isSupportedMediaUrl(item.url)) {
+    if (!silent) logger.warn('OnlineMusic', `略過不支援的網址: ${item.url}`);
+    player.emit('error', new Error('只支援 YouTube 與 Bilibili 的網址，已跳過'));
+    return;
+  }
 
   const platform = antiBot.isYouTubeUrl(item.url) ? 'YouTube' : 'Bilibili';
 
@@ -607,6 +616,7 @@ module.exports = {
   searchMulti,
   getCachedPath: cache.getCachedPath,
   downloadAndCache: (url, title, onProgress) => {
+    if (!antiBot.isSupportedMediaUrl(url)) return Promise.reject(new Error('只支援 YouTube 與 Bilibili 的網址'));
     const args = antiBot.isYouTubeUrl(url)
       ? antiBot.buildYouTubeArgs(url, antiBot.YT_CLIENT_STRATEGIES[0], false)
       : antiBot.buildBilibiliArgs(url, false);

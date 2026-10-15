@@ -202,7 +202,7 @@ async function handleAsk(interaction) {
                 cleanedText,
                 emojiParts,
                 // ✅ 補上 interaction.client，讓 processImageUrls 內部可嘗試修復缺簽名網址
-                urlImagePartsRaw: await processImageUrls(cleanedText, interaction.client),
+                urlImagePartsRaw: await processImageUrls(cleanedText, interaction.client, { guildId: interaction.guildId, userId: interaction.user.id }),
             })),
             attachment ? processAttachments(new Map([[attachment.id, attachment]])) : [],
         ]);
@@ -610,7 +610,7 @@ function setupAICommands(client) {
                             question: cleanedText,
                             emojiParts,
                             // ✅ 補上 client，讓 processImageUrls 內部可嘗試修復缺簽名網址
-                            urlImagePartsRaw: await processImageUrls(cleanedText, client),
+                            urlImagePartsRaw: await processImageUrls(cleanedText, client, { guildId: message.guildId, userId: message.author.id }),
                         })),
                         processEmbeds(message.embeds),
                         processAttachments(message.attachments),
