@@ -2,7 +2,7 @@
 
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, UserSelectMenuBuilder, StringSelectMenuBuilder, MessageFlags } = require('discord.js');
 const splitbillClient = require('../utils/splitbillClient');
-const { wouldLeaveTripNonEmpty, memberMention, findMemberByDiscordId } = require('../utils/tripHelper');
+const { wouldLeaveTripNonEmpty, memberMention, findMemberByDiscordId, canRemoveMember } = require('../utils/tripHelper');
 const { showMainMenu } = require('../commands/splitbill');
 
 // 🆕 [行程獨立化] 成員 = { id, name, discordId? }。從 Discord 使用者選單加進來的人
@@ -73,16 +73,28 @@ module.exports = {
         });
       }
 
+      // 🔒 只列出「這位操作者可以移除」的成員：已連結 Discord 的成員只有建立者能移除
+      // （本人可以移除自己），規則同 splitbill-service，見 tripHelper.canRemoveMember()。
+      const removable = trip.members.filter((m) => canRemoveMember(trip, m, user.id));
+      const hiddenLinked = trip.members.length - removable.length;
+      if (!removable.length) {
+        return interaction.reply({
+          content: '⚠️ 目前沒有你可以移除的成員：已連結 Discord 的成員只有行程建立者可以移除（本人可以移除自己）。',
+          flags: MessageFlags.Ephemeral
+        });
+      }
+
       const embed = new EmbedBuilder().setColor(0xe74c3c).setTitle('🗑️ 從行程移出成員').setDescription(
-        '請從下方選單選取欲退出的成員 (可多選)：\n*(至少需保留 1 位已連結 Discord 的成員)*'
+        '請從下方選單選取欲退出的成員 (可多選)：\n*(至少需保留 1 位已連結 Discord 的成員)*' +
+        (hiddenLinked ? `\n*(另有 ${hiddenLinked} 位已連結 Discord 的成員只有行程建立者可以移除，未列出)*` : '')
       );
 
-      const memberOptions = trip.members.slice(0, 25).map(m => (m.discordId
+      const memberOptions = removable.slice(0, 25).map(m => (m.discordId
         ? { label: m.name.slice(0, 100), value: m.id }
         : { label: m.name.slice(0, 100), value: m.id, description: '尚未連結 Discord' }));
-      // 🔒 上限設為「總數 - 1」，讓使用者在選單層級就不可能一次選光所有成員；
+      // 🔒 上限不超過「總數 - 1」，讓使用者在選單層級就不可能一次選光所有成員；
       // 「至少留 1 位已連結成員」由送出後的 wouldLeaveTripNonEmpty() 把關。
-      const maxRemovable = Math.max(1, memberOptions.length - 1);
+      const maxRemovable = Math.max(1, Math.min(memberOptions.length, trip.members.length - 1));
       const menuRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(`mem_select_remove::${trip.id}`)
@@ -165,13 +177,23 @@ module.exports = {
         });
       }
 
+      // 🔒 以最新的成員名單再確認一次權限（選單打開之後，可能有人剛連結了 Discord 帳號）
+      const notAllowed = trip.members.filter((m) => targetMemberIds.includes(m.id) && !canRemoveMember(trip, m, interaction.user.id));
+      if (notAllowed.length) {
+        return interaction.reply({
+          content: `❌ 無法移除：${notAllowed.map((m) => memberMention(trip, m.id)).join('、')} 已經連結 Discord 帳號，只有行程建立者可以移除（本人可以移除自己）。`,
+          flags: MessageFlags.Ephemeral
+        });
+      }
+
       // 先記下顯示用的名字／提及，移除後就查不到了
-      const removedLabels = targetMemberIds.filter((id) => trip.members.some((m) => m.id === id)).map((id) => memberMention(trip, id));
+      const labelOf = new Map(targetMemberIds
+        .filter((id) => trip.members.some((m) => m.id === id))
+        .map((id) => [id, memberMention(trip, id)]));
       const beforeLength = trip.members.length;
       trip.members = trip.members.filter(m => !targetMemberIds.includes(m.id));
 
-      const removedCount = beforeLength - trip.members.length;
-      if (removedCount === 0) {
+      if (beforeLength - trip.members.length === 0) {
         return interaction.reply({ content: '⚠️ 選擇的成員本來就不在名單中。', flags: MessageFlags.Ephemeral });
       }
 
@@ -181,9 +203,20 @@ module.exports = {
         e.participants.some(pt => targetMemberIds.includes(pt.userId))
       ) || (trip.deposits || []).some(d => targetMemberIds.includes(d.payerId) || targetMemberIds.includes(d.collectorId));
 
-      await save();
+      // 以伺服器存檔後的名單為準回報結果：service 會把不允許移除的已連結成員補回去，
+      // 不能只看本地陣列就說「已移出」
+      const saved = await save();
+      const remaining = new Set(((saved && saved.members) || trip.members).map((m) => m.id));
+      const removedIds = targetMemberIds.filter((id) => labelOf.has(id) && !remaining.has(id));
+      const keptIds = targetMemberIds.filter((id) => labelOf.has(id) && remaining.has(id));
+      if (!removedIds.length) {
+        return showMainMenu(interaction, `❌ 沒有移除任何成員：${keptIds.map((id) => labelOf.get(id)).join(', ')} 只有行程建立者可以移除。`);
+      }
 
-      let resContent = `🗑️ 已移出 ${removedCount} 位成員：${removedLabels.join(', ')}。`;
+      let resContent = `🗑️ 已移出 ${removedIds.length} 位成員：${removedIds.map((id) => labelOf.get(id)).join(', ')}。`;
+      if (keptIds.length) {
+        resContent += `\n⚠️ ${keptIds.map((id) => labelOf.get(id)).join(', ')} 已連結 Discord 帳號，只有行程建立者可以移除，仍保留在行程中。`;
+      }
       if (hasHistory) {
         resContent += `\n⚠️ 提醒：部分被移出的成員曾參與歷史代墊或分攤，最終結算仍會採計。`;
       }

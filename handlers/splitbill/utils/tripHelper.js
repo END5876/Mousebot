@@ -77,6 +77,29 @@ function canDeleteTrip(trip, userId) {
 }
 
 /**
+ * 🔒 某使用者能不能把這位成員移出行程。規則跟 splitbill-service 一致（lib/members.js）：
+ *  - 尚未連結 Discord 的成員：任何成員都可以移除
+ *  - 已連結的成員：只有行程建立者（或 Bot 擁有者）可以移除；本人可以移除自己
+ * 已連結的成員代表一個人的存取權，移除他就等於把他踢出行程。service 端會把
+ * 不允許移除的人補回名單，這裡先擋下來，才不會回報「已移出」但實際上沒有。
+ */
+function canRemoveMember(trip, member, userId) {
+  if (!member) return false;
+  if (!member.discordId) return true;
+  if (member.discordId === userId) return true;
+  return canDeleteTrip(trip, userId);
+}
+
+// 幣別代碼：跟 splitbill-service 的 lib/validate.js 同一套規則——
+// 2～10 個大寫英數字、第一個是字母（ISO 4217 的三碼，或 USDT 這類自訂代碼）
+const CURRENCY_RE = /^[A-Z][A-Z0-9]{1,9}$/;
+const CURRENCY_FORMAT_HINT = '2～10 個英文字母或數字，第一個必須是字母';
+
+function isCurrencyCode(v) {
+  return typeof v === 'string' && CURRENCY_RE.test(v);
+}
+
+/**
  * 把一批 Discord 使用者 ID（來自 @提及、使用者選單）換成行程內的成員 ID。
  * 任何一位沒有連結到這個行程的成員就整批拋錯，訊息裡列出是哪些人。
  * @returns {string[]} 依原順序對應的成員 ID
@@ -107,6 +130,9 @@ function ensureMembersExist(trip, memberIds) {
 
 module.exports = {
   canDeleteTrip,
+  canRemoveMember,
+  isCurrencyCode,
+  CURRENCY_FORMAT_HINT,
   memberDisplay,
   memberMention,
   findMemberByDiscordId,
