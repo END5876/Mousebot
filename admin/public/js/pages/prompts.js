@@ -22,8 +22,22 @@ export default function mountPrompts(root, ctx) {
   let selectToken = 0;
 
   const listCard = h('section', { class: 'card' }, loadingState());
-  const editorCard = h('section', { class: 'card' }, emptyState('從左邊選一個人格或共用規則來編輯', 'sparkle'));
-  root.append(h('div', { class: 'split' }, listCard, editorCard));
+  const editorCard = h('section', { class: 'card' }, emptyState('選一個人格或共用規則來編輯', 'sparkle'));
+  const split = h('div', { class: 'split' }, listCard, editorCard);
+  root.append(split);
+
+  // 手機上清單和編輯器一次只顯示一個：選了項目就切到編輯器，按「返回」回到清單
+  const backBtn = () => h('button', { type: 'button', class: 'btn btn-sm btn-ghost back-btn', onclick: () => backToList() }, icon('chevron', 'ic-sm flip'), '返回');
+  async function backToList() {
+    if (!await confirmDiscard()) return;
+    ctx.setDirty(false);
+    save = null;
+    selected = null;
+    split.classList.remove('has-selection');
+    editorCard.replaceChildren(emptyState('選一個人格或共用規則來編輯', 'sparkle'));
+    if (list) renderList();
+    window.scrollTo(0, 0);
+  }
 
   const onKey = (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && save) {
@@ -145,6 +159,8 @@ export default function mountPrompts(root, ctx) {
     ctx.setDirty(false);
     save = null;
     selected = target;
+    split.classList.add('has-selection');
+    window.scrollTo(0, 0);
     if (list) renderList();
 
     const token = ++selectToken;
@@ -255,6 +271,7 @@ export default function mountPrompts(root, ctx) {
 
     fill(editorCard,
       h('div', { class: 'card-head' },
+        backBtn(),
         h('h2', null, icon('sparkle'), prefill ? `還原人格：${prefill.name ?? prefill.key}` : isNew ? '新增人格' : mode.name),
         isNew && !prefill ? null : h('span', { class: 'badge mono' }, historyKey),
         h('div', { class: 'card-head-actions' }, historyBtn, deleteBtn),
@@ -317,6 +334,7 @@ export default function mountPrompts(root, ctx) {
 
     editorCard.replaceChildren(
       h('div', { class: 'card-head' },
+        backBtn(),
         h('h2', null, icon('sparkle'), info.title),
         h('span', { class: 'badge mono' }, `${data.key}.md`),
         h('div', { class: 'card-head-actions' }, historyBtn),
@@ -350,7 +368,8 @@ export default function mountPrompts(root, ctx) {
       ctx.setDirty(false);
       save = null;
       selected = null;
-      editorCard.replaceChildren(emptyState('從左邊選一個人格或共用規則來編輯', 'sparkle'));
+      split.classList.remove('has-selection');
+      editorCard.replaceChildren(emptyState('選一個人格或共用規則來編輯', 'sparkle'));
       await loadList();
     } catch (err) {
       toastError(err);

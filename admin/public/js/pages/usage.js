@@ -134,7 +134,7 @@ export default function mountUsage(root, ctx) {
     if (showTable) {
       chart?.destroy();
       chart = null;
-      chartArea.replaceChildren(h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
+      chartArea.replaceChildren(h('div', { class: 'table-wrap' }, h('table', { class: 'table table-stack' },
         h('caption', { class: 'sr-only' }, '每日 token 用量'),
         h('thead', null, h('tr', null,
           h('th', null, '日期'), h('th', { class: 'num' }, '計費 tokens'), h('th', { class: 'num' }, '呼叫'),
@@ -142,11 +142,11 @@ export default function mountUsage(root, ctx) {
         )),
         h('tbody', null, [...data.days].reverse().map((d) => h('tr', null,
           h('td', null, fmtDayKey(d.date, true)),
-          h('td', { class: 'num' }, fmtInt(d.total.billable)),
-          h('td', { class: 'num' }, fmtInt(d.total.calls)),
-          h('td', { class: 'num' }, fmtInt(d.total.searches)),
-          h('td', { class: 'num' }, fmtInt(d.total.prompt - d.total.toolUse)),
-          h('td', { class: 'num' }, fmtInt(d.total.output + d.total.thoughts)),
+          h('td', { class: 'num', 'data-label': '計費 tokens' }, fmtInt(d.total.billable)),
+          h('td', { class: 'num', 'data-label': '呼叫' }, fmtInt(d.total.calls)),
+          h('td', { class: 'num', 'data-label': '搜尋' }, fmtInt(d.total.searches)),
+          h('td', { class: 'num', 'data-label': '輸入' }, fmtInt(d.total.prompt - d.total.toolUse)),
+          h('td', { class: 'num', 'data-label': '輸出' }, fmtInt(d.total.output + d.total.thoughts)),
         ))),
       )));
       return;

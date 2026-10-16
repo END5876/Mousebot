@@ -49,6 +49,8 @@ const NAV = [
   },
 ];
 const PAGES = new Map(NAV.flatMap((g) => g.items).map((p) => [p.id, p]));
+// 手機底部分頁列：最常用的四頁，其餘從「更多」打開完整選單
+const TABS = [['overview', '總覽'], ['voice', '語音'], ['responses', '回應'], ['prompts', '人格']];
 
 const root = document.getElementById('app');
 let shell = null;      // { app, nav, title, sub, actions, content, botChip }
@@ -155,6 +157,12 @@ function buildShell() {
   const closeNav = () => app.classList.remove('nav-open');
   navEl.addEventListener('click', (e) => { if (e.target.closest('a')) closeNav(); });
 
+  const moreBtn = h('button', { type: 'button', 'aria-label': '更多頁面', onclick: () => app.classList.add('nav-open') }, icon('menu'), '更多');
+  const tabbar = h('nav', { class: 'tabbar', 'aria-label': '常用頁面' },
+    TABS.map(([id, label]) => h('a', { href: `#/${id}`, dataset: { page: id } }, icon(PAGES.get(id).icon), label)),
+    moreBtn,
+  );
+
   app.append(
     h('aside', { class: 'sidebar' },
       h('div', { class: 'brand' },
@@ -182,12 +190,13 @@ function buildShell() {
       ),
       h('main', { class: 'content-wrap' }, content),
     ),
+    tabbar,
   );
 
   root.className = '';
   root.removeAttribute('aria-busy');
   root.replaceChildren(app);
-  return { app, nav: navEl, title, sub, actions, content, botChip };
+  return { app, nav: navEl, tabbar, moreBtn, title, sub, actions, content, botChip };
 }
 
 function paintBotChip(me) {
@@ -281,10 +290,11 @@ async function route() {
   shell.sub.textContent = page.sub;
   shell.actions.replaceChildren();
   document.title = `${page.title} · Mousebot 管理面板`;
-  for (const a of shell.nav.querySelectorAll('a')) {
+  for (const a of [...shell.nav.querySelectorAll('a'), ...shell.tabbar.querySelectorAll('a')]) {
     if (a.dataset.page === id) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   }
+  shell.moreBtn.classList.toggle('is-active', !TABS.some(([tab]) => tab === id));
 
   const ctx = createCtx();
   current = { id, ctx };

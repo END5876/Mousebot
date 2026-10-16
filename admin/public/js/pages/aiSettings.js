@@ -149,8 +149,8 @@ export default function mountAiSettings(root, ctx) {
       }, icon('eraser', 'ic-sm'), '清除記憶');
       return h('tr', null,
         h('td', null, userCell(entry.user)),
-        h('td', null, sel),
-        h('td', { class: 'num' }, h('div', { class: 'row-actions' }, memoryBtn, removeBtn)),
+        h('td', { 'data-label': '人格模式' }, sel),
+        h('td', { class: 'num', 'data-label': '' }, h('div', { class: 'row-actions' }, memoryBtn, removeBtn)),
       );
     });
 
@@ -161,7 +161,7 @@ export default function mountAiSettings(root, ctx) {
       tight: true,
       body: [
         data.userModes.length
-          ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
+          ? h('div', { class: 'table-wrap' }, h('table', { class: 'table table-stack' },
             h('thead', null, h('tr', null, h('th', null, '使用者'), h('th', null, '人格模式'), h('th', { class: 'num' }, h('span', { class: 'sr-only' }, '操作')))),
             h('tbody', null, rows),
           ))
