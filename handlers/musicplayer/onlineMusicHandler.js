@@ -481,13 +481,18 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
 
   ytdlp.stdout.on('data', () => { dataReceived = true; });
   ytdlp.stderr.on('data', data => {
-    const err = data.toString();
-    if (!err.includes('Deleting original file')) {
-      if (!silent) logger.error(platform, `yt-dlp stderr:`, err);
-      errorOutput += err;
-      if (!err.includes('unable to write data') &&
-          !err.includes('Broken pipe') &&
-          !err.includes('Invalid argument')) {
+    for (const line of data.toString().split(/\r?\n/)) {
+      if (!line.trim() || line.includes('Deleting original file')) continue;
+      // 警告仍累積到 errorOutput，供 classifyYouTubeError 判斷，但不算錯誤
+      errorOutput += line + '\n';
+      if (/^(WARNING:|Deprecated Feature:)/.test(line)) {
+        if (!silent) logger.warn(platform, `yt-dlp: ${line}`);
+        continue;
+      }
+      if (!silent) logger.error(platform, `yt-dlp stderr:`, line);
+      if (!line.includes('unable to write data') &&
+          !line.includes('Broken pipe') &&
+          !line.includes('Invalid argument')) {
         hasError = true;
       }
     }
