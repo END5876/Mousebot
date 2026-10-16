@@ -122,6 +122,29 @@ function upsertResponse({ type, keyword, value, from = null, overwrite = false }
   return { created: !exists && !from };
 }
 
+/**
+ * 依指定順序重新排列某一類規則（包含匹配依物件順序逐條比對，第一條符合的生效）。
+ * keywords 必須剛好是該類目前所有的關鍵字，否則丟出 code = 'ECONFLICT' 的錯誤（清單已被其他地方修改）。
+ */
+function reorderResponses(type, keywords) {
+  if (!RESPONSE_TYPES.includes(type)) throw new Error(`未知的匹配類型：${type}`);
+  const next = listResponses();
+  const current = next[type];
+  const sameSet = Array.isArray(keywords)
+    && keywords.length === Object.keys(current).length
+    && new Set(keywords).size === keywords.length
+    && keywords.every(k => hasOwn(current, k));
+  if (!sameSet) throw Object.assign(new Error('規則清單已經變動，請重新整理後再試'), { code: 'ECONFLICT' });
+
+  const reordered = Object.fromEntries(keywords.map(k => [k, current[k]]));
+  // JS 物件裡「看起來像整數」的 key 永遠排在最前面，這種關鍵字沒辦法往後排
+  if (Object.keys(reordered).some((k, i) => k !== keywords[i])) {
+    throw Object.assign(new Error('純數字的關鍵字永遠會排在最前面，無法調整到其他位置'), { code: 'EINVAL' });
+  }
+  next[type] = reordered;
+  saveResponses(next);
+}
+
 /** 刪除一條規則；不存在時回傳 false */
 function removeResponse(type, keyword) {
   if (!RESPONSE_TYPES.includes(type)) throw new Error(`未知的匹配類型：${type}`);
@@ -370,4 +393,4 @@ function setupCustomResponses(client) {
   }
 }
 
-module.exports = { setupCustomResponses, hasCustomResponse, listResponses, upsertResponse, removeResponse };
+module.exports = { setupCustomResponses, hasCustomResponse, listResponses, upsertResponse, removeResponse, reorderResponses };

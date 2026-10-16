@@ -28,8 +28,9 @@ const fs = require('fs');
 const path = require('path');
 const logger = require('../utils/logger');
 const bootSummary = require('../utils/bootSummary');
-const { createAuth } = require('./auth');
-const { Router, HttpError } = require('./http');
+const { createAuth, clientKey } = require('./auth');
+const { Router, HttpError, FileResponse } = require('./http');
+const audit = require('./audit');
 const registerApi = require('./api');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -176,11 +177,15 @@ async function handleApi(req, res, url, { auth, router }) {
     throw new HttpError(403, '請從管理面板網頁操作');
   }
 
+  const source = clientKey(req);
+
   if (url.pathname === '/api/login' || url.pathname === '/api/logout') {
     if (req.method !== 'POST') throw new HttpError(405, '不支援的方法');
-    const result = url.pathname === '/api/login'
-      ? auth.login(req, await parseJsonBody(req, LOGIN_BODY_BYTES))
-      : auth.logout(req);
+    const isLogin = url.pathname === '/api/login';
+    const result = isLogin ? auth.login(req, await parseJsonBody(req, LOGIN_BODY_BYTES)) : auth.logout(req);
+    if (!isLogin) audit.record('登出', { source });
+    else if (result.status === 200) audit.record('登入成功', { source });
+    else if (result.status === 401) audit.record('登入失敗（密碼錯誤）', { source, level: 'warn' });
     sendJson(res, result.status, result.body, result.headers);
     return;
   }
@@ -193,7 +198,26 @@ async function handleApi(req, res, url, { auth, router }) {
   if (!match) throw new HttpError(404, '找不到這個 API');
   if (match.methodNotAllowed) throw new HttpError(405, '不支援的方法');
 
-  const result = await match.handler({ params: match.params, query: url.searchParams, body });
+  // 處理函式用 audit('…') 描述這次做了什麼；整個請求成功才寫進操作紀錄
+  const actions = [];
+  const result = await match.handler({
+    params: match.params,
+    query: url.searchParams,
+    body,
+    audit: (text) => actions.push(text),
+  });
+  for (const action of actions) audit.record(action, { source });
+
+  if (result instanceof FileResponse) {
+    const data = Buffer.isBuffer(result.body) ? result.body : Buffer.from(result.body, 'utf8');
+    send(res, 200, {
+      'Content-Type': result.contentType,
+      'Content-Length': data.length,
+      'Content-Disposition': `attachment; filename="${result.filename.replace(/[^\w.-]/g, '_')}"`,
+      'Cache-Control': 'no-store',
+    }, data);
+    return;
+  }
   sendJson(res, 200, result ?? { ok: true });
 }
 

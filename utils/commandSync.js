@@ -64,4 +64,27 @@ async function syncCommands({ commands, token, clientId, devGuildId, force = fal
     return { skipped: false, scope, count: commands.length };
 }
 
-module.exports = { syncCommands, hashCommands, stableStringify };
+/** 依目前載入的指令（client.commands）與環境變數組出 syncCommands 的參數：開機同步與管理面板共用 */
+function clientSyncOptions(client) {
+    return {
+        commands: [...client.commands.values()].map(cmd => cmd.data.toJSON()),
+        token: process.env.DISCORD_TOKEN,
+        clientId: process.env.CLIENT_ID,
+        devGuildId: process.env.DEV_GUILD_ID?.trim() || null,
+    };
+}
+
+/** 本機指令與上次成功註冊的內容是否一致（只比對 hash，不連線 Discord） */
+function getSyncStatus(client) {
+    const { commands, clientId, devGuildId } = clientSyncOptions(client);
+    const scope = devGuildId ? `guild:${devGuildId}` : 'global';
+    const saved = readJson(HASH_PATH, {}) || {};
+    return {
+        scope,
+        devGuildId,
+        count: commands.length,
+        upToDate: saved[`${clientId}:${scope}`] === hashCommands(commands),
+    };
+}
+
+module.exports = { syncCommands, hashCommands, stableStringify, clientSyncOptions, getSyncStatus };

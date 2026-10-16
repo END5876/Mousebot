@@ -2,6 +2,7 @@
 // admin/api/ai.js — AI 設定（使用者人格、隨機插話）與用量統計
 
 const aiChance = require('../../handlers/ai/aiChance');
+const aiUtils = require('../../handlers/ai/aiUtils');
 const modeSelector = require('../../handlers/ai/modeSelector');
 const promptStore = require('../../handlers/ai/promptStore');
 const tokenTracker = require('../../handlers/ai/tokenTracker');
@@ -70,33 +71,57 @@ module.exports = function registerAi(router, client) {
     };
   });
 
+  const guildName = (id) => client.guilds.cache.get(id)?.name ?? id;
+  const userName = async (id) => {
+    const user = client.isReady() ? (await resolveUsers(client, [id]))[id] : null;
+    return user && !user.missing ? user.name : id;
+  };
+
   // ── 隨機插話機率 ─────────────────────────────────────────
-  router.put('/api/ai/chance/:guildId', ({ params, body }) => {
+  router.put('/api/ai/chance/:guildId', ({ params, body, audit }) => {
     const guildId = snowflake(params.guildId, '伺服器');
     const result = aiChance.setReplyChance(guildId, body.chance);
     if (!result.success) throw new HttpError(400, result.error);
+    audit(`把「${guildName(guildId)}」的隨機插話機率設為 ${Math.round(result.chance * 100)}%`);
     return { chance: result.chance };
   });
 
-  router.delete('/api/ai/chance/:guildId', ({ params }) => {
-    return { chance: aiChance.resetReplyChance(snowflake(params.guildId, '伺服器')) };
+  router.delete('/api/ai/chance/:guildId', ({ params, audit }) => {
+    const guildId = snowflake(params.guildId, '伺服器');
+    const chance = aiChance.resetReplyChance(guildId);
+    audit(`把「${guildName(guildId)}」的隨機插話機率恢復預設`);
+    return { chance };
   });
 
-  router.put('/api/ai/channels/:channelId', ({ params, body }) => {
-    return aiChance.setChannelDisabled(snowflake(params.channelId, '頻道'), bool(body.disabled, '插話開關'));
+  router.put('/api/ai/channels/:channelId', ({ params, body, audit }) => {
+    const channelId = snowflake(params.channelId, '頻道');
+    const result = aiChance.setChannelDisabled(channelId, bool(body.disabled, '插話開關'));
+    const ch = describeChannel(client, channelId);
+    audit(`${result.disabled ? '關閉' : '開啟'}「${ch.guildName ?? '?'} › #${ch.name ?? channelId}」的隨機插話`);
+    return result;
   });
 
   // ── 使用者人格模式 ───────────────────────────────────────
-  router.put('/api/ai/user-modes/:userId', ({ params, body }) => {
+  router.put('/api/ai/user-modes/:userId', async ({ params, body, audit }) => {
     const userId = snowflake(params.userId, '使用者');
     const mode = str(body.mode, '模式', { max: 32 });
     if (!promptStore.getMode(mode)) throw new HttpError(400, `找不到「${mode}」這個模式`);
     modeSelector.setUserMode(userId, mode);
+    audit(`把 ${await userName(userId)} 的 AI 人格設為「${modeName(mode)}」`);
     return { mode, modeName: modeName(mode) };
   });
 
-  router.delete('/api/ai/user-modes/:userId', ({ params }) => {
-    modeSelector.setUserMode(snowflake(params.userId, '使用者'), null);
+  router.delete('/api/ai/user-modes/:userId', async ({ params, audit }) => {
+    const userId = snowflake(params.userId, '使用者');
+    modeSelector.setUserMode(userId, null);
+    audit(`移除 ${await userName(userId)} 的 AI 人格指定`);
+  });
+
+  // ── 清除對話記憶（等同對方自己下 /ai clear；只影響最近 10 分鐘內的對話脈絡）─────
+  router.post('/api/ai/memory/:userId', async ({ params, audit }) => {
+    const userId = snowflake(params.userId, '使用者');
+    aiUtils.clearUserMemory(userId);
+    audit(`清除 ${await userName(userId)} 的 AI 對話記憶`);
   });
 
   router.get('/api/members/search', async ({ query }) => {

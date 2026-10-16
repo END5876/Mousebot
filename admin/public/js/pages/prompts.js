@@ -3,8 +3,8 @@
 
 import { fill, h, icon } from '../dom.js';
 import { api, seg } from '../api.js';
-import { fmtInt } from '../format.js';
-import { confirmDialog, emptyState, errorState, loadingState, toast, toastError, withBusy } from '../ui.js';
+import { fmtDateTime, fmtInt } from '../format.js';
+import { confirmDialog, emptyState, errorState, loadingState, openModal, toast, toastError, withBusy } from '../ui.js';
 
 const SHARED_INFO = {
   _general: { title: '全局規則', desc: '接在每個人格的 prompt 後面，文字與語音回覆都會用到。' },
@@ -63,7 +63,12 @@ export default function mountPrompts(root, ctx) {
         m.users ? h('span', { class: 'badge' }, `${m.users} 人使用`) : null],
       `${m.key}・${m.shortDescription || `${fmtInt(m.length)} 字`}`,
     ));
-    const newPick = selected?.isNew ? pick(selected, '（新的人格）', '尚未儲存') : null;
+    const newPick = selected?.isNew && !selected.restore ? pick(selected, '（新的人格）', '尚未儲存') : null;
+    const deleted = (list.deleted || []).map((key) => pick(
+      { kind: 'mode', key, isNew: true, restore: true },
+      [key, h('span', { class: 'badge' }, '已刪除')],
+      '按一下載入最後一版，儲存後就會還原',
+    ));
 
     fill(listCard,
       h('div', { class: 'list-label' }, '共用規則'),
@@ -73,7 +78,60 @@ export default function mountPrompts(root, ctx) {
       ...modes,
       newPick,
       list.modes.length ? null : emptyState('還沒有任何人格，按「新增」建立第一個'),
+      deleted.length ? h('div', { class: 'list-label' }, `已刪除（${deleted.length}）`) : null,
+      ...deleted,
     );
+  }
+
+  // ── 版本紀錄：預覽舊版，載入到編輯器後再按儲存才會生效 ─────
+  async function openHistory(kind, key, onLoad) {
+    const body = h('div', null, loadingState());
+    const modal = openModal({ title: `版本紀錄：${kind === 'shared' ? `${key}.md` : key}`, body, wide: true });
+    try {
+      const { versions } = await api.get(`/api/prompts/history/${kind}/${seg(key)}`);
+      if (!versions.length) {
+        body.replaceChildren(emptyState('還沒有舊版本。之後每次儲存或刪除前，都會自動保留一份（每個最多 20 版）', 'history'));
+        return;
+      }
+      const preview = h('pre', { class: 'version-preview' }, '選擇左邊的版本來預覽');
+      let chosen = null;
+      const loadBtn = h('button', {
+        type: 'button', class: 'btn btn-primary', disabled: true,
+        onclick: () => {
+          onLoad(chosen);
+          modal.close();
+          toast('已載入到編輯器，確認內容後按「儲存」才會生效', { type: 'info' });
+        },
+      }, icon('undo', 'ic-sm'), '載入到編輯器');
+
+      const items = versions.map((v) => {
+        const btn = h('button', { type: 'button', class: 'pick', 'aria-current': 'false' },
+          h('span', { class: 'pick-title' }, fmtDateTime(v.savedAt)),
+          h('span', { class: 'pick-sub' }, `${fmtInt(v.size)} bytes`));
+        btn.addEventListener('click', async () => {
+          items.forEach((b) => b.setAttribute('aria-current', String(b === btn)));
+          preview.textContent = '載入中…';
+          loadBtn.disabled = true;
+          try {
+            chosen = await api.get(`/api/prompts/history/${kind}/${seg(key)}/${v.id}`);
+            preview.textContent = kind === 'shared'
+              ? chosen.text || '（空白）'
+              : `顯示名稱：${chosen.name}\n清除記憶時的回覆：${chosen.clearMemoryMessage}\n${chosen.shortDescription ? `簡短說明：${chosen.shortDescription}\n` : ''}\n${chosen.prompt}`;
+            loadBtn.disabled = false;
+          } catch (err) {
+            preview.textContent = err.message;
+          }
+        });
+        return btn;
+      });
+      body.replaceChildren(
+        h('div', { class: 'version-layout' }, h('div', { class: 'version-list' }, items), preview),
+        h('div', { class: 'toolbar version-actions' }, h('span', { class: 'hint' }, '時間是該版本當初儲存的時間'), h('span', { class: 'spacer' }), loadBtn),
+      );
+      items[0].click();
+    } catch (err) {
+      body.replaceChildren(errorState(err));
+    }
   }
 
   async function confirmDiscard() {
@@ -93,19 +151,29 @@ export default function mountPrompts(root, ctx) {
     editorCard.replaceChildren(loadingState());
     try {
       let data = null;
-      if (target.kind === 'shared') data = await api.get(`/api/prompts/shared/${seg(target.key)}`);
-      else if (!target.isNew) data = await api.get(`/api/prompts/modes/${seg(target.key)}`);
+      let prefill = null;
+      if (target.kind === 'shared') {
+        data = await api.get(`/api/prompts/shared/${seg(target.key)}`);
+      } else if (target.restore) {
+        // 已刪除的人格：載入最後一版當作新人格的初始內容
+        const { versions } = await api.get(`/api/prompts/history/modes/${seg(target.key)}`);
+        if (!versions.length) throw new Error('找不到可以還原的版本');
+        prefill = { key: target.key, ...await api.get(`/api/prompts/history/modes/${seg(target.key)}/${versions[0].id}`) };
+      } else if (!target.isNew) {
+        data = await api.get(`/api/prompts/modes/${seg(target.key)}`);
+      }
       if (token !== selectToken || ctx.disposed) return;
       if (target.kind === 'shared') renderSharedEditor(data);
-      else renderModeEditor(data);
+      else renderModeEditor(data, prefill);
     } catch (err) {
       if (token === selectToken && !ctx.disposed) editorCard.replaceChildren(errorState(err, () => select(target, { force: true })));
     }
   }
 
   // ── 編輯器共用：計數、未儲存狀態 ─────────────────────────
-  function trackChanges(inputs, snapshot, { saveBtn, revertBtn, counter, promptEl, canSave = () => true }) {
-    let original = snapshot();
+  // baseline：比對用的原始內容；不給就是目前欄位的值（還原已刪除人格時從空白算起，一載入就可以儲存）
+  function trackChanges(inputs, snapshot, { saveBtn, revertBtn, counter, promptEl, canSave = () => true, baseline }) {
+    let original = baseline ?? snapshot();
     const update = () => {
       const dirty = snapshot() !== original;
       ctx.setDirty(dirty);
@@ -120,17 +188,30 @@ export default function mountPrompts(root, ctx) {
     return { update, markSaved: () => { original = snapshot(); update(); } };
   }
 
-  function renderModeEditor(mode) {
+  // mode：既有的人格（null＝新增）；prefill：還原已刪除人格時，從版本紀錄載入的初始內容
+  function renderModeEditor(mode, prefill = null) {
     const isNew = !mode;
+    const init = mode ?? prefill ?? {};
     const key = h('input', {
-      class: 'input mono', id: 'pm-key', value: mode?.key ?? '', readOnly: !isNew, maxlength: 32,
+      class: 'input mono', id: 'pm-key', value: init.key ?? '', readOnly: !isNew || !!prefill, maxlength: 32,
       placeholder: '例如 catgirl', autocomplete: 'off', spellcheck: 'false',
     });
-    const name = h('input', { class: 'input', id: 'pm-name', value: mode?.name ?? '', maxlength: 100, placeholder: '例如 貓娘模式' });
-    const short = h('input', { class: 'input', id: 'pm-short', value: mode?.shortDescription ?? '', maxlength: 200 });
-    const clearMsg = h('input', { class: 'input', id: 'pm-clear', value: mode?.clearMemoryMessage ?? '', maxlength: 500, placeholder: '🧠 已清除你的對話記憶。' });
-    const prompt = h('textarea', { class: 'textarea code editor-textarea', id: 'pm-prompt', value: mode?.prompt ?? '', spellcheck: 'false' });
+    const name = h('input', { class: 'input', id: 'pm-name', value: init.name ?? '', maxlength: 100, placeholder: '例如 貓娘模式' });
+    const short = h('input', { class: 'input', id: 'pm-short', value: init.shortDescription ?? '', maxlength: 200 });
+    const clearMsg = h('input', { class: 'input', id: 'pm-clear', value: init.clearMemoryMessage ?? '', maxlength: 500, placeholder: '🧠 已清除你的對話記憶。' });
+    const prompt = h('textarea', { class: 'textarea code editor-textarea', id: 'pm-prompt', value: init.prompt ?? '', spellcheck: 'false' });
     const counter = h('span', { class: 'counter' });
+    const historyKey = mode?.key ?? prefill?.key;
+    const historyBtn = historyKey ? h('button', {
+      type: 'button', class: 'btn btn-sm',
+      onclick: () => openHistory('modes', historyKey, (v) => {
+        name.value = v.name ?? '';
+        short.value = v.shortDescription ?? '';
+        clearMsg.value = v.clearMemoryMessage ?? '';
+        prompt.value = v.prompt ?? '';
+        tracker.update();
+      }),
+    }, icon('history', 'ic-sm'), '版本紀錄') : null;
 
     const saveBtn = h('button', { type: 'button', class: 'btn btn-primary', onclick: () => save() }, icon('save', 'ic-sm'), isNew ? '建立' : '儲存');
     const revertBtn = h('button', {
@@ -152,6 +233,7 @@ export default function mountPrompts(root, ctx) {
     const tracker = trackChanges(fields, () => JSON.stringify(fields.map((f) => f.value)), {
       saveBtn, revertBtn, counter, promptEl: prompt,
       canSave: () => MODE_KEY_RE.test(key.value.trim()) && !!prompt.value.trim(),
+      baseline: prefill ? JSON.stringify(['', '', '', '', '']) : undefined,
     });
 
     save = async () => {
@@ -166,21 +248,23 @@ export default function mountPrompts(root, ctx) {
       }));
       if (!ok) return;
       tracker.markSaved();
-      toast(isNew ? `已建立人格「${name.value.trim() || k}」，立即生效` : '已儲存，立即生效');
+      toast(prefill ? `已還原人格「${name.value.trim() || k}」，立即生效` : isNew ? `已建立人格「${name.value.trim() || k}」，立即生效` : '已儲存，立即生效');
       await loadList();
       if (isNew) select({ kind: 'mode', key: k }, { force: true });
     };
 
-    editorCard.replaceChildren(
+    fill(editorCard,
       h('div', { class: 'card-head' },
-        h('h2', null, icon('sparkle'), isNew ? '新增人格' : mode.name),
-        isNew ? null : h('span', { class: 'badge mono' }, mode.key),
-        h('div', { class: 'card-head-actions' }, deleteBtn),
+        h('h2', null, icon('sparkle'), prefill ? `還原人格：${prefill.name ?? prefill.key}` : isNew ? '新增人格' : mode.name),
+        isNew && !prefill ? null : h('span', { class: 'badge mono' }, historyKey),
+        h('div', { class: 'card-head-actions' }, historyBtn, deleteBtn),
       ),
+      prefill ? h('div', { class: 'card-note' }, icon('info', 'ic-sm'),
+        h('span', null, '已載入這個人格刪除前的最後一版；按「建立」就會還原。也可以從「版本紀錄」挑更早的版本。')) : null,
       h('div', { class: 'card-body' }, h('div', { class: 'form' },
         h('div', { class: 'form-row' },
           h('div', { class: 'field' }, h('label', { for: 'pm-key' }, '模式代號'), key,
-            h('div', { class: 'hint' }, isNew ? '英數、底線、連字號，1～32 字；建立後不能修改' : '也是檔名：data/prompts/modes/' + mode.key + '.md')),
+            h('div', { class: 'hint' }, isNew && !prefill ? '英數、底線、連字號，1～32 字；建立後不能修改' : `也是檔名：data/prompts/modes/${historyKey}.md`)),
           h('div', { class: 'field' }, h('label', { for: 'pm-name' }, '顯示名稱'), name,
             h('div', { class: 'hint' }, '在 /ai mode 選單與 log 中顯示')),
         ),
@@ -198,7 +282,7 @@ export default function mountPrompts(root, ctx) {
       )),
       h('div', { class: 'card-foot' }, revertBtn, h('span', { class: 'spacer' }), saveBtn),
     );
-    (isNew ? key : prompt).focus({ preventScroll: true });
+    (isNew && !prefill ? key : prompt).focus({ preventScroll: true });
   }
 
   function renderSharedEditor(data) {
@@ -226,8 +310,17 @@ export default function mountPrompts(root, ctx) {
       loadList();
     };
 
+    const historyBtn = h('button', {
+      type: 'button', class: 'btn btn-sm',
+      onclick: () => openHistory('shared', data.key, (v) => { text.value = v.text ?? ''; tracker.update(); }),
+    }, icon('history', 'ic-sm'), '版本紀錄');
+
     editorCard.replaceChildren(
-      h('div', { class: 'card-head' }, h('h2', null, icon('sparkle'), info.title), h('span', { class: 'badge mono' }, `${data.key}.md`)),
+      h('div', { class: 'card-head' },
+        h('h2', null, icon('sparkle'), info.title),
+        h('span', { class: 'badge mono' }, `${data.key}.md`),
+        h('div', { class: 'card-head-actions' }, historyBtn),
+      ),
       h('div', { class: 'card-body' }, h('div', { class: 'form' },
         h('div', { class: 'callout' }, icon('info', 'ic-sm'), h('span', null, info.desc)),
         h('div', { class: 'field' },

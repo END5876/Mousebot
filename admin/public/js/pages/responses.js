@@ -17,6 +17,9 @@ const MAX_MESSAGE_LENGTH = 2000;
 
 const typeOptions = TYPES.map((t) => ({ value: t, label: TYPE_LABEL[t] }));
 
+// JS 物件裡「看起來像陣列索引」的 key（例如 "6"、"123"）永遠排在最前面，這種關鍵字無法調整順序
+const isIndexKey = (k) => String(Number(k) >>> 0) === k && (Number(k) >>> 0) !== 4294967295;
+
 export default function mountResponses(root, ctx) {
   let data = null; // { exact: {}, contains: {} }
   let filterType = 'all';
@@ -42,7 +45,7 @@ export default function mountResponses(root, ctx) {
       h('div', { class: 'card-head' }, h('h2', null, icon('message'), '規則列表'), countEl),
       listBody,
       h('div', { class: 'card-note' }, icon('info', 'ic-sm'),
-        h('span', null, '修改後立即生效。Discord 上的 /response 指令操作的是同一份資料。')),
+        h('span', null, '修改後立即生效，Discord 上的 /response 指令操作的是同一份資料。包含匹配由上往下比對、第一條符合的生效，可以用箭頭調整順序（搜尋時暫停）。')),
     ),
   );
 
@@ -73,6 +76,28 @@ export default function mountResponses(root, ctx) {
       return;
     }
 
+    // 包含匹配由上往下比對、第一條符合的生效，所以可以調整順序（搜尋中只看得到部分規則，先不給調）
+    const containsKeys = Object.keys(data.contains);
+    const canReorder = !query && filterType !== 'exact';
+    const moveButtons = (e) => {
+      if (!canReorder || e.type !== 'contains') return null;
+      const i = containsKeys.indexOf(e.keyword);
+      const firstMovable = containsKeys.findIndex((k) => !isIndexKey(k));
+      const fixed = isIndexKey(e.keyword);
+      return [
+        h('button', {
+          type: 'button', class: 'btn btn-sm btn-ghost btn-icon', 'aria-label': `把「${e.keyword}」往上移`,
+          disabled: fixed || i <= firstMovable, title: fixed ? '純數字的關鍵字固定排在最前面' : null,
+          onclick: () => move(e, -1),
+        }, icon('arrow-up')),
+        h('button', {
+          type: 'button', class: 'btn btn-sm btn-ghost btn-icon', 'aria-label': `把「${e.keyword}」往下移`,
+          disabled: fixed || i === containsKeys.length - 1, title: fixed ? '純數字的關鍵字固定排在最前面' : null,
+          onclick: () => move(e, 1),
+        }, icon('arrow-down')),
+      ];
+    };
+
     const rows = shown.map((e) => h('tr', {
       class: 'is-clickable',
       onclick: (ev) => { if (!ev.target.closest('button, a')) openEditor(e); },
@@ -84,6 +109,7 @@ export default function mountResponses(root, ctx) {
         e.messages.length > 1 ? h('span', { class: 'badge' }, `共 ${e.messages.length} 則`) : null,
       ),
       h('td', { class: 'num' }, h('div', { class: 'row-actions' },
+        moveButtons(e),
         h('button', { type: 'button', class: 'btn btn-sm btn-ghost btn-icon', 'aria-label': `編輯「${e.keyword}」`, onclick: () => openEditor(e) }, icon('edit')),
         h('button', { type: 'button', class: 'btn btn-sm btn-ghost btn-icon btn-danger', 'aria-label': `刪除「${e.keyword}」`, onclick: () => remove(e) }, icon('trash')),
       )),
@@ -96,6 +122,26 @@ export default function mountResponses(root, ctx) {
       )),
       h('tbody', null, rows),
     )));
+  }
+
+  let moving = false;
+  async function move(entry, delta) {
+    if (moving) return;
+    const keys = Object.keys(data.contains);
+    const i = keys.indexOf(entry.keyword);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= keys.length) return;
+    [keys[i], keys[j]] = [keys[j], keys[i]];
+    moving = true;
+    try {
+      await api.put('/api/responses/order', { type: 'contains', keywords: keys });
+      await load();
+    } catch (err) {
+      toastError(err);
+      if (err.status === 409) await load();
+    } finally {
+      moving = false;
+    }
   }
 
   async function remove(entry) {

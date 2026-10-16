@@ -6,11 +6,12 @@ const { Client, GatewayIntentBits, Collection, MessageFlags } = require('discord
 const logger = require('./utils/logger');
 const bootSummary = require('./utils/bootSummary');
 const { OWNER_USER_IDS } = require('./utils/config');
-const { syncCommands } = require('./utils/commandSync');
+const { syncCommands, clientSyncOptions } = require('./utils/commandSync');
 const { startHealthServer } = require('./utils/health');
 const { startAdminServer } = require('./admin/server');
 
 // ── 導入所有處理器 ─────────────────────────────────────────
+const { applyPresence }          = require('./handlers/presenceHandler');
 const { setupVoiceCommands }     = require('./handlers/voiceHandler');
 const { setupBasicCommands }     = require('./handlers/commandHandler');
 const { setupCustomResponses }   = require('./handlers/responseHandler');
@@ -117,16 +118,13 @@ client.on('interactionCreate', async interaction => {
 // ── 註冊 Slash Commands 到 Discord ────────────────────────
 // 指令內容沒變就不重新 PUT；設定 DEV_GUILD_ID 時改註冊到測試伺服器（立即生效）。
 async function registerSlashCommands() {
-  const commands = [...client.commands.values()].map(cmd => cmd.data.toJSON());
-  const devGuildId = process.env.DEV_GUILD_ID?.trim() || null;
+  const options = clientSyncOptions(client);
+  const { devGuildId } = options;
 
   try {
     logger.debug('Boot', '正在同步 Slash Commands...');
     const { skipped, scope, count } = await syncCommands({
-      commands,
-      token: process.env.DISCORD_TOKEN,
-      clientId: process.env.CLIENT_ID,
-      devGuildId,
+      ...options,
       force: process.env.FORCE_COMMAND_SYNC === '1',
     });
     const where = scope === 'global' ? '全域' : `測試伺服器 ${devGuildId}`;
@@ -145,10 +143,8 @@ async function registerSlashCommands() {
 client.once('clientReady', async () => {
   logger.success('Discord', `已登入為 ${client.user.tag}（${client.guilds.cache.size} 個伺服器）`);
 
-  client.user.setPresence({
-    activities: [{ name: '逼逼 機油好難喝', type: 2 }],
-    status: 'online'
-  });
+  // 狀態與活動文字可以在管理面板修改（data/presence.json）
+  applyPresence(client);
 
   // 線上音樂引擎（含 yt-dlp / bgutil 檢查）與指令同步彼此獨立，並行處理
   await Promise.all([

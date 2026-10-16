@@ -21,7 +21,7 @@
 | **自動加入語音頻道** | 可設定 Bot 自動加入指定語音頻道，並支援防踢靜音播放 |
 | **咕咕嘎嘎生成器** | 依主題生成「咕咕嘎嘎體」文章（已併入 `/ai gugu`） |
 | **Slash 指令** | 全指令皆以 Discord Slash Command（`/`）介面提供 |
-| **管理面板（Web）** | 用瀏覽器設定與管理 Bot：狀態總覽、自訂回應與 AI 人格編輯、使用者模式與插話機率、AI 用量圖表、語音與音樂控制、通知頻道與整點報時、即時日誌（設定 `ADMIN_PASSWORD` 後啟用，見下方「管理面板」） |
+| **管理面板（Web）** | 用瀏覽器設定與管理 Bot：狀態總覽、自訂回應與 AI 人格編輯（含版本紀錄）、使用者模式與插話機率、AI 用量圖表、語音頻道與點歌、TTS 設定、通知頻道與整點報時、Bot 狀態文字、指令同步／快取／備份／重新啟動、操作紀錄、即時日誌（設定 `ADMIN_PASSWORD` 後啟用，見下方「管理面板」） |
 
 ---
 
@@ -33,8 +33,9 @@
 data/prompts/
 ├── _general.md          # 所有文字回覆共用的全局規則
 ├── _voice.md            # 語音回覆時額外附加的規則
-└── modes/
-    └── <mode>.md        # 各人格，檔名（英數／底線／連字號，1~32 字）即模式代號
+├── modes/
+│   └── <mode>.md        # 各人格，檔名（英數／底線／連字號，1~32 字）即模式代號
+└── .history/            # 覆寫或刪除前自動保留的舊版本（每個最多 20 版，管理面板可以預覽與還原）
 ```
 
 模式檔格式（front matter 僅支援單行 `key: value`）：
@@ -64,13 +65,25 @@ clearMemoryMessage: 已經清除記憶了喔~
 | 頁面 | 可以做的事 |
 |---|---|
 | 總覽 | Bot 狀態、運行時間、記憶體、Discord 延遲、外部服務（OWW、PO Token）、模組開機摘要、語音連線、伺服器清單 |
-| 自訂回應 | 搜尋、新增、編輯（可改名或換匹配類型）、刪除關鍵字回應，一條規則可設定多則訊息 |
-| AI 人格 | 編輯各模式的 system prompt 與 `_general`、`_voice` 共用規則（沒有 Discord 輸入框 4000 字的限制）、新增與刪除模式 |
-| AI 設定 | 指定使用者的人格模式（可搜尋成員）、各伺服器的隨機插話機率與逐頻道開關；檢視模型與額度設定 |
+| 自訂回應 | 搜尋、新增、編輯（可改名或換匹配類型）、刪除關鍵字回應，一條規則可設定多則訊息；調整包含匹配的比對順序 |
+| AI 人格 | 編輯各模式的 system prompt 與 `_general`、`_voice` 共用規則（沒有 Discord 輸入框 4000 字的限制）、新增與刪除模式；版本紀錄（每次存檔或刪除前自動保留，最近 20 版）、還原已刪除的人格 |
+| AI 設定 | 指定使用者的人格模式（可搜尋成員）、清除某人的對話記憶、各伺服器的隨機插話機率與逐頻道開關；檢視模型與額度設定 |
 | AI 用量 | 近 7／30／90 天的每日 token 長條圖，依來源、人格、使用者拆分，可切換成表格 |
-| 語音與音樂 | 自動加入的開關與目標頻道、正在播放與進度、跳過／停止／循環／隨機連播、佇列管理、閒置自動停止 |
-| 通知與報時 | Steam / Epic 限免通知頻道、查詢目前的限免遊戲、各伺服器整點報時開關、報時音檔檢查 |
+| 語音與音樂 | 自動加入的開關與目標頻道、加入／離開語音頻道、喚醒詞監聽（可選轉錄頻道）、點歌（本地音樂／YouTube 與 Bilibili 搜尋／貼網址）、正在播放與進度、跳過／停止／循環／隨機連播、佇列管理、閒置自動停止 |
+| TTS 語音 | 各伺服器的 SoVITS 模型、edge-tts 聲音、AI 回覆自動朗讀開關、試聽；SoVITS 連線狀態 |
+| 通知與報時 | Steam / Epic 限免通知頻道、查詢目前的限免遊戲、立即檢查並推播、通知紀錄（可移除讓它重新推播）、各伺服器整點報時開關、報時音檔檢查 |
+| 狀態與訊息 | Bot 的線上狀態與活動文字（正在聽／正在玩／自訂狀態…）、以 Bot 身分在頻道發訊息（等同 `/say`） |
+| 維護 | Slash 指令與 Discord 上已註冊的比對、強制重新同步；音樂下載快取統計與清除；下載設定備份；重新啟動 Bot |
+| 操作紀錄 | 在管理面板上做過的每個變更與登入紀錄（含來源 IP，保留最近 1000 筆） |
 | 日誌 | 最近 500 則 log，每 2 秒更新，可依等級、模組、關鍵字篩選 |
+
+幾點說明：
+
+- **TTS 模型／聲音、AI 回覆朗讀開關**現在會存檔（`data/ttsSettings.json`、`data/aiTTS.json`），`/tts model`、`/tts edgevoice`、`/ai tts` 與管理面板共用，重新啟動後保留。SoVITS 伺服器一次只能載入一組權重，在任何一個伺服器切換模型都會影響其他伺服器。
+- **Bot 狀態文字**存在 `data/presence.json`；沒有設定時沿用原本的「正在聽 逼逼 機油好難喝」。
+- **清除下載快取**只會刪除線上歌曲的下載檔（檔名結尾是 `[yt_…]`、`[BV…]`、`[av…]`），本地音樂、正在播放或排在佇列裡的歌都會保留。
+- **重新啟動**走與 `SIGTERM` 相同的關閉流程，由 supervisord 重新拉起；不是由 supervisord 管理時（例如 `npm start`），這個按鈕會變成「關閉 Bot」，關閉後需要手動再啟動。
+- **設定備份**是一個 JSON 檔，包含設定與 AI 人格，不含任何金鑰與 Cookie。
 
 ### 連線方式
 
@@ -293,8 +306,10 @@ Mousebot/
 │   ├── auth.js                       # 密碼登入、簽章 Cookie、登入限流
 │   ├── http.js                       # 極簡路由、HttpError、輸入驗證
 │   ├── discordInfo.js                # ID → 伺服器／頻道／使用者名稱、成員搜尋
-│   ├── voiceState.js                 # 語音連線與播放狀態、播放控制（與控制面板按鈕同邏輯）
-│   ├── api/                          # 各頁面的 API：overview、responses、prompts、ai、voice、notify、logs
+│   ├── voiceState.js                 # 語音連線與播放狀態、播放控制與點歌（與控制面板按鈕、網頁播放器同邏輯）
+│   ├── cacheTools.js                 # 音樂下載快取的統計與清除
+│   ├── audit.js                      # 操作紀錄（data/adminAudit.json）
+│   ├── api/                          # 各頁面的 API：overview、responses、prompts、ai、voice、tts、notify、system、logs
 │   └── public/                       # 網頁（原生 JS ES modules，無建置步驟、不載入外部資源）
 ├── handlers/
 │   ├── ai/
@@ -344,6 +359,7 @@ Mousebot/
 │   │       ├── queue.js              # 播放排隊系統
 │   │       ├── cache.js              # LRU 快取
 │   │       ├── models.js             # 多模型設定解析
+│   │       ├── settings.js           # 各伺服器的模型 / edge-tts 聲音（data/ttsSettings.json）
 │   │       ├── textSplitter.js       # 長文分段
 │   │       └── commands.js           # /tts 指令
 │   ├── notice/
@@ -385,6 +401,7 @@ Mousebot/
 │   ├── audioManager.js               # 音頻優先級排程（SILENCE=0 < MUSIC=1 < TTS=2）
 │   ├── autoJoinHandler.js            # 自動加入目標語音頻道（10 秒輪詢），整合 voiceActivityMonitor
 │   ├── commandHandler.js             # /ping、/serverinfo、/say、/nh；「有什麼了不起」被動回應
+│   ├── presenceHandler.js            # Bot 線上狀態與活動文字（data/presence.json）
 │   ├── responseHandler.js            # 自訂關鍵字自動回應（data/responses.json）
 │   └── voiceHandler.js               # /voice 指令群：join/leave/status/stt/silence/record-button
 ├── oww-server/
@@ -414,6 +431,10 @@ Mousebot/
 │   ├── tokenUsage.json               # Gemini token 用量（每日，保留 90 天）
 │   ├── commandHash.json              # 上次註冊的 Slash Commands hash
 │   ├── timeAnnouncerSettings.json    # 各伺服器整點報時開關
+│   ├── ttsSettings.json              # 各伺服器的 SoVITS 模型、edge-tts 聲音
+│   ├── aiTTS.json                    # 各伺服器的 AI 回覆朗讀開關
+│   ├── presence.json                 # Bot 線上狀態與活動文字
+│   ├── adminAudit.json               # 管理面板操作紀錄（最近 1000 筆）
 │   ├── admin-session-secret          # 管理面板 Cookie 簽章金鑰（管理面板啟動時自動產生）
 │   └── (steam/epic 通知去重 JSON)
 ├── temp/                             # STT 暫存 .wav 檔（已列入 .gitignore）

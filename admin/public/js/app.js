@@ -9,7 +9,11 @@ import prompts from './pages/prompts.js';
 import aiSettings from './pages/aiSettings.js';
 import usage from './pages/usage.js';
 import voice from './pages/voice.js';
+import tts from './pages/tts.js';
 import notify from './pages/notify.js';
+import status from './pages/status.js';
+import maintenance from './pages/maintenance.js';
+import auditLog from './pages/audit.js';
 import logs from './pages/logs.js';
 
 const THEME_KEY = 'mousebot-admin-theme';
@@ -29,11 +33,20 @@ const NAV = [
   {
     label: '語音與通知',
     items: [
-      { id: 'voice', title: '語音與音樂', sub: '播放控制、自動加入', icon: 'headphones', mount: voice },
+      { id: 'voice', title: '語音與音樂', sub: '加入頻道、點歌、播放控制', icon: 'headphones', mount: voice },
+      { id: 'tts', title: 'TTS 語音', sub: '模型、聲音、AI 朗讀', icon: 'mic', mount: tts },
       { id: 'notify', title: '通知與報時', sub: '限免通知、整點報時', icon: 'bell', mount: notify },
     ],
   },
-  { label: '系統', items: [{ id: 'logs', title: '日誌', sub: '最近的執行紀錄', icon: 'terminal', mount: logs }] },
+  {
+    label: '系統',
+    items: [
+      { id: 'status', title: '狀態與訊息', sub: 'Bot 狀態文字、以 Bot 身分發訊息', icon: 'send', mount: status },
+      { id: 'maintenance', title: '維護', sub: '指令同步、快取、備份、重新啟動', icon: 'tool', mount: maintenance },
+      { id: 'audit', title: '操作紀錄', sub: '管理面板上做過的變更', icon: 'history', mount: auditLog },
+      { id: 'logs', title: '日誌', sub: '最近的執行紀錄', icon: 'terminal', mount: logs },
+    ],
+  },
 ];
 const PAGES = new Map(NAV.flatMap((g) => g.items).map((p) => [p.id, p]));
 
