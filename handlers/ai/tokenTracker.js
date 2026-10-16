@@ -118,6 +118,30 @@ function getTodayUserTotal(userId) {
     return billableTotal(usage[dateKey()]?.byUser?.[userId]);
 }
 
+/**
+ * 最近 days 天（含今天）的每日用量副本，由舊到新；沒有紀錄的日子補上空白資料（管理面板用）
+ * @param {number} days
+ * @returns {Array<{ date: string, total: object, bySource: object, byMode: object, byUser: object }>}
+ */
+function getUsageHistory(days) {
+    const out = [];
+    for (let i = days - 1; i >= 0; i--) {
+        // 用 setDate 往回推：遇到日光節約時間也不會跳過或重複某一天
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const date = dateKey(d);
+        const day = usage[date];
+        out.push({
+            date,
+            total:    { ...emptyBucket(), ...day?.total },
+            bySource: structuredClone(day?.bySource ?? {}),
+            byMode:   structuredClone(day?.byMode ?? {}),
+            byUser:   structuredClone(day?.byUser ?? {}),
+        });
+    }
+    return out;
+}
+
 load();
 
-module.exports = { recordUsage, getTodayTotal, getTodayUserTotal };
+module.exports = { recordUsage, getTodayTotal, getTodayUserTotal, getUsageHistory, billableTotal };

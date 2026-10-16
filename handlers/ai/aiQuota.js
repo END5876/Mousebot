@@ -86,4 +86,14 @@ function describeLimits() {
     return parts.join('、');
 }
 
-module.exports = { consumeQuota, quotaMessage, isQuotaError, AiQuotaError, describeLimits };
+/** 目前的限制數值（0 = 不限制；管理面板顯示用） */
+function getLimits() {
+    return {
+        userRateLimit: limiter ? USER_RATE_LIMIT : 0,
+        userRateWindowSec: USER_RATE_WINDOW_MS / 1000,
+        userDailyBudget: USER_DAILY_BUDGET,
+        dailyBudget: DAILY_BUDGET,
+    };
+}
+
+module.exports = { consumeQuota, quotaMessage, isQuotaError, AiQuotaError, describeLimits, getLimits };

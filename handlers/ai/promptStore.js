@@ -196,6 +196,16 @@ function saveShared(key, text) {
     refresh(true);
 }
 
+/** 刪除模式檔（給管理面板用）；檔案不存在時回傳 false */
+function deleteMode(key) {
+    if (!MODE_KEY_RE.test(key)) throw new Error(`模式代號只能使用英數、底線、連字號（1~32 字）：${key}`);
+    const file = path.join(MODES_DIR, `${key}.md`);
+    if (!fs.existsSync(file)) return false;
+    fs.unlinkSync(file);
+    refresh(true);
+    return true;
+}
+
 // ── 啟動時載入 ───────────────────────────────────────────
 refresh(true);
 if (modes.size === 0) {
@@ -213,4 +223,5 @@ module.exports = {
     getShared,
     saveMode,
     saveShared,
+    deleteMode,
 };

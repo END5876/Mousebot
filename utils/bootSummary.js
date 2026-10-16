@@ -66,4 +66,9 @@ function reset() {
   items.length = 0;
 }
 
-module.exports = { report, print, reset };
+/** 目前已回報的模組狀態（管理面板總覽頁用） */
+function getItems() {
+  return items.map(i => ({ ...i }));
+}
+
+module.exports = { report, print, reset, getItems };

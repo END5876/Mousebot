@@ -27,4 +27,17 @@ module.exports = [
     files: ['utils/logger.js', 'utils/bootSummary.js', 'test/**/*.js'],
     rules: { 'no-console': 'off' },
   },
+  {
+    // 管理面板網頁（瀏覽器端 ES modules）
+    files: ['admin/public/**/*.js'],
+    languageOptions: {
+      sourceType: 'module',
+      globals: { ...globals.browser },
+    },
+  },
+  {
+    // 在 <head> 同步執行的一般 script
+    files: ['admin/public/js/theme-init.js'],
+    languageOptions: { sourceType: 'script' },
+  },
 ];

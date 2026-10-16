@@ -8,6 +8,7 @@ const bootSummary = require('./utils/bootSummary');
 const { OWNER_USER_IDS } = require('./utils/config');
 const { syncCommands } = require('./utils/commandSync');
 const { startHealthServer } = require('./utils/health');
+const { startAdminServer } = require('./admin/server');
 
 // ── 導入所有處理器 ─────────────────────────────────────────
 const { setupVoiceCommands }     = require('./handlers/voiceHandler');
@@ -167,6 +168,8 @@ client.once('clientReady', async () => {
 });
 
 startHealthServer(client);
+// 管理面板（設定 ADMIN_PASSWORD 才會啟動）
+startAdminServer(client);
 
 // ── 錯誤處理 ──────────────────────────────────────────────
 client.on('error', error => {

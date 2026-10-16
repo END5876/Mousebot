@@ -129,6 +129,34 @@ function toggleChannel(channelId) {
     }
 }
 
+/**
+ * 直接指定頻道開關（toggleChannel 的明確版本，管理面板用）
+ * @param {string} channelId
+ * @param {boolean} disabled
+ * @returns {{ disabled: boolean }}
+ */
+function setChannelDisabled(channelId, disabled) {
+    if (disabledChannels.has(channelId) === disabled) return { disabled };
+    if (disabled) disabledChannels.add(channelId);
+    else disabledChannels.delete(channelId);
+    saveDisabledChannels();
+    return { disabled };
+}
+
+// ════════════════════════════════════════════════════════
+//  公開 API — 列表（管理面板用）
+// ════════════════════════════════════════════════════════
+
+/** 有自訂機率的伺服器 { guildId: chance }；不在其中的伺服器使用 DEFAULT_CHANCE */
+function listReplyChances() {
+    return Object.fromEntries(chanceMap);
+}
+
+/** 已停用隨機回覆的頻道 ID */
+function listDisabledChannels() {
+    return [...disabledChannels];
+}
+
 // 啟動時立即載入
 loadReplyChance();
 loadDisabledChannels();
@@ -140,4 +168,7 @@ module.exports = {
     resetReplyChance,
     isChannelDisabled,
     toggleChannel,
+    setChannelDisabled,
+    listReplyChances,
+    listDisabledChannels,
 };

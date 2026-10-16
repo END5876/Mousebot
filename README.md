@@ -1,6 +1,6 @@
 # 🐭 Mousebot
 
-一個功能豐富的私人 Discord 機器人，整合 AI 角色扮演對話、語音喚醒詞互動、TTS/STT、線上與本地音樂播放、**含網頁介面的多人分帳系統（即時同步、分享連結、AI 帳單辨識）**、遊戲限免通知、整點報時等多項功能。以 Node.js 為主體，搭配 Python 撰寫的 OpenWakeWord 喚醒詞偵測服務，並內建 Express 網頁伺服器，透過 Docker + supervisord 容器化部署。
+一個功能豐富的私人 Discord 機器人，整合 AI 角色扮演對話、語音喚醒詞互動、TTS/STT、線上與本地音樂播放、**含網頁介面的多人分帳系統（即時同步、分享連結、AI 帳單辨識）**、遊戲限免通知、整點報時等多項功能。以 Node.js 為主體，搭配 Python 撰寫的 OpenWakeWord 喚醒詞偵測服務，並內建**網頁管理面板**，透過 Docker + supervisord 容器化部署。
 
 ---
 
@@ -21,6 +21,7 @@
 | **自動加入語音頻道** | 可設定 Bot 自動加入指定語音頻道，並支援防踢靜音播放 |
 | **咕咕嘎嘎生成器** | 依主題生成「咕咕嘎嘎體」文章（已併入 `/ai gugu`） |
 | **Slash 指令** | 全指令皆以 Discord Slash Command（`/`）介面提供 |
+| **管理面板（Web）** | 用瀏覽器設定與管理 Bot：狀態總覽、自訂回應與 AI 人格編輯、使用者模式與插話機率、AI 用量圖表、語音與音樂控制、通知頻道與整點報時、即時日誌（設定 `ADMIN_PASSWORD` 後啟用，見下方「管理面板」） |
 
 ---
 
@@ -56,6 +57,35 @@ clearMemoryMessage: 已經清除記憶了喔~
 
 ---
 
+## 管理面板（Web 管理介面）
+
+設定 `ADMIN_PASSWORD` 後，Bot 會在程序內多開一個網頁伺服器（`admin/`），用瀏覽器就能設定與管理 Bot，不必記指令。修改後立即生效，和 Discord 指令操作的是同一份資料（直接呼叫各模組的函式，記憶體中的設定與 `data/` 檔案保持一致）。支援深色模式與手機版面。
+
+| 頁面 | 可以做的事 |
+|---|---|
+| 總覽 | Bot 狀態、運行時間、記憶體、Discord 延遲、外部服務（OWW、PO Token）、模組開機摘要、語音連線、伺服器清單 |
+| 自訂回應 | 搜尋、新增、編輯（可改名或換匹配類型）、刪除關鍵字回應，一條規則可設定多則訊息 |
+| AI 人格 | 編輯各模式的 system prompt 與 `_general`、`_voice` 共用規則（沒有 Discord 輸入框 4000 字的限制）、新增與刪除模式 |
+| AI 設定 | 指定使用者的人格模式（可搜尋成員）、各伺服器的隨機插話機率與逐頻道開關；檢視模型與額度設定 |
+| AI 用量 | 近 7／30／90 天的每日 token 長條圖，依來源、人格、使用者拆分，可切換成表格 |
+| 語音與音樂 | 自動加入的開關與目標頻道、正在播放與進度、跳過／停止／循環／隨機連播、佇列管理、閒置自動停止 |
+| 通知與報時 | Steam / Epic 限免通知頻道、查詢目前的限免遊戲、各伺服器整點報時開關、報時音檔檢查 |
+| 日誌 | 最近 500 則 log，每 2 秒更新，可依等級、模組、關鍵字篩選 |
+
+### 連線方式
+
+- **本機執行**：`.env` 設定 `ADMIN_PASSWORD` 後啟動 Bot，開啟 `http://localhost:3940/` 登入。
+- **部署在雲端**：預設只監聽 `127.0.0.1`，外部連不到。要從其他裝置使用時設定 `ADMIN_HOST=0.0.0.0`，並在部署平台把 `ADMIN_PORT`（預設 3940）綁定一個 **HTTPS** 網域。不要以純 HTTP 對外開放，否則密碼會以明文傳送。
+
+### 安全性
+
+- 沒有設定 `ADMIN_PASSWORD`（或少於 12 個字元）時完全不啟動；建議使用 24 個字元以上的隨機密碼。
+- 登入後以 HttpOnly、SameSite=Strict 的 Cookie 維持（預設 7 天）。簽章金鑰存在 `data/admin-session-secret`，再和密碼一起衍生：**換密碼等於讓所有裝置登出**。
+- 登入限流：每個來源 10 分鐘內最多失敗 10 次，全站 10 分鐘內最多失敗 50 次（已登入的裝置不受影響）。
+- 所有寫入請求都必須帶自訂 header 與 JSON body（防 CSRF）；網頁設有嚴格的 Content-Security-Policy，外部資料（伺服器名稱、回應內容、log）一律以純文字顯示。
+
+---
+
 ## 環境需求
 
 - **Node.js** v22 以上
@@ -82,7 +112,7 @@ docker build -t mousebot .
 docker run -d --env-file .env --name mousebot mousebot
 ```
 
-Docker image 以 `node:22-slim` 為基底，已透過 **supervisord** 同時管理 Node.js 主程式與 Python OWW 服務，並自動安裝 `edge-tts`、`yt-dlp` 等執行期工具，無需額外設定。分帳網頁介面已獨立成另一個專案與服務（splitbill-service），此容器不再對外開放網頁 port。
+Docker image 以 `node:22-slim` 為基底，已透過 **supervisord** 同時管理 Node.js 主程式與 Python OWW 服務，並自動安裝 `edge-tts`、`yt-dlp` 等執行期工具，無需額外設定。分帳網頁介面已獨立成另一個專案與服務（splitbill-service）；容器內只有選用的管理面板會開網頁 port（預設只監聽 127.0.0.1，見「管理面板」）。
 
 ### 方法二：本機直接執行
 
@@ -155,6 +185,13 @@ DEV_GUILD_ID=                             # 設定後 Slash Commands 只註冊�
 FORCE_COMMAND_SYNC=0                      # 1 = 忽略指令 hash 比對，強制重新註冊
 HEALTH_PORT=3939                          # /healthz 健康檢查埠（0 = 停用）；Docker HEALTHCHECK 使用
 HEALTH_HOST=127.0.0.1
+
+# ── 管理面板（選填；未設定 ADMIN_PASSWORD 就不啟動） ─────────────────
+ADMIN_PASSWORD=                           # 登入密碼，至少 12 個字元（建議 24 字元以上的隨機字串）
+ADMIN_PORT=3940
+ADMIN_HOST=127.0.0.1                      # 0.0.0.0 = 允許其他裝置連線（請務必經由 HTTPS）
+ADMIN_SESSION_HOURS=168                   # 登入有效時數（預設 7 天）
+ADMIN_SESSION_SECRET=                     # 選填，簽 Cookie 的金鑰；未設定時自動產生並存在 data/admin-session-secret
 
 # ── 自動加入語音頻道（選填） ─────────────────────────────────────────
 TARGET_VOICE_CHANNEL_ID=your_voice_channel_id
@@ -251,6 +288,14 @@ SPLITBILL_SERVICE_KEY=                    # 與 splitbill-service 的 SPLITBILL_
 
 ```
 Mousebot/
+├── admin/                            # 管理面板（設定 ADMIN_PASSWORD 才啟動）
+│   ├── server.js                     # HTTP 伺服器（node:http）：靜態檔案、API 路由、安全標頭
+│   ├── auth.js                       # 密碼登入、簽章 Cookie、登入限流
+│   ├── http.js                       # 極簡路由、HttpError、輸入驗證
+│   ├── discordInfo.js                # ID → 伺服器／頻道／使用者名稱、成員搜尋
+│   ├── voiceState.js                 # 語音連線與播放狀態、播放控制（與控制面板按鈕同邏輯）
+│   ├── api/                          # 各頁面的 API：overview、responses、prompts、ai、voice、notify、logs
+│   └── public/                       # 網頁（原生 JS ES modules，無建置步驟、不載入外部資源）
 ├── handlers/
 │   ├── ai/
 │   │   ├── aiChance.js               # 隨機插話機率控制，持久化至 data/replyChance.json
@@ -352,7 +397,7 @@ Mousebot/
 │   ├── config.js                     # 擁有者身分判斷（OWNER_USER_ID、isOwner）
 │   ├── health.js                     # /healthz 健康檢查端點（Docker HEALTHCHECK）
 │   ├── jsonStore.js                  # data/*.json 原子寫入、.bak 備份、合併寫入
-│   ├── logger.js                     # 統一 log 工具（LOG_LEVEL；success / info / warn / error / debug）
+│   ├── logger.js                     # 統一 log 工具（LOG_LEVEL；success / info / warn / error / debug），保留最近 500 則給管理面板
 │   ├── processGuards.js              # 全域 unhandledRejection / uncaughtException / 關閉流程（onShutdown）
 │   └── rateLimiter.js                # 滑動視窗節流器（AI 額度、帳單辨識）
 ├── data/                             # 執行期持久化資料（已列入 .gitignore，不提交）
@@ -369,6 +414,7 @@ Mousebot/
 │   ├── tokenUsage.json               # Gemini token 用量（每日，保留 90 天）
 │   ├── commandHash.json              # 上次註冊的 Slash Commands hash
 │   ├── timeAnnouncerSettings.json    # 各伺服器整點報時開關
+│   ├── admin-session-secret          # 管理面板 Cookie 簽章金鑰（管理面板啟動時自動產生）
 │   └── (steam/epic 通知去重 JSON)
 ├── temp/                             # STT 暫存 .wav 檔（已列入 .gitignore）
 ├── .gitignore
