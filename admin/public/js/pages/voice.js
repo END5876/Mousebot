@@ -181,7 +181,7 @@ export default function mountVoice(root, ctx) {
           autoJoinNote(g) ? h('div', { class: 'row-sub' }, autoJoinNote(g)) : null,
         ),
         joinControls(g),
-        idleSwitch(g),
+        idleSwitch(g, true),
       ))),
       note: '開關是「閒置自動停止」：頻道內 30 分鐘沒有其他人，或有人但 60 分鐘沒人說話時，自動停止播放（Bot 不會離開頻道）。',
     }) : null);

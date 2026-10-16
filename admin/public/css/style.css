@@ -210,12 +210,47 @@ svg.logo .logo-eye { fill: var(--card); }
   .app.nav-open .nav-scrim {
     display: block; position: fixed; inset: 0; z-index: 30; background: var(--scrim);
   }
-  .topbar .menu-btn { display: inline-flex; }
-  .topbar { padding: 10px 16px; min-height: 56px; }
+  .topbar { padding: 10px 16px; padding-top: calc(10px + env(safe-area-inset-top, 0px)); min-height: 56px; }
   .topbar h1 { font-size: 18px; }
   .topbar-sub { display: none; }
-  .content { padding: 4px 16px 40px; }
+  /* 底部留給分頁列 */
+  .content { padding: 4px 16px calc(var(--tabbar-h) + 24px + env(safe-area-inset-bottom, 0px)); }
+  .app > .tabbar { display: grid; } /* 選擇器較具體：下方 .tabbar 的 display: none 才不會蓋掉 */
+  .sidebar { padding-bottom: 0; }
+  /* 抽屜選單很長時，Bot 狀態與「主題／登出」固定在底部 */
+  .sidebar-foot {
+    position: sticky; bottom: 0;
+    margin: 0 -12px; padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    background: var(--card);
+    border-top: 1px solid var(--line);
+  }
+  .sidebar .brand { padding-top: env(safe-area-inset-top, 0px); }
 }
+
+/* ── 手機：底部分頁列（常用頁面＋「更多」打開完整選單）──── */
+:root { --tabbar-h: 60px; }
+.tabbar {
+  display: none;
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  height: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  background: color-mix(in srgb, var(--card) 94%, transparent);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid var(--line);
+}
+.tabbar a, .tabbar button {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  border: 0; background: transparent;
+  color: var(--ink-faint);
+  font-size: 11.5px; font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.tabbar svg.ic { width: 22px; height: 22px; }
+.tabbar a[aria-current="page"], .tabbar button.is-active { color: var(--accent-ink); font-weight: 700; }
+.tabbar a[aria-current="page"] svg.ic, .tabbar button.is-active svg.ic { stroke-width: 2.2; }
 
 /* ── 卡片 ─────────────────────────────────────────────── */
 .card {
@@ -808,6 +843,156 @@ details.disclosure[open] > summary svg.ic { transform: rotate(90deg); }
   .log-row { grid-template-columns: 18px minmax(0, 1fr); padding: 4px 12px; }
   .log-time { grid-column: 2; order: -1; font-size: 11px; }
   .log-view { height: calc(100vh - 290px); }
+}
+
+/* ══════════════════════════════════════════════════════
+   觸控裝置：按鈕、開關、輸入框加大（手指好點）；輸入框 16px 避免 iOS 點進去時自動放大畫面
+   ══════════════════════════════════════════════════════ */
+@media (pointer: coarse) {
+  .btn { height: 40px; }
+  .btn-sm { height: 36px; }
+  .btn-icon { width: 40px; }
+  .btn-sm.btn-icon { width: 36px; }
+  .seg-btn { height: 34px; }
+  .seg-sm .seg-btn { height: 30px; }
+  .input, .select, .textarea { font-size: 16px; min-height: 42px; }
+  .textarea.code { font-size: 14px; }
+  .switch-track { width: 46px; height: 28px; border-radius: 14px; }
+  .switch-track::after { width: 22px; height: 22px; }
+  .switch input:checked + .switch-track::after { transform: translateX(18px); }
+  .pick { padding: 12px 16px; }
+  .nav a { padding: 11px 12px; }
+  .combo-option { padding: 10px; }
+}
+
+/* ══════════════════════════════════════════════════════
+   手機版面（≤ 640px）
+   ══════════════════════════════════════════════════════ */
+.back-btn { display: none; }
+svg.ic.flip { transform: rotate(180deg); }
+
+@media (max-width: 640px) {
+  body { font-size: 14.5px; }
+  .page { gap: 14px; }
+  .content { padding-left: 12px; padding-right: 12px; }
+
+  /* 頁首的按鈕只留圖示（文字仍留給螢幕報讀器） */
+  .topbar-actions .btn { font-size: 0; gap: 0; width: 40px; padding: 0; }
+  .topbar-actions .btn svg.ic { width: 19px; height: 19px; }
+
+  /* 卡片：留白收緊；標題列的按鈕換到下一行，不跟標題搶寬度 */
+  .card { border-radius: 14px; }
+  .card-head { padding: 12px 14px; }
+  .card-head-actions { margin-left: 0; width: 100%; }
+  .card-body { padding: 14px; }
+  .card-foot { padding: 12px 14px; }
+  .card-foot .btn-primary, .card-foot .btn-danger-solid { flex: 1 1 auto; }
+  .card-note { padding: 10px 14px; }
+  .row { padding: 10px 14px; }
+  .guild-block { padding: 12px 14px; }
+  .list-label { padding-left: 14px; padding-right: 14px; }
+  .queue-head { padding: 12px 14px 6px; }
+
+  /* 數字摘要兩欄，最後落單的一格佔滿整列 */
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .stats > .stat:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .stat { padding: 12px 14px; }
+  .stat-value { font-size: 21px; }
+
+  .hero { padding: 14px; gap: 12px; }
+  .hero .avatar-lg { width: 48px; height: 48px; }
+  .hero > .row-main { flex: 1 1 0; }
+  .hero-aside { margin-left: 0; width: 100%; }
+
+  /* 工具列：搜尋框佔滿一行，分段選擇可以左右滑 */
+  .toolbar .input-icon { flex-basis: 100%; max-width: none; }
+  .toolbar > .seg { max-width: 100%; }
+  .toolbar > .select { flex: 1 1 140px; }
+
+  /* 一般表格：留白收緊 */
+  .table th, .table td { padding: 8px 10px; }
+  .share-cell { min-width: 64px; }
+
+  /* 表格改成卡片：每一列一張，欄位名稱放在值的左邊 */
+  .table-stack thead { display: none; }
+  .table-stack, .table-stack tbody, .table-stack tr { display: block; width: 100%; }
+  .table-stack tr { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .table-stack tr:last-child { border-bottom: 0; }
+  .table-stack td {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 3px 0; border: 0; text-align: right;
+  }
+  .table-stack td::before { content: attr(data-label); flex: none; color: var(--ink-faint); font-size: 12.5px; text-align: left; }
+  .table-stack td:not([data-label])::before { display: none; }
+  .table-stack td:not([data-label]) { justify-content: flex-start; text-align: left; }
+  .table-stack td > .select { width: auto; max-width: 62%; }
+  .table-stack tbody tr:hover td { background: transparent; }
+  .table-stack tr.is-warn { background: var(--warn-tint); }
+  .table-stack tr.is-warn td { background: transparent; }
+  .table-stack tr:has(.audit-action) { display: flex; flex-direction: column; }
+  .table-stack td.audit-action { order: -1; font-weight: 600; padding-bottom: 4px; }
+
+  /* 自訂回應：類型＋關鍵字一行、回應內容一行、操作在右側 */
+  .table-responses thead { display: none; }
+  .table-responses, .table-responses tbody { display: block; }
+  .table-responses tr {
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px 10px; align-items: start;
+    padding: 12px 14px; border-bottom: 1px solid var(--line);
+  }
+  .table-responses td { padding: 0; border: 0; }
+  .table-responses tbody tr:hover td { background: transparent; }
+  .table-responses tr:active { background: var(--surface); }
+  .table-responses .td-type, .table-responses .td-kw { grid-row: 1; padding-top: 2px; }
+  .table-responses .td-resp { grid-column: 1 / 3; grid-row: 2; }
+  .table-responses .td-actions { grid-column: 3; grid-row: 1 / span 2; align-self: center; }
+  .table-responses .td-actions .row-actions { flex-wrap: wrap; justify-content: flex-end; max-width: 84px; }
+
+  /* AI 人格：清單 → 編輯器 兩層切換 */
+  .split > .card:first-child { position: static; max-height: none; }
+  .split.has-selection > .card:first-child { display: none; }
+  .split:not(.has-selection) > .card:last-child { display: none; }
+  .back-btn { display: inline-flex; }
+  .editor-textarea { min-height: 52vh; }
+
+  /* 語音 */
+  .chance-row { gap: 10px; }
+  .np-thumb { display: none; }
+  .controls .seg { order: 3; }
+  .wake-row .select { max-width: none; }
+
+  /* 對話框：從底部滑出的面板，按鈕平分寬度 */
+  dialog.modal, dialog.modal.modal-wide {
+    width: 100%; max-width: 100vw;
+    margin: auto 0 0;
+    max-height: 92vh;
+    border-radius: 18px 18px 0 0;
+  }
+  dialog.modal[open] { animation: sheet-in .22s ease-out; }
+  .modal-head { padding: 14px 16px; }
+  .modal-head::before {
+    content: ""; position: absolute; top: 6px; left: 50%; transform: translateX(-50%);
+    width: 36px; height: 4px; border-radius: 2px; background: var(--line-strong);
+  }
+  .modal-head { position: relative; }
+  .modal-body { padding: 16px; }
+  .modal-foot { padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .modal-foot .spacer { display: none; }
+  .modal-foot .btn { flex: 1 1 0; }
+
+  /* 提示訊息：貼在分頁列上方、佔滿寬度 */
+  .toasts { left: 12px; right: 12px; bottom: calc(var(--tabbar-h) + 12px + env(safe-area-inset-bottom, 0px)); justify-items: stretch; }
+  .toast { max-width: none; }
+
+  .log-view { height: calc(100vh - 300px - var(--tabbar-h)); }
+  .log-jump { bottom: 12px; }
+}
+
+@keyframes sheet-in { from { transform: translateY(48px); opacity: .4; } }
+
+/* 有分頁列時，日誌頁的高度要扣掉它 */
+@media (max-width: 880px) and (min-width: 641px) {
+  .log-view { height: calc(100vh - 260px - var(--tabbar-h)); }
+  .toasts { bottom: calc(var(--tabbar-h) + 16px); }
 }
 
 @media (prefers-reduced-motion: reduce) {

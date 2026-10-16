@@ -49,9 +49,9 @@ export default function mountMaintenance(root, ctx) {
 
     const rows = d.local.map((c) => h('tr', null,
       h('td', null, h('code', null, `/${c.name}`)),
-      h('td', null, c.description),
-      h('td', { class: 'num' }, c.subcommands ? fmtInt(c.subcommands) : '—'),
-      h('td', null, !d.remote ? h('span', { class: 'hint' }, '—')
+      h('td', { 'data-label': '說明' }, c.description),
+      h('td', { class: 'num', 'data-label': '子指令' }, c.subcommands ? fmtInt(c.subcommands) : '—'),
+      h('td', { 'data-label': 'Discord' }, !d.remote ? h('span', { class: 'hint' }, '—')
         : remoteNames.has(c.name) ? statusBadge('good', '已註冊') : statusBadge('warn', '還沒註冊')),
     ));
 
@@ -68,7 +68,7 @@ export default function mountMaintenance(root, ctx) {
           missing.length ? h('div', { class: 'diff-list' }, h('span', { class: 'field-label' }, 'Discord 上還沒有：'), missing.map((n) => h('code', null, `/${n}`))) : null,
           extra.length ? h('div', { class: 'diff-list' }, h('span', { class: 'field-label' }, 'Discord 上多出來（已移除的指令）：'), extra.map((n) => h('code', null, `/${n}`))) : null,
         ) : null,
-        h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
+        h('div', { class: 'table-wrap' }, h('table', { class: 'table table-stack' },
           h('thead', null, h('tr', null, h('th', null, '指令'), h('th', null, '說明'), h('th', { class: 'num' }, '子指令'), h('th', null, 'Discord'))),
           h('tbody', null, rows),
         )),

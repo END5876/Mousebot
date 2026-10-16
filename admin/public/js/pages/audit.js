@@ -60,12 +60,12 @@ export default function mountAudit(root, ctx) {
       fill(listBody, emptyState(entries.length ? '沒有符合的紀錄' : '還沒有任何操作紀錄', 'history'));
       return;
     }
-    fill(listBody, h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
+    fill(listBody, h('div', { class: 'table-wrap' }, h('table', { class: 'table table-stack' },
       h('thead', null, h('tr', null, h('th', null, '時間'), h('th', null, '操作'), h('th', null, '來源'))),
       h('tbody', null, shown.map((e) => h('tr', { class: e.level === 'warn' ? 'is-warn' : null },
-        h('td', { class: 'audit-time' }, fmtDateTime(e.ts)),
-        h('td', null, e.level === 'warn' ? [icon('alert', 'ic-sm'), ' '] : null, e.action),
-        h('td', { class: 'audit-source mono' }, e.source || '—'),
+        h('td', { class: 'audit-time', 'data-label': '時間' }, fmtDateTime(e.ts)),
+        h('td', { class: 'audit-action' }, e.level === 'warn' ? [icon('alert', 'ic-sm'), ' '] : null, e.action),
+        h('td', { class: 'audit-source mono', 'data-label': '來源' }, e.source || '—'),
       ))),
     )));
   }
