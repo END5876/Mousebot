@@ -239,4 +239,5 @@ function setupNoticeCommands(client) {
   );
 }
 
-module.exports = { setupNoticeCommands };
+// PLATFORMS：管理面板直接操作同一份頻道清單（noticeService 的記憶體與檔案才會一致）
+module.exports = { setupNoticeCommands, PLATFORMS };

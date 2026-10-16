@@ -311,10 +311,27 @@ function setupTimeAnnouncer(client) {
   );
 }
 
+/** 已開啟報時的伺服器 ID（管理面板用） */
+function listEnabledGuilds() {
+  return [...enabledGuildIds];
+}
+
+/** 0~23 點各自對應的音檔，以及檔案是否存在（管理面板用） */
+function getSoundStatus() {
+  return Object.entries(HOUR_SOUND_MAP).map(([hour, file]) => ({
+    hour: Number(hour),
+    file,
+    exists: fs.existsSync(path.join(SOUND_DIR, file)),
+  }));
+}
+
 module.exports = {
   setupTimeAnnouncer,
   playHourlySound,  // 匯出方便測試 / 手動觸發
   getNowParts,
   isAnnouncerEnabled,
   setAnnouncerEnabled,
+  listEnabledGuilds,
+  getSoundStatus,
+  TIMEZONE,
 };

@@ -823,4 +823,75 @@ function setupAutoJoinCommands(client) {
   });
 }
 
-module.exports = { setupAutoJoinCommands };
+/* ------------------------------------------------------------------ */
+/* 管理面板                                                            */
+/* ------------------------------------------------------------------ */
+
+function getAutoJoinConfig() {
+  return { ...config };
+}
+
+// 加入頻道可能要等十幾秒，不讓網頁的請求跟著卡住：在背景執行，結果看 log 與連線狀態
+function reconcileInBackground(client) {
+  ensureConnected(client).catch(error => logger.error('AutoJoin', '自動加入失敗:', error));
+}
+
+// 與選單的「切換自動加入開關」一致：關閉時不會立即離開語音頻道
+function setAutoJoinEnabled(client, enabled) {
+  if (config.enabled !== enabled) {
+    saveConfig({ ...config, enabled });
+
+    if (enabled) {
+      startAutoJoinCheck(client);
+      reconcileInBackground(client);
+    } else {
+      stopAutoJoinCheck();
+    }
+  }
+  return getAutoJoinConfig();
+}
+
+// 與選單的「變更目標語音頻道」一致，但可以選任何一個伺服器的頻道（跨伺服器時舊連線由 settleManagedGuild 清理）。
+// 頻道不合用時丟出 code = 'EINVAL' 的錯誤，訊息可直接顯示給使用者。
+async function setAutoJoinTarget(client, channelId) {
+  const invalid = message => Object.assign(new Error(message), { code: 'EINVAL' });
+  const channel = await client.channels.fetch(channelId).catch(() => null);
+
+  if (
+    !channel ||
+    ![ChannelType.GuildVoice, ChannelType.GuildStageVoice].includes(channel.type)
+  ) {
+    throw invalid('找不到這個語音或舞台頻道');
+  }
+
+  const botMember =
+    channel.guild.members.me ||
+    await channel.guild.members.fetchMe().catch(() => null);
+
+  const permissions = botMember && channel.permissionsFor(botMember);
+
+  if (!permissions?.has([
+    PermissionFlagsBits.ViewChannel,
+    PermissionFlagsBits.Connect,
+  ])) {
+    throw invalid('Bot 沒有檢視頻道或連線權限，請先調整頻道權限');
+  }
+
+  const previousChannelId = config.targetChannelId;
+
+  saveConfig({
+    ...config,
+    targetChannelId: channel.id,
+    targetGuildId: channel.guild.id,
+  });
+
+  if (config.enabled && previousChannelId !== channel.id) reconcileInBackground(client);
+  return getAutoJoinConfig();
+}
+
+module.exports = {
+  setupAutoJoinCommands,
+  getAutoJoinConfig,
+  setAutoJoinEnabled,
+  setAutoJoinTarget,
+};

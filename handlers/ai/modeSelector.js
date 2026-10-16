@@ -59,6 +59,13 @@ function getUserModeOverride(userId) {
 }
 
 /**
+ * 所有使用者的動態模式設定 { userId: mode }（管理面板用）
+ */
+function listUserModes() {
+    return Object.fromEntries(userModeOverride);
+}
+
+/**
  * 根據用戶 ID 選擇適當的模式
  * 優先順序：動態覆蓋 > 特殊身份 > 預設
  * 覆蓋的模式檔若已被刪除，就略過覆蓋往下判斷
@@ -92,5 +99,6 @@ module.exports = {
     getModeName,
     setUserMode,
     getUserModeOverride,
+    listUserModes,
     getAvailableModes,
 };

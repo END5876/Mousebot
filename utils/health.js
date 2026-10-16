@@ -101,4 +101,4 @@ function startHealthServer(client) {
     return server;
 }
 
-module.exports = { startHealthServer };
+module.exports = { startHealthServer, collectHealth: collect };

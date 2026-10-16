@@ -89,6 +89,49 @@ async function sendResponse(channel, response) {
   for (const msg of list) await channel.send(msg);
 }
 
+// ── 管理面板用的讀寫 API ─────────────────────────────────
+// 在副本上修改、寫檔成功才換掉快取：寫入失敗時記憶體維持原狀
+const RESPONSE_TYPES = ['exact', 'contains'];
+
+/** 整份規則的副本（呼叫端可以隨意修改） */
+function listResponses() {
+  return structuredClone(loadResponses());
+}
+
+/**
+ * 新增或更新一條規則；from 與目標不同時視為改名或換類型（刪掉原本那條）。
+ * 目標關鍵字已存在、又不是在編輯它本身時，丟出 code = 'EEXIST' 的錯誤（overwrite 為 true 則直接覆蓋）。
+ * @param {{ type: string, keyword: string, value: string|string[],
+ *           from?: { type: string, keyword: string } | null, overwrite?: boolean }} rule
+ * @returns {{ created: boolean }}
+ */
+function upsertResponse({ type, keyword, value, from = null, overwrite = false }) {
+  if (!RESPONSE_TYPES.includes(type)) throw new Error(`未知的匹配類型：${type}`);
+  if (!keyword || keyword === '__proto__') throw new Error('關鍵字不可為空，也不能使用保留字');
+
+  const next = listResponses();
+  const editingSelf = from && from.type === type && from.keyword === keyword;
+  const exists = hasOwn(next[type], keyword);
+  if (exists && !editingSelf && !overwrite) {
+    throw Object.assign(new Error(`${type === 'exact' ? '完全匹配' : '包含匹配'}已經有「${keyword}」這條規則`), { code: 'EEXIST' });
+  }
+
+  if (from && !editingSelf && RESPONSE_TYPES.includes(from.type)) delete next[from.type][from.keyword];
+  next[type][keyword] = value;
+  saveResponses(next);
+  return { created: !exists && !from };
+}
+
+/** 刪除一條規則；不存在時回傳 false */
+function removeResponse(type, keyword) {
+  if (!RESPONSE_TYPES.includes(type)) throw new Error(`未知的匹配類型：${type}`);
+  const next = listResponses();
+  if (!hasOwn(next[type], keyword)) return false;
+  delete next[type][keyword];
+  saveResponses(next);
+  return true;
+}
+
 // ── 權限檢查 ─────────────────────────────────────────────
 function isAllowed(userId) {
   return isOwner(userId);
@@ -327,4 +370,4 @@ function setupCustomResponses(client) {
   }
 }
 
-module.exports = { setupCustomResponses, hasCustomResponse };
+module.exports = { setupCustomResponses, hasCustomResponse, listResponses, upsertResponse, removeResponse };
