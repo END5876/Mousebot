@@ -15,7 +15,6 @@ const MAX_IMAGE_SIZE_MB = 30;
 const TTS_MAX_LENGTH = 1000;
 const IMAGE_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_MODE_CACHE_SIZE = 1000;
-const HISTORY_CACHE_TTL_MS = 30 * 1000;
 const IMAGE_CACHE_MAX_ENTRIES = 40;          // 每筆最多約 1MB 級 base64，限制總量避免吃光記憶體
 const IMAGE_FETCH_TIMEOUT_MS = 10_000;
 const IMAGE_MAX_REDIRECTS = 3;
@@ -29,7 +28,6 @@ const aiTTSEnabled = new Map();
 const memoryClearedAt = new Map();
 const imageCache = new Map();
 const botMessageCache = new Map();
-const historyCache = new Map();
 
 // ════════════════════════════════════════════════════════
 //  記憶 / TTS 開關
@@ -483,15 +481,6 @@ setInterval(() => {
     if (cleared > 0) logger.debug('Image Cache', `已清除 ${cleared} 筆過期快取`);
 }, IMAGE_CACHE_TTL_MS);
 
-setInterval(() => {
-    const now = Date.now();
-    let cleared = 0;
-    for (const [channelId, entry] of historyCache.entries()) {
-        if (now - entry.cachedAt >= HISTORY_CACHE_TTL_MS) { historyCache.delete(channelId); cleared++; }
-    }
-    if (cleared > 0) logger.debug('History Cache', `已清除 ${cleared} 個過期頻道快取`);
-}, HISTORY_CACHE_TTL_MS);
-
 // ════════════════════════════════════════════════════════
 //  withTyping：持續顯示「正在輸入中」直到 asyncFn 結束
 // ════════════════════════════════════════════════════════
@@ -595,7 +584,6 @@ function replaceMentions(message, botId) {
 }
 
 module.exports = {
-    historyCache, HISTORY_CACHE_TTL_MS,
     clearUserMemory, getMemoryClearTime,
     isAITTSEnabled, setAITTSEnabled,
     recordBotMessageContext, getBotMessageContext,

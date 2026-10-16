@@ -11,7 +11,6 @@ const {
 } = require('./searchGrounding');
 
 const {
-    historyCache, HISTORY_CACHE_TTL_MS,
     getMemoryClearTime, getBotMessageContext,
     processAttachments,
     processImageUrls,
@@ -174,35 +173,21 @@ function mergeConsecutiveRoles(history) {
 }
 
 // 歷史裡的機器人發言會被當成 model 自己說過的話，輕量模型會直接沿用那個語氣：
-// 回給別人的、或用別的人格說的都排除，只留這個使用者在目前人格下的對話
+// 回給別人的、或用別的人格說的都排除，只留這個使用者在目前人格下的對話。
+// 查不到紀錄的（重啟前的回覆、/response 自訂回應等其他功能發的訊息）只有直接回覆這個使用者的才算
 function isBotReplyToUser(msg, userId, mode, fetchedMessages) {
     const ctx = getBotMessageContext(msg.id);
     if (ctx) return ctx.userId === userId && ctx.mode === mode;
-    if (msg.reference?.messageId) {
-        const refMsg = fetchedMessages.get(msg.reference.messageId);
-        if (refMsg && refMsg.author.id === userId) return true;
-        if (!refMsg || refMsg.author.id !== userId) return false;
-    }
-    return true;
+    const refMsg = msg.reference?.messageId ? fetchedMessages.get(msg.reference.messageId) : null;
+    return refMsg?.author.id === userId;
 }
 
 async function fetchUserChannelHistory(channel, userId, currentMessageId, botId, mode) {
     try {
-        const channelId = channel.id;
-        const now = Date.now();
+        // 每次都重新抓：快取會漏掉之後的訊息（包括 bot 自己剛回的話），連續對話會接不上
+        const fetched = await channel.messages.fetch({ limit: HISTORY_FETCH_LIMIT });
 
-        let fetched;
-        const cached = historyCache.get(channelId);
-        if (cached && (now - cached.cachedAt) < HISTORY_CACHE_TTL_MS) {
-            logger.debug('History', `命中快取：${channelId}`);
-            fetched = cached.messages;
-        } else {
-            fetched = await channel.messages.fetch({ limit: HISTORY_FETCH_LIMIT });
-            historyCache.set(channelId, { messages: fetched, cachedAt: now });
-            logger.debug('History', `已更新快取：${channelId}`);
-        }
-
-        const currentMsg       = fetched.get(currentMessageId);
+        const currentMsg      = fetched.get(currentMessageId);
         const currentTimestamp = currentMsg?.createdTimestamp ?? Date.now();
         const clearTime        = getMemoryClearTime(userId);
 
