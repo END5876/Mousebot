@@ -18,6 +18,7 @@ const {
     processEmbeds,
     dedupeInlineParts,
     splitMessage,
+    replaceMentions,
 } = require('./aiUtils');
 
 // ════════════════════════════════════════════════════════
@@ -240,7 +241,8 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId,
             const parts = [];
             attachmentPartsList[index].forEach(img => parts.push({ inlineData: { mimeType: img.mimeType, data: img.data } }));
 
-            const textContent = maskMediaUrls(msg.cleanContent || msg.content, getMediaEmbeds(msg));
+            // 不用 cleanContent：它會把 @提及 換成伺服器暱稱，跟發言者標籤的 username 對不上
+            const textContent = maskMediaUrls(replaceMentions(msg, botId), getMediaEmbeds(msg));
             if (textContent?.trim().length > 0) {
                 // 歷史紀錄中，明確標示發言者
                 if (msg.author.id === botId) {
@@ -313,7 +315,7 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
 
     if (refMsg) {
         const refMedia   = await processMediaEmbeds(
-            refMsg.cleanContent?.trim() || refMsg.content?.trim(), getMediaEmbeds(refMsg)
+            replaceMentions(refMsg, botId), getMediaEmbeds(refMsg)
         );
         const refContent = refMedia.text;
         const refNotes   = [];
