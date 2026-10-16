@@ -182,12 +182,10 @@ function createAuth({ password, secretFile, sessionHours }) {
       globalFails.count += 1;
       // 表滿了就不再記新的來源（全站上限仍會計數），不刪舊紀錄——否則灌入大量 IP 就能洗掉別人的失敗次數
       if (failures.has(source) || failures.size < MAX_TRACKED_SOURCES) failures.set(source, rec);
-      logger.warn('Admin', `管理面板登入失敗（來源 ${source}）`);
       return { status: 401, body: { error: '密碼錯誤' } };
     }
 
     failures.delete(source);
-    logger.info('Admin', `管理面板登入成功（來源 ${source}）`);
     return {
       status: 200,
       headers: { 'Set-Cookie': cookieString(req, issueToken(), Math.floor(sessionMs / 1000)) },
@@ -217,4 +215,4 @@ function createAuth({ password, secretFile, sessionHours }) {
   };
 }
 
-module.exports = { createAuth, _clientKey: clientKey, _ipv6Prefix64: ipv6Prefix64 };
+module.exports = { createAuth, clientKey, _clientKey: clientKey, _ipv6Prefix64: ipv6Prefix64 };

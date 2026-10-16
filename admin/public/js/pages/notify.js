@@ -1,7 +1,8 @@
 // 通知與報時：Steam / Epic 限免通知頻道（與 /notify channel 共用）、整點報時（與 /timeannounce 共用）
 
-import { h, icon } from '../dom.js';
+import { fill, h, icon } from '../dom.js';
 import { api, seg } from '../api.js';
+import { fmtDateTime } from '../format.js';
 import {
   avatar, card, confirmDialog, emptyState, errorState, loadingState, openModal, selectEl, switchControl, toast, withBusy,
 } from '../ui.js';
@@ -79,12 +80,19 @@ export default function mountNotify(root, ctx) {
       );
     });
 
+    const checkBtn = h('button', { type: 'button', class: 'btn btn-sm', disabled: !p.channels.length, title: p.channels.length ? null : '先新增通知頻道' }, icon('send', 'ic-sm'), '立即檢查並推播');
+    checkBtn.addEventListener('click', () => checkNow(p, checkBtn));
+
     return card({
       title: `${p.name} 限免通知`,
       sub: `${p.channels.length} 個頻道`,
       iconName: 'gift',
       tight: true,
-      actions: h('button', { type: 'button', class: 'btn btn-sm', onclick: () => previewGames(p) }, icon('search', 'ic-sm'), '查看目前限免'),
+      actions: [
+        h('button', { type: 'button', class: 'btn btn-sm', onclick: () => previewGames(p) }, icon('search', 'ic-sm'), '查看目前限免'),
+        h('button', { type: 'button', class: 'btn btn-sm', onclick: () => openHistory(p) }, icon('history', 'ic-sm'), '通知紀錄'),
+        checkBtn,
+      ],
       body: [
         p.channels.length ? h('div', { class: 'rows' }, rows) : emptyState('還沒有設定通知頻道', 'bell'),
         h('div', { class: 'guild-block' },
@@ -95,6 +103,59 @@ export default function mountNotify(root, ctx) {
       ],
       note: '每 30 分鐘檢查一次，發現新的限免遊戲就推播到這些頻道（同一款遊戲只通知一次）。',
     });
+  }
+
+  async function checkNow(p, button) {
+    const ok = await confirmDialog({
+      title: `立即檢查 ${p.name} 限免`,
+      message: `現在就檢查一次；有還沒通知過的限免遊戲，會馬上推播到 ${p.channels.length} 個通知頻道（和每 30 分鐘的定時檢查是同一個流程，不會重複推播）。`,
+      confirmText: '檢查並推播',
+    });
+    if (!ok) return;
+    let result = null;
+    const done = await withBusy(button, async () => { result = await api.post(`/api/notify/${seg(p.key)}/check`); });
+    if (!done) return;
+    if (result.skipped) toast(`沒有檢查：${result.skipped}`, { type: 'info' });
+    else if (!result.newGames.length) toast(`目前 ${result.found} 款限免都已經通知過，沒有新遊戲`, { type: 'info' });
+    else toast(`已推播 ${result.newGames.length} 款：${result.newGames.join('、')}${result.failed ? `（${result.failed} 則發送失敗，詳見日誌）` : ''}`);
+  }
+
+  async function openHistory(p) {
+    const body = h('div', null, loadingState());
+    openModal({ title: `${p.name} 通知紀錄`, body, wide: true });
+    const load = async () => {
+      try {
+        const { items } = await api.get(`/api/notify/${seg(p.key)}/history`);
+        if (!items.length) { fill(body, emptyState('還沒有通知過任何遊戲', 'history')); return; }
+        fill(body,
+          h('div', { class: 'callout' }, icon('info', 'ic-sm'),
+            h('span', null, '同一款遊戲只會通知一次，紀錄保留 90 天。移除紀錄後，下次檢查時如果它還在限免，會再推播一次（例如上次推播失敗）。較舊的紀錄沒有遊戲名稱。')),
+          h('div', { class: 'rows history-list' }, items.map((item) => {
+            const removeBtn = h('button', { type: 'button', class: 'btn btn-sm btn-ghost btn-danger' }, icon('trash', 'ic-sm'), '移除紀錄');
+            removeBtn.addEventListener('click', async () => {
+              const ok = await confirmDialog({
+                title: '移除通知紀錄',
+                message: `移除「${item.name ?? item.id}」的紀錄後，下次檢查時如果它還在限免，會再推播一次。`,
+                confirmText: '移除',
+              });
+              if (!ok) return;
+              const done = await withBusy(removeBtn, () => api.del(`/api/notify/${seg(p.key)}/history/${seg(item.id)}`));
+              if (done) { toast('已移除紀錄'); load(); }
+            });
+            return h('div', { class: 'row' },
+              h('div', { class: 'row-main' },
+                h('div', { class: 'row-title' }, item.name ?? `（沒有名稱）${item.id}`),
+                h('div', { class: 'row-sub' }, `通知時間：${fmtDateTime(item.notifiedAt)}${item.name ? `・ID ${item.id}` : ''}`),
+              ),
+              removeBtn,
+            );
+          })),
+        );
+      } catch (err) {
+        fill(body, errorState(err, load));
+      }
+    };
+    load();
   }
 
   async function previewGames(p) {

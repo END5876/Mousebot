@@ -80,4 +80,17 @@ async function gracefulShutdown(signal) {
   process.exit(0);
 }
 
-module.exports = { install, setFatalHook, onShutdown };
+/**
+ * 主動要求關閉（管理面板的「重新啟動」）：流程與收到 SIGTERM 相同，
+ * 結束後由 supervisord（autorestart=true）重新啟動；沒有 supervisor 時就是單純關閉。
+ */
+function requestShutdown(reason) {
+  return gracefulShutdown(reason);
+}
+
+/** 是否由 supervisord 管理（它會在子程序的環境變數設定 SUPERVISOR_ENABLED） */
+function isSupervised() {
+  return !!process.env.SUPERVISOR_ENABLED;
+}
+
+module.exports = { install, setFatalHook, onShutdown, requestShutdown, isSupervised };

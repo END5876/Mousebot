@@ -23,15 +23,22 @@ function createNoticeService({ label, notifiedFileName, channelFileName }) {
   const NOTIFIED_FILE = path.join(DATA_DIR, notifiedFileName);
   const CONFIG_FILE   = path.join(DATA_DIR, channelFileName);
 
-  let notifiedGames    = new Map();
+  const notifiedGames  = new Map(); // id → 通知時間
+  const notifiedNames  = new Map(); // id → 遊戲名稱（管理面板顯示用；舊紀錄沒有名稱）
   let notifyChannelIds = [];
 
   // ── 讀取已通知清單 ──────────────────────────────────────
+  // 格式：[[id, 時間, 名稱?], ...]；更舊的版本是單純的 id 陣列
   const parsedNotified = readJson(NOTIFIED_FILE, []);
-  if (Array.isArray(parsedNotified) && Array.isArray(parsedNotified[0])) {
-    notifiedGames = new Map(parsedNotified);
-  } else if (Array.isArray(parsedNotified)) {
-    parsedNotified.forEach(id => notifiedGames.set(id, Date.now()));
+  if (Array.isArray(parsedNotified)) {
+    for (const entry of parsedNotified) {
+      if (Array.isArray(entry)) {
+        notifiedGames.set(entry[0], entry[1]);
+        if (entry[2]) notifiedNames.set(entry[0], entry[2]);
+      } else {
+        notifiedGames.set(entry, Date.now());
+      }
+    }
   }
   logger.debug(label, `已載入 ${notifiedGames.size} 筆通知記錄`);
 
@@ -57,13 +64,23 @@ function createNoticeService({ label, notifiedFileName, channelFileName }) {
   function saveNotifiedGames() {
     const cutoff = Date.now() - MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
     for (const [id, timestamp] of notifiedGames) {
-      if (timestamp < cutoff) notifiedGames.delete(id);
+      if (timestamp < cutoff) {
+        notifiedGames.delete(id);
+        notifiedNames.delete(id);
+      }
     }
+    const entries = [...notifiedGames].map(([id, ts]) => (notifiedNames.has(id) ? [id, ts, notifiedNames.get(id)] : [id, ts]));
     try {
-      writeJsonAtomic(NOTIFIED_FILE, [...notifiedGames], { pretty: false });
+      writeJsonAtomic(NOTIFIED_FILE, entries, { pretty: false });
     } catch (e) {
       logger.error(label, `儲存已通知清單失敗: ${e.message}`);
     }
+  }
+
+  // id 可能是數字（Steam / GamerPower）或字串（Epic）；從網址傳進來的一律是字串，比對時統一轉字串
+  function findNotifiedKey(id) {
+    for (const key of notifiedGames.keys()) if (String(key) === String(id)) return key;
+    return undefined;
   }
 
   return {
@@ -100,8 +117,28 @@ function createNoticeService({ label, notifiedFileName, channelFileName }) {
 
     // ── 已通知清單 ────────────────────────────────────────
     hasNotified(id) { return notifiedGames.has(id); },
-    markNotified(id) { notifiedGames.set(id, Date.now()); },
+    markNotified(id, name) {
+      notifiedGames.set(id, Date.now());
+      if (name) notifiedNames.set(id, name);
+    },
     persistNotified() { saveNotifiedGames(); },
+
+    /** 已通知過的遊戲（新到舊），管理面板用 */
+    listNotified() {
+      return [...notifiedGames]
+        .map(([id, ts]) => ({ id: String(id), notifiedAt: ts, name: notifiedNames.get(id) ?? null }))
+        .sort((a, b) => b.notifiedAt - a.notifiedAt);
+    },
+
+    /** 忘記某筆通知紀錄：下次檢查時若仍是限免，會再推播一次 */
+    forgetNotified(id) {
+      const key = findNotifiedKey(id);
+      if (key === undefined) return false;
+      notifiedGames.delete(key);
+      notifiedNames.delete(key);
+      saveNotifiedGames();
+      return true;
+    },
   };
 }
 
@@ -127,10 +164,21 @@ async function fetchJson(url, { retries = 3, delayMs = 3000, label = 'Notice' } 
 // ════════════════════════════════════════════════════════
 function createPollingLoop({ client, service, getFreeGames, buildMessage, idField, checkIntervalMs, logIntervalMs }) {
   let lastLogTime = 0;
+  let running = null;
 
-  async function checkAndNotify() {
+  // 定時輪詢與管理面板的「立即檢查」可能同時觸發：兩邊都在 markNotified 之前算出「新遊戲」，
+  // 同一款就會被推播兩次。正在檢查時直接沿用同一次的結果。
+  function checkAndNotify() {
+    running ??= runCheck().finally(() => { running = null; });
+    return running;
+  }
+
+  /**
+   * @returns {Promise<{ skipped?: string, found?: number, newGames?: string[], channels?: number, failed?: number }>}
+   */
+  async function runCheck() {
     const channelIds = service.channelIds;
-    if (channelIds.length === 0) return;
+    if (channelIds.length === 0) return { skipped: '尚未設定通知頻道' };
 
     const now = Date.now();
     if (now - lastLogTime >= logIntervalMs) {
@@ -146,17 +194,20 @@ function createPollingLoop({ client, service, getFreeGames, buildMessage, idFiel
       )
     ).filter(Boolean);
 
-    if (channels.length === 0)
-      return logger.error(service.label, `所有設定的頻道均無法存取，跳過本次檢查`);
+    if (channels.length === 0) {
+      logger.error(service.label, `所有設定的頻道均無法存取，跳過本次檢查`);
+      return { skipped: '所有設定的頻道都無法存取' };
+    }
 
     const games = await getFreeGames();
     const newGames = games.filter(game => !service.hasNotified(game[idField]));
-    if (newGames.length === 0) return;
+    if (newGames.length === 0) return { found: games.length, newGames: [], channels: channels.length, failed: 0 };
 
     logger.info(service.label, `🎮 發現 ${newGames.length} 款新限免遊戲：${newGames.map(g => g.name).join('、')}`);
 
+    let failed = 0;
     for (const game of newGames) {
-      service.markNotified(game[idField]);
+      service.markNotified(game[idField], game.name);
 
       const results = await Promise.allSettled(
         channels.map(ch => ch.send(buildMessage(game)))
@@ -166,12 +217,14 @@ function createPollingLoop({ client, service, getFreeGames, buildMessage, idFiel
         if (result.status === 'fulfilled') {
           logger.success(service.label, `已通知 #${channels[i].name}：${game.name}`);
         } else {
+          failed++;
           logger.error(service.label, `發送至 #${channels[i].name} 失敗:`, result.reason?.message);
         }
       });
     }
 
     service.persistNotified();
+    return { found: games.length, newGames: newGames.map(g => g.name), channels: channels.length, failed };
   }
 
   function start() {

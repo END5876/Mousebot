@@ -1,5 +1,7 @@
 const { playTTS } = require('../voice/ttsHandler');
 const logger = require('../../utils/logger');
+const path = require('path');
+const { readJson, writeJsonAtomic } = require('../../utils/jsonStore');
 const sharp = require('sharp'); // 引入 sharp 進行圖片壓縮
 // 關閉 libvips 的 operation cache（預設最多 50MB）：每張圖只處理一次，結果已由下方 imageCache 快取，這層純屬重複
 sharp.cache(false);
@@ -24,7 +26,12 @@ const EMOJI_MAX_COUNT = 5;                   // 每則訊息最多送出的 emoj
 // ════════════════════════════════════════════════════════
 //  快取
 // ════════════════════════════════════════════════════════
-const aiTTSEnabled = new Map();
+// 各伺服器的 AI 回覆朗讀開關（/ai tts 與管理面板共用），存在 data/aiTTS.json，重新啟動後保留
+const AI_TTS_PATH = path.resolve(__dirname, '../../data/aiTTS.json');
+const aiTTSEnabled = (() => {
+    const saved = readJson(AI_TTS_PATH, {});
+    return new Map(Object.entries(saved && typeof saved === 'object' ? saved : {}).filter(([, v]) => typeof v === 'boolean'));
+})();
 const memoryClearedAt = new Map();
 const imageCache = new Map();
 const botMessageCache = new Map();
@@ -38,6 +45,11 @@ function isAITTSEnabled(guildId) {
 
 function setAITTSEnabled(guildId, value) {
     aiTTSEnabled.set(guildId, value);
+    try {
+        writeJsonAtomic(AI_TTS_PATH, Object.fromEntries(aiTTSEnabled));
+    } catch (err) {
+        logger.warn('AI', `儲存 AI 朗讀開關失敗：${err.message}`);
+    }
 }
 
 function clearUserMemory(userId) {

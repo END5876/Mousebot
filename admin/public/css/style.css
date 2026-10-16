@@ -96,6 +96,7 @@ button { font: inherit; color: inherit; }
 :focus-visible { outline: none; box-shadow: var(--focus); }
 [hidden] { display: none !important; }
 .sprite { display: none; }
+.spacer { flex: 1 1 auto; }
 .noscript { padding: 24px; text-align: center; }
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
@@ -592,6 +593,21 @@ dialog.modal::backdrop { background: var(--scrim); }
 .pick-title { font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .pick-sub { font-size: 12.5px; color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor-textarea { min-height: 420px; }
+.version-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 14px; }
+.version-list { max-height: 52vh; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.version-preview {
+  margin: 0; max-height: 52vh; overflow: auto;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.version-actions { margin-top: 14px; }
+@media (max-width: 640px) {
+  .version-layout { grid-template-columns: minmax(0, 1fr); }
+  .version-list { max-height: 180px; }
+}
 
 /* ── AI 設定 ──────────────────────────────────────────── */
 .user-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -614,7 +630,8 @@ dialog.modal::backdrop { background: var(--scrim); }
 .chosen { display: flex; align-items: center; gap: 10px; padding: 4px 6px 4px 4px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); min-height: 36px; }
 .chosen .row-main { line-height: 1.3; }
 .add-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto; gap: 10px; align-items: end; }
-@media (max-width: 640px) { .add-row { grid-template-columns: minmax(0, 1fr); } }
+.add-row.add-row-2 { grid-template-columns: minmax(0, 1fr) auto; }
+@media (max-width: 640px) { .add-row, .add-row.add-row-2 { grid-template-columns: minmax(0, 1fr); } }
 .chance-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, 260px) 56px auto; gap: 14px; align-items: center; }
 .chance-value { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
 @media (max-width: 640px) { .chance-row { grid-template-columns: minmax(0, 1fr) 56px; } .chance-row .range { grid-column: 1 / -1; order: 3; } }
@@ -633,6 +650,8 @@ details.disclosure[open] > summary svg.ic { transform: rotate(90deg); }
 .guild-block { padding: 14px 18px; border-top: 1px solid var(--line); display: grid; gap: 10px; }
 .guild-block:first-child { border-top: 0; }
 .guild-title { display: flex; align-items: center; gap: 10px; font-weight: 600; min-width: 0; }
+.tts-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.tts-say { flex: 1 1 320px; }
 
 /* ── 圖表 ─────────────────────────────────────────────── */
 .chart { position: relative; }
@@ -678,6 +697,19 @@ details.disclosure[open] > summary svg.ic { transform: rotate(90deg); }
 .progress-track > span { display: block; height: 100%; width: var(--w, 0%); background: var(--accent); }
 .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .queue-head { padding: 12px 18px 6px; border-top: 1px solid var(--line); }
+.row-wrap { flex-wrap: wrap; }
+.join-inline { flex: 0 1 300px; min-width: 200px; }
+.wake-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; width: 100%; }
+.wake-row .select { flex: 1 1 200px; width: auto; max-width: 320px; }
+.enqueue-panel { margin-top: 14px; display: grid; gap: 10px; }
+.enqueue-list { max-height: 52vh; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.enqueue-list .row { padding: 9px 14px; }
+.block-link { display: block; font-weight: 600; }
+.enqueue-url-actions { margin-top: 4px; }
+@media (max-width: 640px) {
+  .join-inline { flex-basis: 100%; }
+  .enqueue-list .row { flex-wrap: wrap; }
+}
 .queue { max-height: 360px; overflow-y: auto; }
 .queue .row { padding: 8px 18px; }
 .q-index { width: 26px; flex: none; text-align: right; color: var(--ink-faint); font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -702,11 +734,44 @@ details.disclosure[open] > summary svg.ic { transform: rotate(90deg); }
 .hour.is-ok svg.ic { color: var(--good-ink); }
 .hour.is-missing { background: var(--bad-tint); color: var(--bad-ink); }
 .games { display: grid; gap: 12px; }
+.history-list { margin-top: 12px; max-height: 55vh; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.history-list .row { padding: 9px 14px; }
 .game { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 14px; align-items: start; }
 .game img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; background: var(--surface-hover); }
 .game-title { font-weight: 700; }
 .game-desc { color: var(--ink-soft); font-size: 13px; margin-top: 4px; }
 @media (max-width: 560px) { .game { grid-template-columns: minmax(0, 1fr); } }
+
+/* ── 狀態與訊息 ───────────────────────────────────────── */
+.presence-row { grid-template-columns: minmax(160px, 220px) minmax(0, 1fr); }
+@media (max-width: 640px) { .presence-row { grid-template-columns: minmax(0, 1fr); } }
+.presence-preview {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.sent-list:empty { display: none; }
+.sent-list { border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.sent-list .row { padding: 9px 14px; }
+
+/* ── 維護 ─────────────────────────────────────────────── */
+.diff-list { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13.5px; }
+.check input { width: 16px; height: 16px; accent-color: var(--accent); flex: none; }
+.cache-list { border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.cache-list .row { padding: 8px 12px; }
+.restart-overlay {
+  position: fixed; inset: 0; z-index: 300;
+  display: grid; place-items: center;
+  background: var(--scrim);
+}
+.restart-box { display: grid; justify-items: center; gap: 12px; padding: 28px 32px; text-align: center; max-width: min(420px, calc(100vw - 32px)); }
+
+/* ── 操作紀錄 ─────────────────────────────────────────── */
+.audit-time { white-space: nowrap; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.audit-source { white-space: nowrap; color: var(--ink-faint); font-size: 12.5px; }
+.table tr.is-warn td { background: var(--warn-tint); }
 
 /* ── 日誌 ─────────────────────────────────────────────── */
 .log-view {

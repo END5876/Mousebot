@@ -6,15 +6,15 @@ const logger = require('../../../utils/logger');
 const bootSummary = require('../../../utils/bootSummary');
 
 const {
-  TTS_MODELS, activeModels, loadModelsFromEnv, buildModelChoices
+  TTS_MODELS, loadModelsFromEnv, buildModelChoices
 } = require('./models');
 const {
-  SOVITS_HOST, SOVITS_PORT, resolveSoVITSHost, checkSoVITSHealth, switchSoVITSWeights
+  SOVITS_HOST, SOVITS_PORT, resolveSoVITSHost, checkSoVITSHealth
 } = require('./sovitsClient');
 const {
-  EDGE_VOICE_CHOICES, activeEdgeVoices, checkEdgeTTS, getHasEdgeTTS, setHasEdgeTTS
+  EDGE_VOICE_CHOICES, checkEdgeTTS, getHasEdgeTTS, setHasEdgeTTS
 } = require('./edgeTTS');
-const { ttsCache } = require('./cache');
+const { loadTtsSettings, setGuildModel, setGuildEdgeVoice } = require('./settings');
 const { playTTS, stopTTS } = require('./queue');
 
 const TTS_MAX_LENGTH = 1000;
@@ -26,6 +26,8 @@ function setupTTSCommands(client) {
   const count = loadModelsFromEnv();
   logger.debug('TTS', `從 .env 載入了 ${count} 個 TTS 模型: ${Object.keys(TTS_MODELS).join(', ')}`);
   if (count === 0) logger.debug('TTS', '未找到任何 SOVITS_MODEL_* 設定');
+  // 模型清單載入後才能還原各伺服器上次選的模型 / 聲音
+  loadTtsSettings();
 
   setHasEdgeTTS(checkEdgeTTS());
   logger.debug('TTS', getHasEdgeTTS() ? 'edge-tts 已就緒（作為 fallback）' : 'edge-tts 未安裝，fallback 不可用');
@@ -166,16 +168,10 @@ function setupTTSCommands(client) {
           });
         }
 
-        const model = TTS_MODELS[key];
         await interaction.deferReply();
 
         try {
-          await switchSoVITSWeights(model.gpt_weights, model.sovits_weights);
-          activeModels.set(guildId, key);
-          // 切換模型時清空快取，避免舊模型的合成結果被誤用
-          for (const [k] of ttsCache) {
-            if (k.startsWith(`${key}::`)) ttsCache.delete(k);
-          }
+          const model = await setGuildModel(guildId, key);
           await interaction.editReply({ content: `✅ 已切換至 **${model.name}**！` });
         } catch (err) {
           logger.error('TTS', '切換模型失敗:', err.message);
@@ -195,8 +191,7 @@ function setupTTSCommands(client) {
         const voice      = interaction.options.getString('voice');
         const voiceLabel = EDGE_VOICE_CHOICES.find(v => v.value === voice)?.name ?? voice;
 
-        activeEdgeVoices.set(guildId, voice);
-        logger.info('edge-tts', `🎙️ [${guildId}] 切換聲音 → ${voice}`);
+        setGuildEdgeVoice(guildId, voice);
 
         await interaction.reply({
           content:

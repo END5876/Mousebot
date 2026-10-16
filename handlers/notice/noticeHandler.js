@@ -225,6 +225,9 @@ function setupNoticeCommands(client) {
 
   steamPolling.start();
   epicPolling.start();
+  // 管理面板的「立即檢查並推播」直接呼叫同一個輪詢（同時只會跑一次，不會重複推播）
+  PLATFORMS.steam.polling = steamPolling;
+  PLATFORMS.epic.polling = epicPolling;
 
   const steamCount = steamService.listChannels().length;
   const epicCount  = epicService.listChannels().length;

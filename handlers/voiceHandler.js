@@ -105,6 +105,137 @@ function buildSilenceMenu(guildId) {
 }
 
 // ════════════════════════════════════════════════════════
+//  語音連線與喚醒詞監聽（/voice 指令與管理面板共用）
+// ════════════════════════════════════════════════════════
+
+/** 加入指定語音頻道（同伺服器已有連線時會直接移過去），等到連線就緒才回傳 */
+async function joinChannel(voiceChannel) {
+  const guildId = voiceChannel.guild.id;
+  const connection = joinVoiceChannel({
+    channelId:      voiceChannel.id,
+    guildId,
+    adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+    selfDeaf:       false,
+    selfMute:       false,
+  });
+
+  connection.on(VoiceConnectionStatus.Ready, () => {
+    logger.success('Voice', '語音連接已就緒');
+  });
+
+  connection.on(VoiceConnectionStatus.Disconnected, async () => {
+    try {
+      await Promise.race([
+        entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+        entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+      ]);
+    } catch (error) {
+      connection.destroy();
+      logger.warn('Voice', '語音連接已斷開');
+      cleanupGuild(guildId);
+
+      if (sttActiveGuilds.has(guildId)) {
+        stopSTTListening(guildId);
+        sttActiveGuilds.delete(guildId);
+      }
+
+      manualGuildLocks.delete(guildId);
+    }
+  });
+
+  await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+  logger.success('Voice', `已加入語音頻道：${voiceChannel.name} (${voiceChannel.guild.name})`);
+  return connection;
+}
+
+/** 離開語音頻道並清掉這個伺服器的所有語音狀態；不在語音頻道時回傳 false */
+function leaveGuild(guild) {
+  const guildId    = guild.id;
+  const connection = getVoiceConnection(guildId);
+  if (!connection) return false;
+
+  cleanupGuild(guildId);
+
+  // ★ Bug 修正：先前這裡從未呼叫 stopMonitoring，導致 /voice leave 後
+  //   voiceActivityMonitor 的 60 秒 setInterval 與 speaking 監聽器繼續在背景空跑，
+  //   直到程序重啟才會被清除（記憶體洩漏）。
+  voiceMonitor.stopMonitoring(guildId);
+
+  if (silenceTimers.has(guildId)) {
+    clearTimeout(silenceTimers.get(guildId));
+    silenceTimers.delete(guildId);
+  }
+
+  const { stopAll } = require('./musicplayer/unifiedQueue');
+  stopAll(guildId);
+
+  if (sttActiveGuilds.has(guildId)) {
+    stopSTTListening(guildId);
+    sttActiveGuilds.delete(guildId);
+  }
+
+  manualGuildLocks.delete(guildId);
+
+  connection.destroy();
+
+  logger.info('Voice', `👋 已離開語音頻道 (${guild.name})`);
+  return true;
+}
+
+/** 喚醒詞的轉錄頻道：優先用名為「語音轉錄」的文字頻道 */
+function findTranscriptChannel(guild) {
+  return guild.channels.cache.find(ch => ch.name === '語音轉錄' && ch.isTextBased()) || null;
+}
+
+function isWakeWordActive(guildId) {
+  return sttActiveGuilds.has(guildId);
+}
+
+/**
+ * 開始喚醒詞監聽，轉錄結果與 AI 回覆送到 textChannel
+ * @returns {'started'|'already'|'no_connection'}
+ */
+function startWakeWord(guild, textChannel) {
+  const guildId    = guild.id;
+  const connection = getVoiceConnection(guildId);
+  if (!connection) return 'no_connection';
+  if (sttActiveGuilds.has(guildId)) return 'already';
+
+  startSTTListening(
+    connection,
+    guild,
+    textChannel,
+    async (userId, member, text, channel) => {
+      try {
+        const aiReply = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId);
+        await channel.send(`🤖 **機器鳥**：${aiReply}`);
+
+        const result = await playTTS(guildId, aiReply);
+        if (!result.success) logger.warn('STT', `TTS 失敗：${result.reason}`);
+      } catch (err) {
+        if (isQuotaError(err)) {
+          await channel.send(quotaMessage(err)).catch(() => {});
+          return;
+        }
+        logger.error('STT Callback', '錯誤：', err.message);
+        await channel.send('❌ 處理語音指令時發生錯誤');
+      }
+    }
+  );
+
+  sttActiveGuilds.set(guildId, true);
+  return 'started';
+}
+
+/** 停止喚醒詞監聽；原本就沒在監聽時回傳 false */
+function stopWakeWord(guildId) {
+  if (!sttActiveGuilds.has(guildId)) return false;
+  stopSTTListening(guildId);
+  sttActiveGuilds.delete(guildId);
+  return true;
+}
+
+// ════════════════════════════════════════════════════════
 //  /voice 單一指令，底下掛 join / leave / status /
 //  stt(group: start/stop) / silence / record-button
 // ════════════════════════════════════════════════════════
@@ -154,40 +285,7 @@ async function handleJoin(interaction) {
       }
 
       try {
-        const connection = joinVoiceChannel({
-          channelId:      voiceChannel.id,
-          guildId:        voiceChannel.guild.id,
-          adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-          selfDeaf:       false,
-          selfMute:       false,
-        });
-
-        connection.on(VoiceConnectionStatus.Ready, () => {
-          logger.success('Voice', '語音連接已就緒');
-        });
-
-        connection.on(VoiceConnectionStatus.Disconnected, async () => {
-          try {
-            await Promise.race([
-              entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-              entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
-            ]);
-          } catch (error) {
-            connection.destroy();
-            logger.warn('Voice', '語音連接已斷開');
-            cleanupGuild(interaction.guildId);
-
-            if (sttActiveGuilds.has(interaction.guildId)) {
-              stopSTTListening(interaction.guildId);
-              sttActiveGuilds.delete(interaction.guildId);
-            }
-
-            manualGuildLocks.delete(interaction.guildId);
-          }
-        });
-
-        await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
-        logger.success('Voice', `已加入語音頻道：${voiceChannel.name} (${voiceChannel.guild.name})`);
+        await joinChannel(voiceChannel);
 
         await interaction.reply(
           `✅ 已加入語音頻道：**${voiceChannel.name}**\n💡 可用 \`/voice stt start\`（喚醒詞）或 \`/voice record-button\`（按鈕手動錄音）`
@@ -204,41 +302,13 @@ async function handleJoin(interaction) {
 
 // ── /voice leave ─────────────────────────────────────────
 async function handleLeave(interaction) {
-      const guildId    = interaction.guildId;
-      const connection = getVoiceConnection(guildId);
-
-      if (!connection) {
+      if (!leaveGuild(interaction.guild)) {
         return interaction.reply({
           content: '你要我離開哪？Bot 目前不在語音頻道中',
           flags: MessageFlags.Ephemeral
         });
       }
 
-      cleanupGuild(guildId);
-
-      // ★ Bug 修正：先前這裡從未呼叫 stopMonitoring，導致 /voice leave 後
-      //   voiceActivityMonitor 的 60 秒 setInterval 與 speaking 監聽器繼續在背景空跑，
-      //   直到程序重啟才會被清除（記憶體洩漏）。
-      voiceMonitor.stopMonitoring(guildId);
-
-      if (silenceTimers.has(guildId)) {
-        clearTimeout(silenceTimers.get(guildId));
-        silenceTimers.delete(guildId);
-      }
-
-      const { stopAll } = require('./musicplayer/unifiedQueue');
-      stopAll(guildId);
-
-      if (sttActiveGuilds.has(guildId)) {
-        stopSTTListening(guildId);
-        sttActiveGuilds.delete(guildId);
-      }
-
-      manualGuildLocks.delete(guildId);
-
-      connection.destroy();
-
-      logger.info('Voice', `👋 已離開語音頻道 (${interaction.guild.name})`);
       await interaction.reply('👋 已離開語音頻道');
 }
 
@@ -284,49 +354,22 @@ async function handleStt(interaction, sub) {
       const guildId = interaction.guildId;
 
       if (sub === 'start') {
-        const connection = getVoiceConnection(guildId);
+        const sttTextChannel = findTranscriptChannel(interaction.guild) || interaction.channel;
+        const result = startWakeWord(interaction.guild, sttTextChannel);
 
-        if (!connection) {
+        if (result === 'no_connection') {
           return interaction.reply({
             content: '❌ Bot 尚未加入語音頻道，請先使用 `/voice join`',
             flags: MessageFlags.Ephemeral
           });
         }
 
-        if (sttActiveGuilds.has(guildId)) {
+        if (result === 'already') {
           return interaction.reply({
             content: '🎙️ STT 語音辨識已經在運行中',
             flags: MessageFlags.Ephemeral
           });
         }
-
-        const sttTextChannel = interaction.guild.channels.cache.find(
-          ch => ch.name === '語音轉錄' && ch.isTextBased()
-        ) || interaction.channel;
-
-        startSTTListening(
-          connection,
-          interaction.guild,
-          sttTextChannel,
-          async (userId, member, text, channel) => {
-            try {
-              const aiReply = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId);
-              await channel.send(`🤖 **機器鳥**：${aiReply}`);
-
-              const result = await playTTS(guildId, aiReply);
-              if (!result.success) logger.warn('STT', `TTS 失敗：${result.reason}`);
-            } catch (err) {
-              if (isQuotaError(err)) {
-                await channel.send(quotaMessage(err)).catch(() => {});
-                return;
-              }
-              logger.error('STT Callback', '錯誤：', err.message);
-              await channel.send('❌ 處理語音指令時發生錯誤');
-            }
-          }
-        );
-
-        sttActiveGuilds.set(guildId, true);
 
         const targetChannelName = sttTextChannel.id === interaction.channel.id
           ? '此頻道'
@@ -337,15 +380,12 @@ async function handleStt(interaction, sub) {
         );
 
       } else if (sub === 'stop') {
-        if (!sttActiveGuilds.has(guildId)) {
+        if (!stopWakeWord(guildId)) {
           return interaction.reply({
             content: '❌ STT 語音辨識目前未在運行',
             flags: MessageFlags.Ephemeral
           });
         }
-
-        stopSTTListening(guildId);
-        sttActiveGuilds.delete(guildId);
 
         await interaction.reply('⏹️ STT 語音辨識已停止');
       }
@@ -607,4 +647,11 @@ module.exports = {
   setupVoiceCommands,
   startSilenceAudio: startSilenceLayer,
   stopSilenceAudio:  stopSilenceLayer,
+  // 管理面板
+  joinChannel,
+  leaveGuild,
+  findTranscriptChannel,
+  isWakeWordActive,
+  startWakeWord,
+  stopWakeWord,
 };

@@ -33,8 +33,39 @@ export default function mountAiSettings(root, ctx) {
     root.replaceChildren(
       h('div', { class: 'grid grid-2' }, modelCard(), specialCard()),
       userModesCard(),
+      memoryCard(),
       chanceCard(),
     );
+  }
+
+  // ── 清除對話記憶（等同對方自己下 /ai clear）─────────────────
+  async function clearMemory(user, button) {
+    const ok = await confirmDialog({
+      title: '清除對話記憶',
+      message: `要清除 ${user.name ?? user.id} 和 AI 的對話記憶嗎？之後 AI 不會再參考他先前的對話（效果等同他自己下 /ai clear）。`,
+      confirmText: '清除',
+    });
+    if (!ok) return;
+    const done = await withBusy(button, () => api.post(`/api/ai/memory/${seg(user.id)}`));
+    if (done) toast(`已清除 ${user.name ?? user.id} 的對話記憶`);
+  }
+
+  function memoryCard() {
+    let chosen = null;
+    const clearBtn = h('button', {
+      type: 'button', class: 'btn', disabled: true,
+      onclick: () => chosen && clearMemory(chosen, clearBtn),
+    }, icon('eraser', 'ic-sm'), '清除記憶');
+    const picker = memberPicker((user) => { chosen = user; clearBtn.disabled = !user; });
+    return card({
+      title: '清除對話記憶',
+      iconName: 'eraser',
+      body: h('div', { class: 'add-row add-row-2' },
+        h('div', { class: 'field' }, h('span', { class: 'field-label' }, '搜尋成員'), picker),
+        clearBtn,
+      ),
+      note: 'AI 只會參考同一個頻道最近 10 分鐘內的對話；清除後，在那之前的訊息都不會再被當成上下文。',
+    });
   }
 
   // ── 模型與額度（環境變數，唯讀）───────────────────────────
@@ -112,10 +143,14 @@ export default function mountAiSettings(root, ctx) {
           if (done) { toast('已移除'); load(); }
         },
       }, icon('trash', 'ic-sm'), '移除');
+      const memoryBtn = h('button', {
+        type: 'button', class: 'btn btn-sm btn-ghost', 'aria-label': `清除 ${entry.user?.name ?? entry.user?.id} 的對話記憶`,
+        onclick: () => clearMemory(entry.user, memoryBtn),
+      }, icon('eraser', 'ic-sm'), '清除記憶');
       return h('tr', null,
         h('td', null, userCell(entry.user)),
         h('td', null, sel),
-        h('td', { class: 'num' }, removeBtn),
+        h('td', { class: 'num' }, h('div', { class: 'row-actions' }, memoryBtn, removeBtn)),
       );
     });
 

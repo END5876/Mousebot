@@ -7,6 +7,8 @@ const registerPrompts = require('./prompts');
 const registerAi = require('./ai');
 const registerVoice = require('./voice');
 const registerNotify = require('./notify');
+const registerTts = require('./tts');
+const registerSystem = require('./system');
 const registerLogs = require('./logs');
 
 /**
@@ -21,6 +23,8 @@ module.exports = function registerApi(router, client) {
     registerAi,
     registerVoice,
     registerNotify,
+    registerTts,
+    registerSystem,
     registerLogs,
   ]) {
     register(router, client);

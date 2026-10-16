@@ -16,6 +16,18 @@ class HttpError extends Error {
   }
 }
 
+/** 處理函式回傳這個物件時，伺服器改以檔案下載的形式回應（例如設定備份） */
+class FileResponse {
+  /**
+   * @param {{ filename: string, contentType: string, body: string|Buffer }} opts
+   */
+  constructor({ filename, contentType, body }) {
+    this.filename = filename;
+    this.contentType = contentType;
+    this.body = body;
+  }
+}
+
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 class Router {
@@ -112,4 +124,4 @@ function requireReady(client) {
   if (!client.isReady()) throw new HttpError(503, 'Bot 尚未連上 Discord，請稍後再試');
 }
 
-module.exports = { HttpError, Router, str, bool, oneOf, snowflake, requireReady, SNOWFLAKE_RE };
+module.exports = { HttpError, FileResponse, Router, str, bool, oneOf, snowflake, requireReady, SNOWFLAKE_RE };

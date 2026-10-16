@@ -6,9 +6,12 @@
 // 變動後更新 Discord 上的控制面板，並透過 session.schedule() 讓網頁播放器同步（webSync）。
 
 const { getVoiceConnection, VoiceConnectionStatus } = require('@discordjs/voice');
+const { PermissionFlagsBits } = require('discord.js');
 const state = require('../handlers/musicplayer/unifiedQueue/state');
 const playback = require('../handlers/musicplayer/unifiedQueue/playback');
 const session = require('../handlers/musicplayer/unifiedQueue/session');
+const { cleanUrl } = require('../handlers/musicplayer/unifiedQueue/search/urlUtils');
+const { isSupportedMediaUrl } = require('../handlers/musicplayer/musicAntiBot');
 const voiceMonitor = require('../handlers/musicplayer/voiceActivityMonitor');
 const { HttpError } = require('./http');
 
@@ -166,4 +169,101 @@ async function musicAction(guildId, cmd) {
   }
 }
 
-module.exports = { voiceInfo, musicState, idleMonitorState, musicAction, trackInfo };
+// ════════════════════════════════════════════════════════
+//  點歌（與網頁播放器 webSync.js 的 enqueue 相同的流程）
+// ════════════════════════════════════════════════════════
+
+// 點歌通知頻道：最近點歌的文字頻道 → 語音頻道內建的文字聊天（Bot 有權限發言時）→ 都沒有就不發訊息
+function notifyChannelFor(guild, channelId) {
+  const ch = playback.getRequestChannel(guild.id);
+  if (ch) return ch;
+  const vc = channelId ? guild.channels.cache.get(channelId) : null;
+  const me = guild.members?.me;
+  if (vc?.isTextBased?.() && me && vc.permissionsFor(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) return vc;
+  return null;
+}
+
+/** 本地音樂清單（依播放次數排序），q 有值時以名稱篩選 */
+function libraryList(q, limit = 200) {
+  const engine = state._engines.local;
+  if (!engine) throw new HttpError(503, '本地音樂引擎尚未就緒');
+  const keyword = String(q || '').trim().toLowerCase();
+  const files = engine.getMusicFiles();
+  const matched = keyword
+    ? files.filter((f) => f.name.toLowerCase().includes(keyword) || f.filename.toLowerCase().includes(keyword))
+    : files;
+  return {
+    total: files.length,
+    items: matched.slice(0, limit).map((f) => ({ filename: f.filename, name: f.name, playCount: f.playCount ?? 0 })),
+    more: Math.max(0, matched.length - limit),
+  };
+}
+
+/** YouTube + Bilibili 搜尋（與 /play 送出後的搜尋相同，每個平台最多 limit 筆） */
+async function onlineSearch(q, limit = 5) {
+  const engine = state._engines.bilibili;
+  if (!engine || typeof engine.searchMulti !== 'function') throw new HttpError(503, '線上音樂引擎初始化中，請稍後再試');
+  try {
+    const results = await engine.searchMulti(q, limit);
+    return (results || []).map((r) => ({ title: r.title, url: r.url, platform: r.platform, author: r.author, duration: r.duration }));
+  } catch (err) {
+    throw new HttpError(502, `搜尋失敗：${err.message}`);
+  }
+}
+
+async function resolveItem(raw) {
+  if (raw?.kind === 'lib') {
+    const engine = state._engines.local;
+    if (!engine) throw new HttpError(503, '本地音樂引擎尚未就緒');
+    const file = engine.getMusicFiles().find((f) => f.filename === raw.filename);
+    if (!file) throw new HttpError(404, '找不到這首本地音樂，清單可能已經更新');
+    return { ...file, title: file.name, type: 'local' };
+  }
+  if (raw?.kind === 'online') {
+    const engine = state._engines.bilibili;
+    if (!engine || typeof engine.getInfo !== 'function') throw new HttpError(503, '線上音樂引擎初始化中，請稍後再試');
+    const url = typeof raw.url === 'string' ? raw.url.trim() : '';
+    if (!isSupportedMediaUrl(url)) throw new HttpError(400, '只支援 YouTube 與 Bilibili 的網址');
+    try {
+      return { ...(await engine.getInfo(cleanUrl(url))), type: 'bilibili' };
+    } catch (err) {
+      throw new HttpError(502, `無法取得影片資訊：${err.message}`);
+    }
+  }
+  throw new HttpError(400, '不支援的歌曲格式');
+}
+
+/**
+ * 從管理面板點歌：Bot 必須已經在這個伺服器的語音頻道裡
+ * @param {{ item: { kind: 'lib', filename: string } | { kind: 'online', url: string }, next?: boolean }} cmd
+ * @returns {Promise<{ message: string, title: string }>}
+ */
+async function enqueueFromPanel(client, guild, cmd) {
+  const info = voiceInfo(guild);
+  if (!info?.channelId) throw new HttpError(409, 'Bot 不在這個伺服器的語音頻道，請先讓 Bot 加入語音頻道');
+
+  const notify = notifyChannelFor(guild, info.channelId);
+  // autojoin / /voice / 面板加入的連線：比照 /play，讓音樂播放接手（登記連線、掛閒置監控）
+  if (state.connections.get(guild.id) !== getVoiceConnection(guild.id)) playback.adoptExistingConnection(guild, client, notify);
+
+  const item = await resolveItem(cmd.item);
+  // 沒有可發訊息的頻道時給一個不發訊息的頻道，enqueue 內部的通知不會出錯
+  const result = await playback.enqueue(guild.id, item, notify || { id: null, send: async () => {} });
+  if (result.queued && cmd.next) {
+    const queue = state.queues.get(guild.id) || [];
+    const k = queue.lastIndexOf(item);
+    if (k > 0) {
+      queue.splice(k, 1);
+      queue.unshift(item);
+      session.schedule();
+    }
+  }
+  voiceMonitor.touchActivity(guild.id);
+  const where = !result.queued ? '開始播放' : cmd.next ? '下一首播放' : `加入佇列（第 ${result.position} 首）`;
+  return { message: `${where}「${item.title}」`, title: item.title };
+}
+
+module.exports = {
+  voiceInfo, musicState, idleMonitorState, musicAction, trackInfo,
+  libraryList, onlineSearch, enqueueFromPanel,
+};
