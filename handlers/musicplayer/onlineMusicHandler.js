@@ -359,7 +359,7 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
 
   // 播放清單條目、網頁批量點歌、重啟恢復的佇列都不經過 getInfo，這裡再擋一次
   if (!antiBot.isSupportedMediaUrl(item.url)) {
-    if (!silent) logger.warn('OnlineMusic', `略過不支援的網址: ${item.url}`);
+    logger.warn('OnlineMusic', `略過不支援的網址: ${item.url}`);
     player.emit('error', new Error('只支援 YouTube 與 Bilibili 的網址，已跳過'));
     return;
   }
@@ -422,7 +422,7 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
           cache.pushToSharedLibrary(filePath, path.basename(filePath));
         })
         .catch((err) => {
-          if (!silent) logger.error('Cache', `背景下載失敗: ${err.message}`);
+          logger.error('Cache', `背景下載失敗: ${err.message}`);
         })
         .finally(() => {
           downloadingUrls.delete(item.url);
@@ -434,7 +434,7 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
     }
 
   } catch (err) {
-    if (!silent) logger.error(platform, `播放前發生錯誤: ${err.message}`);
+    logger.error(platform, `播放前發生錯誤: ${err.message}`);
     _handleStreamError(guildId, item, player, retryCount, err.message, silent);
   }
 }
@@ -450,7 +450,7 @@ function _playFromFile(guildId, item, player, filePath, silent) {
     errorCounts.set(guildId, 0);
     if (!silent) logger.info('OnlineMusic', `🎵 本地播放: ${path.basename(filePath)}`);
   } catch (err) {
-    if (!silent) logger.error('OnlineMusic', '本地播放失敗:', err);
+    logger.error('OnlineMusic', '本地播放失敗:', err);
     _handleStreamError(guildId, item, player, 0, err.message, silent);
   }
 }
@@ -489,12 +489,12 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
         if (!silent) logger.warn(platform, `yt-dlp: ${line}`);
         continue;
       }
-      if (!silent) logger.error(platform, `yt-dlp stderr:`, line);
-      if (!line.includes('unable to write data') &&
-          !line.includes('Broken pipe') &&
-          !line.includes('Invalid argument')) {
-        hasError = true;
-      }
+      const benign = line.includes('unable to write data') ||
+                     line.includes('Broken pipe') ||
+                     line.includes('Invalid argument');
+      // silent（循環重播）只隱藏例行訊息：跳過歌曲造成的 Broken pipe 這類良性輸出；真正的錯誤一律記錄
+      if (!benign || !silent) logger.error(platform, `yt-dlp stderr:`, line);
+      if (!benign) hasError = true;
     }
   });
 
@@ -506,7 +506,7 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
     if (code !== 0 && !dataReceived && hasError) {
       if (isYT) {
         const classified = antiBot.classifyYouTubeError(errorOutput);
-        if (!silent) logger.warn('YouTube', `${classified.msg}`);
+        logger.warn('YouTube', `${classified.msg}`);
 
         if (classified.rotate && antiBot.rotateYtClient(guildId)) {
           if (!silent) logger.info('YouTube', '🔄 使用備用 client 重試...');
@@ -524,7 +524,7 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
   });
 
   resource.playStream?.on('error', err => {
-    if (!silent) logger.error('OnlineMusic', '音頻流錯誤:', err);
+    logger.error('OnlineMusic', '音頻流錯誤:', err);
   });
 
   player.play(resource);
@@ -535,12 +535,10 @@ function _handleStreamError(guildId, item, player, retryCount, errorMessage, sil
   const currentErrors = (errorCounts.get(guildId) || 0) + 1;
   errorCounts.set(guildId, currentErrors);
 
-  if (!silent) {
-    logger.error('OnlineMusic', `串流錯誤 (${currentErrors}/${MAX_CONSECUTIVE_ERRORS}): ${errorMessage}`);
-  }
+  logger.error('OnlineMusic', `串流錯誤 (${currentErrors}/${MAX_CONSECUTIVE_ERRORS}): ${errorMessage}`);
 
   if (currentErrors >= MAX_CONSECUTIVE_ERRORS) {
-    if (!silent) logger.error('OnlineMusic', '連續錯誤過多，停止播放');
+    logger.error('OnlineMusic', '連續錯誤過多，停止播放');
     player.emit('error', new Error(`連續發生 ${currentErrors} 次錯誤，已停止播放`));
     stopAll(guildId);
     return;
@@ -553,7 +551,7 @@ function _handleStreamError(guildId, item, player, retryCount, errorMessage, sil
       RETRY_DELAY,
     );
   } else {
-    if (!silent) logger.error('OnlineMusic', '重試次數已用盡，通知上層跳過');
+    logger.error('OnlineMusic', '重試次數已用盡，通知上層跳過');
     player.emit('error', new Error(`播放失敗（已重試 ${MAX_RETRIES} 次）：${errorMessage.substring(0, 100)}`));
   }
 }

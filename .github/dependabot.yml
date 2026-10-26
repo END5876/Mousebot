@@ -1,0 +1,32 @@
+# Dependabot：每週檢查一次相依套件，有新版就開 PR（不會直接改 main，所以不會觸發部署）。
+# minor／patch 合成一個 PR，減少通知；major 各自一個 PR，要自己看 changelog 再決定。
+# Node 映像的大版本（node:22 → 24）不自動提，升級要配合 package.json 的 engines 一起做。
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: node
+        update-types: [version-update:semver-major]
+
+  # oww-server（喚醒詞服務）的 Python 套件
+  - package-ecosystem: pip
+    directory: /oww-server
+    schedule:
+      interval: monthly

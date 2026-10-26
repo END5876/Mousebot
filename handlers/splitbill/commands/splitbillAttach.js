@@ -2,6 +2,7 @@
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const splitbillClient = require('../utils/splitbillClient');
+const logger = require('../../../utils/logger');
 
 /**
  * 🔗 /splitbill-attach —— 把網頁上建立的行程綁定到這個伺服器。
@@ -52,6 +53,10 @@ module.exports = {
       const embed = new EmbedBuilder().setColor(0x2ecc71).setTitle('🔗 綁定成功').setDescription(lines.join('\n'));
       return interaction.editReply({ embeds: [embed] });
     } catch (err) {
+      // 4xx 是使用者輸入的問題（綁定碼錯誤等），不必記錄；其他的才是服務或程式出錯
+      if (!err.status || err.status >= 500) {
+        logger.error('Splitbill', `/splitbill-attach 失敗（guild=${interaction.guildId}）：${splitbillClient.describeError(err)}`);
+      }
       // service 的錯誤訊息本身就是給使用者看的中文說明（綁定碼錯誤、不是建立者、已綁別的伺服器…）
       const msg = err.status && err.status < 500 ? err.message : `綁定失敗：${err.message}`;
       return interaction.editReply({ content: `❌ ${msg}` });

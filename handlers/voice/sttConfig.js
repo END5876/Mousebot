@@ -13,24 +13,29 @@ const WAKEUP_VOICE_PATH = path.join(__dirname, 'sttwakeupvoice.wav');
 const TEMP_DIR          = path.join(__dirname, '../../temp');
 
 // ── 環境變數常數 ─────────────────────────────────────────
-const OWW_HTTP_URL          = process.env.OWW_HTTP_URL;
-const RECORD_MAX_MS         = parseInt(process.env.STT_RECORD_MS,          10);
-const RECORD_SILENCE_MS     = parseInt(process.env.STT_SILENCE_MS,         10);
-const WAKEUP_COOLDOWN_MS    = parseInt(process.env.STT_COOLDOWN_MS,        10);
-const RMS_THRESHOLD         = parseFloat(process.env.STT_RMS_THRESHOLD);
+// 每個參數都有預設值（和正式環境使用中的值相同），.env 沒寫也能啟動；
+// 真正缺了就無法運作的只有 GROQ_API_KEY（見下方「環境變數檢查」）。
+const envInt   = (name, def) => { const v = parseInt(process.env[name], 10); return Number.isFinite(v) ? v : def; };
+const envFloat = (name, def) => { const v = parseFloat(process.env[name]); return Number.isFinite(v) ? v : def; };
+
+const OWW_HTTP_URL          = process.env.OWW_HTTP_URL || `http://127.0.0.1:${process.env.OWW_PORT || 5001}`;
+const RECORD_MAX_MS         = envInt('STT_RECORD_MS',          15000);
+const RECORD_SILENCE_MS     = envInt('STT_SILENCE_MS',         1500);
+const WAKEUP_COOLDOWN_MS    = envInt('STT_COOLDOWN_MS',        2000);
+const RMS_THRESHOLD         = envFloat('STT_RMS_THRESHOLD',    150);
 
 // 滑動視窗大小 (建議 2500 ~ 3000 ms)
-const DETECT_WINDOW_MS      = parseInt(process.env.STT_DETECT_WINDOW_MS,   10);
+const DETECT_WINDOW_MS      = envInt('STT_DETECT_WINDOW_MS',   2500);
 // 週期性檢查間隔 (建議 500 ms)
-const DETECT_INTERVAL_MS    = parseInt(process.env.STT_DETECT_INTERVAL_MS || '500', 10);
+const DETECT_INTERVAL_MS    = envInt('STT_DETECT_INTERVAL_MS', 500);
 
-const MAX_DETECT_CHUNKS     = parseInt(process.env.STT_MAX_DETECT_CHUNKS,  10);
-const MAX_RECORD_BYTES      = parseInt(process.env.STT_MAX_RECORD_BYTES,   10);
-const VAD_AMP_THRESHOLD     = parseFloat(process.env.STT_VAD_THRESHOLD);
-const VAD_VOICE_RATIO_MIN   = parseFloat(process.env.STT_VAD_RATIO_MIN);
-const MIN_AUDIO_DURATION_MS = parseInt(process.env.STT_MIN_DURATION_MS,    10);
-const START_DELAY_MS        = parseInt(process.env.STT_START_DELAY_MS,     10);
-const NO_SPEECH_THRESHOLD   = parseFloat(process.env.STT_NO_SPEECH_PROB);
+const MAX_DETECT_CHUNKS     = envInt('STT_MAX_DETECT_CHUNKS',  200);
+const MAX_RECORD_BYTES      = envInt('STT_MAX_RECORD_BYTES',   10000000);
+const VAD_AMP_THRESHOLD     = envFloat('STT_VAD_THRESHOLD',    100);
+const VAD_VOICE_RATIO_MIN   = envFloat('STT_VAD_RATIO_MIN',    0.1);
+const MIN_AUDIO_DURATION_MS = envInt('STT_MIN_DURATION_MS',    500);
+const START_DELAY_MS        = envInt('STT_START_DELAY_MS',     1000);
+const NO_SPEECH_THRESHOLD   = envFloat('STT_NO_SPEECH_PROB',   0.6);
 const OWW_MAX_SOCKETS       = parseInt(process.env.STT_OWW_MAX_SOCKETS    || '8',  10);
 const OWW_MAX_CONCURRENT    = parseInt(process.env.STT_OWW_MAX_CONCURRENT || '4',  10);
 const STT_USER_IDLE_MS      = parseInt(process.env.STT_USER_IDLE_MS       || '600000', 10);
@@ -49,18 +54,11 @@ const VAD_FRAME_BYTES     = VAD_FRAME_SAMPLES * 2;
 const SILENCE_CHECK_MS    = 100;
 
 // ── 環境變數檢查 ─────────────────────────────────────────
-const requiredEnvVars = [
-  'OWW_HTTP_URL', 'STT_RECORD_MS', 'STT_SILENCE_MS', 'STT_COOLDOWN_MS',
-  'STT_RMS_THRESHOLD', 'STT_DETECT_WINDOW_MS', 'STT_MAX_DETECT_CHUNKS',
-  'STT_MAX_RECORD_BYTES', 'STT_VAD_THRESHOLD', 'STT_VAD_RATIO_MIN',
-  'STT_MIN_DURATION_MS', 'STT_START_DELAY_MS', 'STT_NO_SPEECH_PROB',
-  'GROQ_API_KEY',
-];
+// 沒有 GROQ_API_KEY 時 Bot 照常啟動，只有語音辨識停用（sttHandler.js 不建立 Groq client）
+const STT_AVAILABLE = !!process.env.GROQ_API_KEY;
 
-const missingVars = requiredEnvVars.filter(v => process.env[v] === undefined);
-
-if (missingVars.length > 0) {
-  bootSummary.report('語音辨識 STT', 'off', `缺少環境變數: ${missingVars.join(', ')}`);
+if (!STT_AVAILABLE) {
+  bootSummary.report('語音辨識 STT', 'off', '未設定 GROQ_API_KEY，語音辨識停用（其他功能不受影響）');
 } else {
   bootSummary.report('語音辨識 STT', 'ok', '喚醒詞偵測 + Groq Whisper 已就緒');
 }
@@ -253,6 +251,7 @@ async function detectWakeword(guildId, userId, pcmBuffer, reset = false) {
 }
 
 module.exports = {
+  STT_AVAILABLE,
   WAKEUP_VOICE_PATH,
   TEMP_DIR,
   OWW_HTTP_URL,

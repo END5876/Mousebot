@@ -504,18 +504,18 @@ function start(discordClient) {
 }
 
 // 關閉前（重新部署、SIGTERM、未捕捉例外後重啟）通知服務「這台 Bot 下線了」：網頁立刻顯示離線，
-// 這段期間網頁送的指令直接失敗，不會排隊到重啟後才被執行。processGuards 關閉前會等 Discord 斷線（最多 3 秒）
-// 或 1 秒後才結束程序，足夠這個請求送出；送不到也沒關係，服務 90 秒沒消息同樣會判定離線。
+// 這段期間網頁送的指令直接失敗，不會排隊到重啟後才被執行。回傳的 Promise 讓 processGuards 關閉前等這個請求
+// 送完（最多 3 秒；未捕捉例外時是 1 秒）；送不到也沒關係，服務 90 秒沒消息同樣會判定離線。
 function stop() {
-  if (!running) return;
+  if (!running) return undefined;
   running = false;
   clearInterval(heartbeat);
   clearTimeout(pushTimer);
   if (pollAbort) pollAbort.abort();
-  axios.delete(`${libraryClient.getBaseUrl()}/api/music/bots/${botId}/state`, {
+  return axios.delete(`${libraryClient.getBaseUrl()}/api/music/bots/${botId}/state`, {
     headers: libraryClient.authHeaders(),
     timeout: 2000,
-  }).catch(() => {});
+  }).then(() => {}, () => {});
 }
 
 module.exports = {

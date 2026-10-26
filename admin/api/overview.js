@@ -8,6 +8,7 @@ const tokenTracker = require('../../handlers/ai/tokenTracker');
 const aiQuota = require('../../handlers/ai/aiQuota');
 const { listGuilds } = require('../discordInfo');
 const { voiceInfo, musicState } = require('../voiceState');
+const { getLastCrash } = require('../../utils/crashLog');
 
 function botSummary(client) {
   if (!client.user) return null;
@@ -58,6 +59,7 @@ module.exports = function registerOverview(router, client) {
         limits: aiQuota.getLimits(),
       },
       voice,
+      lastCrash: getLastCrash(),
     };
   });
 };

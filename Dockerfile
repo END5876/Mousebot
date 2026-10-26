@@ -69,10 +69,16 @@ COPY --from=bgutil-build /opt/bgutil /opt/bgutil
 # 會因此累積大量碎片、RSS 降不回來；限制為 2 個可明顯壓低三個常駐程序的常駐記憶體。
 ENV MALLOC_ARENA_MAX=2
 
+# ── Python 輸出不緩衝 ───────────────────────────────────
+# 沒有這個設定時 oww-server 的 print/log 會整塊緩衝，崩潰前最後幾行（最需要的那幾行）常常來不及寫出來。
+ENV PYTHONUNBUFFERED=1
+
 # ── 工作目錄 ────────────────────────────────────────────
 WORKDIR /app
 
 # ── supervisord 設定 ────────────────────────────────────
+# fatal-listener：子程序重試到放棄（FATAL）時結束 supervisord，讓 Docker 重啟整個容器
+# （細節與例外見 docker/fatal-listener.py）。它以 root 執行，才能對 supervisord 送訊號。
 RUN mkdir -p /etc/supervisor/conf.d && printf '\
 [supervisord]\n\
 nodaemon=true\n\
@@ -107,6 +113,15 @@ user=bot\n\
 environment=HOME="/home/bot",USER="bot"\n\
 stdout_logfile=/dev/stdout\n\
 stdout_logfile_maxbytes=0\n\
+stderr_logfile=/dev/stderr\n\
+stderr_logfile_maxbytes=0\n\
+\n\
+[eventlistener:fatal-listener]\n\
+command=/usr/bin/python3 /app/docker/fatal-listener.py\n\
+events=PROCESS_STATE_FATAL\n\
+autostart=true\n\
+autorestart=true\n\
+stdout_logfile=NONE\n\
 stderr_logfile=/dev/stderr\n\
 stderr_logfile_maxbytes=0\n\
 \n\

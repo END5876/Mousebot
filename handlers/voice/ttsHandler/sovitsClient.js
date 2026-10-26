@@ -18,6 +18,10 @@ let sovitsLastCheckAt    = 0;
 const SOVITS_HEALTH_INTERVAL_MS = 30_000;  // 每 30 秒重新探測
 const SOVITS_CONNECT_TIMEOUT_MS = 3_000;   // TCP 連線逾時（原本 2000，稍微放寬）
 const SOVITS_RECEIVE_TIMEOUT_MS = 30_000;  // 音訊接收逾時
+// 一次合成從發出請求到檔案寫完的總時間上限。上面兩個逾時之間有空窗：TCP 連上之後、SoVITS 回應標頭之前
+// （推理中）沒有任何計時，家裡的 SoVITS 卡住時這一段會永遠等下去，TTS 佇列與被暫停的音樂跟著停住。
+// 逾時就和其他失敗一樣改用 edge-tts 念這一段，不會少念內容。每段最多 50 字，正常幾秒內就會完成。
+const SOVITS_TOTAL_TIMEOUT_MS = parseInt(process.env.SOVITS_TOTAL_TIMEOUT_MS, 10) || 45_000;
 
 // ════════════════════════════════════════════════════════
 //  DNS 快取
@@ -134,9 +138,15 @@ async function generateSoVITS(text, filename, guildId) {
     let settled = false;
     function done(err) {
       if (settled) return; settled = true;
-      clearTimeout(connectTimer); clearTimeout(receiveTimer);
+      clearTimeout(connectTimer); clearTimeout(receiveTimer); clearTimeout(totalTimer);
       if (err) reject(err); else resolve();
     }
+
+    const totalTimer = setTimeout(() => {
+      const err = new Error(`SoVITS 合成逾時（超過 ${SOVITS_TOTAL_TIMEOUT_MS / 1000} 秒）`);
+      try { req.destroy(err); } catch {}
+      done(err); // 回應已經在寫檔時 destroy 不一定會觸發 req 的 error，直接結束這次合成
+    }, SOVITS_TOTAL_TIMEOUT_MS);
 
     const connectTimer = setTimeout(() => {
       req.destroy(new Error('SoVITS 連線逾時（Port 無回應，Server 可能關機）'));

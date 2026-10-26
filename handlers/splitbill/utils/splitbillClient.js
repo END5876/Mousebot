@@ -72,10 +72,19 @@ async function request(method, path, body, extraHeaders) {
   if (!res.ok) {
     const err = new Error(data.error || `HTTP ${res.status}`);
     err.status = res.status;
-    err.body = data;
+    // 記錄 log 用：哪個請求失敗（路徑裡只有行程／伺服器 ID，沒有 token）
+    err.request = `${method} ${path.split('?')[0]}`;
+    // body 可能含整個行程（409 會附上最新版本），設成不可列舉：logger 印出 Error 時不會把它整包倒進 log
+    Object.defineProperty(err, 'body', { value: data, enumerable: false, configurable: true, writable: true });
     throw err;
   }
   return data;
+}
+
+/** 給 log 用的一行摘要：狀態碼、請求與訊息，不含回應內容 */
+function describeError(err) {
+  if (!err || !err.status) return err?.message || String(err);
+  return `HTTP ${err.status} ${err.request || ''}：${err.message}`;
 }
 
 /** 取得整個 guild 結構：{ trips, activeTripByUser, defaultTripId } */
@@ -221,4 +230,5 @@ module.exports = {
   createTrip,
   deleteTrip,
   attachTrip,
+  describeError,
 };

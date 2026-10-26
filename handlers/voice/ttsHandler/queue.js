@@ -21,6 +21,22 @@ const { detectLanguage } = require('./edgeTTS');
 const ttsQueues    = new Map();  // guildId → QueueItem[]
 const ttsIsPlaying = new Map();  // guildId → boolean
 
+// 隊首這一段最多等多久合成完成。SoVITS 本身有 45 秒總逾時（逾時改用 edge-tts），這裡是最後一道保險：
+// 任何一段卡住（edge-tts 也卡住、未預期的 Promise 永遠不 settle）都不能讓整個佇列和被暫停的音樂一直停著。
+const SEGMENT_WAIT_MS = parseInt(process.env.TTS_SEGMENT_TIMEOUT_MS, 10) || 60_000;
+
+function waitForSegment(item) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      // 之後才合成完成的檔案沒有人會播，等它出來就刪掉
+      item.readyPromise.then(r => { if (r?.file) safeUnlink(r.file); }).catch(() => {});
+      reject(new Error(`合成超過 ${SEGMENT_WAIT_MS / 1000} 秒仍未完成`));
+    }, SEGMENT_WAIT_MS);
+  });
+  return Promise.race([item.readyPromise, timeout]).finally(() => clearTimeout(timer));
+}
+
 // ════════════════════════════════════════════════════════
 //  Pipeline 佇列處理
 //
@@ -83,7 +99,7 @@ async function processQueue(guildId) {
   // 等待隊首項目的合成完成（若已完成則立即繼續）
   let result;
   try {
-    result = await item.readyPromise;
+    result = await waitForSegment(item);
   } catch (err) {
     logger.error('TTS', `合成失敗，跳過此段: ${err.message}`);
     queue.shift();

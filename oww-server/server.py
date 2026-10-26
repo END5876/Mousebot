@@ -27,13 +27,15 @@ load_dotenv()
 # =========================================================
 BASE_DIR = Path(__file__).resolve().parent
 
-MODEL_PATH      = Path(os.environ["OWW_MODEL_PATH"])
-HTTP_PORT       = int(os.environ["OWW_PORT"])
-CHUNK_SIZE      = int(os.environ["OWW_CHUNK_SIZE"])
-PROB_THRESHOLD  = float(os.environ["OWW_PROB_THRESHOLD"])
-MIN_CONSECUTIVE = int(os.environ["OWW_MIN_CONSECUTIVE"])
-COOLDOWN_SEC    = float(os.environ["OWW_COOLDOWN_SEC"])
-MAX_SESSIONS    = int(os.environ["OWW_MAX_SESSIONS"])
+# 每個參數都有預設值（和正式環境使用中的值相同），.env 沒寫也能啟動，
+# 不會因為少一個變數就 KeyError、被 supervisord 重試到 FATAL
+MODEL_PATH      = Path(os.environ.get("OWW_MODEL_PATH") or BASE_DIR / "models" / "hey_taffy.onnx")
+HTTP_PORT       = int(os.environ.get("OWW_PORT", "5001"))
+CHUNK_SIZE      = int(os.environ.get("OWW_CHUNK_SIZE", "1280"))
+PROB_THRESHOLD  = float(os.environ.get("OWW_PROB_THRESHOLD", "0.65"))
+MIN_CONSECUTIVE = int(os.environ.get("OWW_MIN_CONSECUTIVE", "3"))
+COOLDOWN_SEC    = float(os.environ.get("OWW_COOLDOWN_SEC", "2.0"))
+MAX_SESSIONS    = int(os.environ.get("OWW_MAX_SESSIONS", "50"))
 DEBUG_SCORE     = os.environ.get("OWW_DEBUG_SCORE", "0") == "1"
 
 SESSION_TTL_SEC = float(os.environ.get("OWW_SESSION_TTL_SEC", "120"))

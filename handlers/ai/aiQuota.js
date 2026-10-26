@@ -12,6 +12,7 @@
 const { SlidingWindowRateLimiter } = require('../../utils/rateLimiter');
 const { isOwner } = require('../../utils/config');
 const { getTodayTotal, getTodayUserTotal } = require('./tokenTracker');
+const { alert } = require('../../utils/alert');
 
 function envInt(name, fallback) {
     const n = Number.parseInt(process.env[name] ?? '', 10);
@@ -47,6 +48,9 @@ class AiQuotaError extends Error {
  */
 function consumeQuota(userId) {
     if (DAILY_BUDGET > 0 && getTodayTotal() >= DAILY_BUDGET) {
+        // 全體預算用完＝今天所有人的 AI 都停了，通知維運（同一天最多一次）
+        alert('ai-daily-budget', `今日 AI token 用量已達全體上限 ${DAILY_BUDGET.toLocaleString()}（AI_DAILY_TOKEN_BUDGET），今天的 AI 回覆暫停到額度重置`,
+            { cooldownMs: 12 * 60 * 60 * 1000 });
         throw new AiQuotaError('daily');
     }
     if (!userId || isOwner(userId)) return;

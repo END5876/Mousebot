@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   check:
@@ -16,8 +17,59 @@ jobs:
           node-version: 22
           cache: npm
 
-      # @discordjs/opus 等原生模組需要編譯；CI 只跑 lint，不需要語音功能
+      # @discordjs/opus 等原生模組需要編譯；這個 job 只跑 lint 與漏洞檢查，不需要語音功能
       # （單元測試 test/ 不進版本庫，只在本機用 npm test 執行）
       - run: npm ci --ignore-scripts
 
       - run: npm run lint
+
+      # high 以上的漏洞讓 CI 失敗（只在安裝時用到的 tar 例外，見腳本說明）
+      - name: npm audit
+        run: |
+          npm audit --omit=dev --json > audit.json || true
+          node .github/scripts/audit.js audit.json
+
+  # 建置正式環境用的映像並冒煙測試：VPS 上的 autodeploy 也是用同一個 Dockerfile 建置
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t mousebot:ci .
+
+      - name: 工具都裝好了
+        run: |
+          docker run --rm --entrypoint sh mousebot:ci -c '
+            set -e
+            yt-dlp --version
+            edge-tts --version || edge-tts --help >/dev/null
+            ffmpeg -version | head -1
+            python3 -c "import openwakeword, flask; print(\"OWW OK\")"
+            node -e "require(\"@discordjs/opus\"); require(\"sharp\"); console.log(\"native modules OK\")"
+            test -f /app/docker/fatal-listener.py
+          '
+
+      - name: 圖片解碼防護（sharp.block）
+        run: docker run --rm -v "$PWD/.github/scripts:/ci:ro" --entrypoint node mousebot:ci /ci/smoke-sharp.js
+
+      # 用假的 Discord token 啟動整個容器：
+      #   - 沒有 GROQ_API_KEY 等選填變數也要能載入所有模組、走到 Discord 登入（登入失敗是預期的）
+      #   - OWW 與 bgutil 由 supervisord 拉起並回應
+      #   - node-bot 一直起不來（FATAL）時，fatal-listener 要讓整個容器結束（正式環境由 Docker 重啟）
+      - name: 容器啟動與 FATAL 處理
+        run: |
+          docker run -d --name smoke -e DISCORD_TOKEN=invalid-token-for-ci mousebot:ci
+          ok=
+          for i in $(seq 1 40); do
+            if docker exec smoke node -e "Promise.all([fetch('http://127.0.0.1:5001/health'),fetch('http://127.0.0.1:4416/ping')]).then(r=>process.exit(r.every(x=>x.ok)?0:1)).catch(()=>process.exit(1))" 2>/dev/null; then ok=1; break; fi
+            sleep 2
+          done
+          [ -n "$ok" ] || { docker logs smoke; echo "OWW 或 bgutil 沒有回應"; exit 1; }
+          echo "OWW、bgutil 正常"
+          code=$(timeout 180 docker wait smoke) || { docker logs smoke; echo "node-bot FATAL 之後容器沒有結束"; exit 1; }
+          docker logs smoke > smoke.log 2>&1
+          grep -q "登入失敗" smoke.log || { cat smoke.log; echo "沒有走到 Discord 登入"; exit 1; }
+          grep -q "fatal-listener" smoke.log || { cat smoke.log; echo "fatal-listener 沒有啟動"; exit 1; }
+          echo "容器在 node-bot FATAL 後結束（exit $code）"
+          docker rm -f smoke >/dev/null
