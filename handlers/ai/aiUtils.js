@@ -5,9 +5,18 @@ const { readJson, writeJsonAtomic } = require('../../utils/jsonStore');
 const sharp = require('sharp'); // 引入 sharp 進行圖片壓縮
 // 關閉 libvips 的 operation cache（預設最多 50MB）：每張圖只處理一次，結果已由下方 imageCache 快取，這層純屬重複
 sharp.cache(false);
+// 🔒 [安全性] 只允許 JPEG／PNG／WebP／GIF 的解碼器（整個程序生效）。
+// sharp 依「檔案內容」挑解碼器，不看 HTTP 的 Content-Type：標成 image/png 的 SVG 會交給 librsvg、
+// AVIF 交給 libheif、TIFF 交給 libtiff，這些解碼器都出過可遠端觸發的記憶體破壞漏洞，
+// 而 Bot 會解碼任何 Discord 使用者貼上的圖片，同一個程序又持有所有服務的金鑰。
+// 名稱是 libvips 的 operation 類別，Buffer 版本才用得到（這裡只從記憶體解碼）。
+sharp.block({ operation: ['VipsForeignLoad'] });
+sharp.unblock({ operation: ['VipsForeignLoadJpegBuffer', 'VipsForeignLoadPngBuffer', 'VipsForeignLoadWebpBuffer', 'VipsForeignLoadNsgifBuffer'] });
 const crypto = require('crypto');
-const dns = require('dns').promises;
+const dnsCallback = require('dns');
 const net = require('net');
+const http = require('http');
+const https = require('https');
 const { PermissionFlagsBits } = require('discord.js');
 
 // ════════════════════════════════════════════════════════
@@ -21,6 +30,8 @@ const IMAGE_CACHE_MAX_ENTRIES = 40;          // 每筆最多約 1MB 級 base64�
 const IMAGE_FETCH_TIMEOUT_MS = 10_000;
 const IMAGE_MAX_REDIRECTS = 3;
 const EMOJI_MAX_SIZE_PX = 64;                // emoji 只需辨識表情，縮小以節省 token
+// 解碼時的像素上限（寬×高，動圖是所有影格加總）：小檔案也可能宣稱超大尺寸，解碼時吃光記憶體
+const MAX_INPUT_PIXELS = 40_000_000;
 const EMOJI_MAX_COUNT = 5;                   // 每則訊息最多送出的 emoji 圖片數，超過的只保留文字標記
 
 // ════════════════════════════════════════════════════════
@@ -202,65 +213,107 @@ async function resolveDiscordImageUrl(url, client, viewer) {
 //  若不限制，攻擊者可讓 Bot 去連內網服務（例如同專案的
 //  *.internal 私有網路服務、雲端 metadata 位址）。
 // ════════════════════════════════════════════════════════
+// 不允許連線的位址：私有網段、本機、link-local、CGNAT、保留與群播位址，以及會轉成 IPv4 的
+// IPv6 位址（NAT64 64:ff9b::/96、6to4 2002::/16，裡面可能包著內網 IPv4）
+const BLOCKED_NETS = new net.BlockList();
+for (const [addr, prefix] of [
+    ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16],
+    ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['224.0.0.0', 4], ['240.0.0.0', 4],
+]) BLOCKED_NETS.addSubnet(addr, prefix, 'ipv4');
+for (const [addr, prefix] of [
+    ['::', 128], ['::1', 128], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8],
+    ['64:ff9b::', 96], ['64:ff9b:1::', 48], ['2002::', 16], ['100::', 64],
+]) BLOCKED_NETS.addSubnet(addr, prefix, 'ipv6');
+
 function isPrivateIp(ip) {
-    if (net.isIPv4(ip)) {
-        const [a, b] = ip.split('.').map(Number);
-        return a === 10 || a === 127 || a === 0 ||
-            (a === 169 && b === 254) ||
-            (a === 172 && b >= 16 && b <= 31) ||
-            (a === 192 && b === 168) ||
-            (a === 100 && b >= 64 && b <= 127) || a >= 224;
-    }
-    if (net.isIPv6(ip)) {
-        const v = ip.toLowerCase();
-        if (v === '::1' || v === '::') return true;
-        if (v.startsWith('::ffff:')) return isPrivateIp(v.slice(7));
-        return v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe80');
+    const v = String(ip || '').replace(/^\[|\]$/g, '').toLowerCase();
+    if (net.isIPv4(v)) return BLOCKED_NETS.check(v, 'ipv4');
+    if (net.isIPv6(v)) {
+        // IPv4-mapped（::ffff:10.0.0.1）一律用 IPv4 的規則判斷
+        const mapped = v.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+        if (mapped) return BLOCKED_NETS.check(mapped[1], 'ipv4');
+        return BLOCKED_NETS.check(v, 'ipv6');
     }
     return true;
 }
 
-async function assertPublicHttpUrl(rawUrl) {
+function assertPublicHttpUrl(rawUrl) {
     let u;
     try { u = new URL(rawUrl); } catch { throw new Error('網址格式錯誤'); }
     if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error('不支援的協定');
-    const host = u.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    const host = u.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
     if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.internal') || host.endsWith('.local')) {
         throw new Error('不允許的主機');
     }
-    if (net.isIP(host)) {
-        if (isPrivateIp(host)) throw new Error('不允許的主機');
-        return u;
-    }
-    const addrs = await dns.lookup(host, { all: true });
-    if (!addrs.length || addrs.some(a => isPrivateIp(a.address))) throw new Error('不允許的主機');
+    if (net.isIP(host) && isPrivateIp(host)) throw new Error('不允許的主機');
     return u;
 }
 
-// 回傳 { buffer, contentType }；超過 maxBytes 或逾時一律丟錯
+// 🔒 [SSRF] 在「實際連線」的那一次 DNS 解析裡檢查位址：以前先 dns.lookup 檢查、再交給 fetch
+// 自己重新解析一次，攻擊者的 DNS（TTL=0）第一次回公開 IP、第二次回 127.0.0.1 就能繞過（DNS rebinding）。
+// 現在被檢查的位址就是 socket 連線的位址。網址本身是 IP 時 Node 不會呼叫 lookup，由 assertPublicHttpUrl 檢查。
+function guardedLookup(hostname, options, callback) {
+    dnsCallback.lookup(hostname, { ...options, all: true }, (err, addrs) => {
+        if (err) return callback(err);
+        if (!addrs.length || addrs.some(a => isPrivateIp(a.address))) {
+            return callback(Object.assign(new Error('不允許的主機'), { code: 'ESSRF' }));
+        }
+        return options.all ? callback(null, addrs) : callback(null, addrs[0].address, addrs[0].family);
+    });
+}
+
+// 一次 GET（不跟隨重新導向）；回傳 { redirect } 或 { buffer, contentType }
+function requestOnce(u, maxBytes) {
+    return new Promise((resolve, reject) => {
+        const mod = u.protocol === 'https:' ? https : http;
+        const req = mod.get(u, {
+            lookup: guardedLookup,
+            signal: AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS),
+            headers: { 'user-agent': 'Mozilla/5.0 (compatible; Mousebot)', accept: 'image/*' },
+        }, (res) => {
+            const status = res.statusCode || 0;
+            if (status >= 300 && status < 400 && res.headers.location) {
+                res.resume();
+                return resolve({ redirect: res.headers.location });
+            }
+            if (status < 200 || status >= 300) {
+                res.resume();
+                return reject(new Error(`HTTP ${status}`));
+            }
+            const declared = Number(res.headers['content-length']);
+            if (declared && declared > maxBytes) {
+                res.destroy();
+                return reject(new Error('檔案過大'));
+            }
+            const chunks = [];
+            let total = 0;
+            res.on('data', (chunk) => {
+                total += chunk.length;
+                if (total > maxBytes) {
+                    res.destroy();
+                    reject(new Error('檔案過大'));
+                    return;
+                }
+                chunks.push(chunk);
+            });
+            res.on('end', () => resolve({ buffer: Buffer.concat(chunks), contentType: res.headers['content-type'] || '' }));
+            res.on('error', reject);
+        });
+        req.on('error', reject);
+    });
+}
+
+// 回傳 { buffer, contentType }；超過 maxBytes 或逾時一律丟錯。每一次重新導向都重新檢查。
 async function safeFetchBuffer(rawUrl, maxBytes) {
     let current = rawUrl;
     for (let hop = 0; hop <= IMAGE_MAX_REDIRECTS; hop++) {
-        const u = await assertPublicHttpUrl(current);
-        const res = await fetch(u, { redirect: 'manual', signal: AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS) });
-
-        if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
-            current = new URL(res.headers.get('location'), u).toString();
+        const u = assertPublicHttpUrl(current);
+        const res = await requestOnce(u, maxBytes);
+        if (res.redirect) {
+            current = new URL(res.redirect, u).toString();
             continue;
         }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-        const declared = Number(res.headers.get('content-length'));
-        if (declared && declared > maxBytes) throw new Error('檔案過大');
-
-        const chunks = [];
-        let total = 0;
-        for await (const chunk of res.body) {
-            total += chunk.length;
-            if (total > maxBytes) { try { res.body.cancel?.(); } catch {} throw new Error('檔案過大'); }
-            chunks.push(chunk);
-        }
-        return { buffer: Buffer.concat(chunks), contentType: res.headers.get('content-type') || '' };
+        return res;
     }
     throw new Error('重新導向次數過多');
 }
@@ -268,6 +321,20 @@ async function safeFetchBuffer(rawUrl, maxBytes) {
 // ════════════════════════════════════════════════════════
 //  圖片處理 (支援網址解析與靜態圖/GIF 壓縮邏輯)
 // ════════════════════════════════════════════════════════
+
+// 🔒 依檔案開頭的 magic bytes 判斷格式，只接受 JPEG／PNG／GIF／WebP；其餘（SVG、AVIF、HEIC、TIFF…）回傳 null。
+// 不信任 HTTP 回應的 Content-Type：它由對方的伺服器決定，跟 sharp 實際會用的解碼器無關。
+function sniffImageType(buf) {
+    if (!Buffer.isBuffer(buf) || buf.length < 12) return null;
+    if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'image/jpeg';
+    if (buf.subarray(0, 8).equals(PNG_MAGIC)) return 'image/png';
+    const head = buf.subarray(0, 6).toString('latin1');
+    if (head === 'GIF87a' || head === 'GIF89a') return 'image/gif';
+    if (buf.subarray(0, 4).toString('latin1') === 'RIFF' && buf.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+    return null;
+}
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+
 async function fetchImageUrlAsBase64(url) {
     const cached = imageCache.get(url);
     if (cached && (Date.now() - cached.cachedAt) < IMAGE_CACHE_TTL_MS) {
@@ -277,24 +344,26 @@ async function fetchImageUrlAsBase64(url) {
 
     try {
         const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
-        const { buffer: rawBuffer, contentType } = await safeFetchBuffer(url, sizeLimit);
+        const { buffer: rawBuffer } = await safeFetchBuffer(url, sizeLimit);
 
-        const supportedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif', 'image/gif'];
-        const originalMimeType = contentType.split(';')[0].trim() || 'image/jpeg';
-
-        if (!supportedTypes.includes(originalMimeType)) return null;
+        // 格式以檔案內容為準（見 sniffImageType），認不出來就不解碼
+        const originalMimeType = sniffImageType(rawBuffer);
+        if (!originalMimeType) {
+            logger.debug('Image', `不支援的圖片格式，略過：${url.slice(0, 60)}...`);
+            return null;
+        }
 
         let buffer = rawBuffer;
         let finalMimeType = originalMimeType;
 
         if (originalMimeType === 'image/gif') {
-            buffer = await sharp(buffer, { animated: true })
+            buffer = await sharp(buffer, { animated: true, limitInputPixels: MAX_INPUT_PIXELS })
                 .resize({ width: 512, height: 512, fit: 'inside', withoutEnlargement: true })
                 .gif()
                 .toBuffer();
             finalMimeType = 'image/gif';
         } else {
-            buffer = await sharp(buffer)
+            buffer = await sharp(buffer, { limitInputPixels: MAX_INPUT_PIXELS })
                 .resize({ width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true })
                 .webp({ quality: 80 })
                 .toBuffer();
@@ -316,7 +385,8 @@ async function fetchImageAsBase64(attachment) {
     const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
     if (attachment.size && attachment.size > sizeLimit) return null;
 
-    const supportedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif', 'image/gif'];
+    // 附件宣告的類型只用來提早略過明顯不是圖片的檔案；真正的格式下載後由 sniffImageType 判斷
+    const supportedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
     const originalMimeType = attachment.contentType?.split(';')[0] || 'image/jpeg';
     if (originalMimeType && !supportedTypes.includes(originalMimeType)) return null;
 
@@ -420,11 +490,12 @@ async function fetchAndCacheEmoji(url, mimeType, name, id) {
             const response = await fetch(url, { signal: AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS) });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const rawBuffer = Buffer.from(await response.arrayBuffer());
+            if (!sniffImageType(rawBuffer)) throw new Error('不支援的圖片格式');
             const isAnimated = mimeType === 'image/gif';
             const resize = { width: EMOJI_MAX_SIZE_PX, height: EMOJI_MAX_SIZE_PX, fit: 'inside', withoutEnlargement: true };
             const buffer = isAnimated
-                ? await sharp(rawBuffer, { animated: true }).resize(resize).gif().toBuffer()
-                : await sharp(rawBuffer).resize(resize).webp({ quality: 80 }).toBuffer();
+                ? await sharp(rawBuffer, { animated: true, limitInputPixels: MAX_INPUT_PIXELS }).resize(resize).gif().toBuffer()
+                : await sharp(rawBuffer, { limitInputPixels: MAX_INPUT_PIXELS }).resize(resize).webp({ quality: 80 }).toBuffer();
             const finalMimeType = isAnimated ? 'image/gif' : 'image/webp';
             const base64 = buffer.toString('base64');
             if (imageCache.size >= IMAGE_CACHE_MAX_ENTRIES) imageCache.delete(imageCache.keys().next().value);
@@ -608,4 +679,5 @@ module.exports = {
     resolveDiscordImageUrl, 
     withTyping, speakWithTTS, splitMessage,
     replaceMentions,
+    sniffImageType,
 };

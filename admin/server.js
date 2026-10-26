@@ -28,7 +28,7 @@ const fs = require('fs');
 const path = require('path');
 const logger = require('../utils/logger');
 const bootSummary = require('../utils/bootSummary');
-const { createAuth, clientKey } = require('./auth');
+const { createAuth, describeSource } = require('./auth');
 const { Router, HttpError, FileResponse } = require('./http');
 const audit = require('./audit');
 const registerApi = require('./api');
@@ -177,13 +177,16 @@ async function handleApi(req, res, url, { auth, router }) {
     throw new HttpError(403, '請從管理面板網頁操作');
   }
 
-  const source = clientKey(req);
+  // 稽核紀錄的來源：經由反向代理時一併記下 TCP 連線位址（見 auth.describeSource）
+  const source = describeSource(req);
 
   if (url.pathname === '/api/login' || url.pathname === '/api/logout') {
     if (req.method !== 'POST') throw new HttpError(405, '不支援的方法');
     const isLogin = url.pathname === '/api/login';
     const result = isLogin ? auth.login(req, await parseJsonBody(req, LOGIN_BODY_BYTES)) : auth.logout(req);
-    if (!isLogin) audit.record('登出', { source });
+    // 🔒 只有真的登出了一個有效的 session 才記錄：以前沒登入的請求也會寫一筆「登出」，
+    // 送 1000 次就能把稽核紀錄（與日誌頁）裡真正的管理操作全部擠掉
+    if (!isLogin) { if (result.revoked) audit.record('登出', { source }); }
     else if (result.status === 200) audit.record('登入成功', { source });
     else if (result.status === 401) audit.record('登入失敗（密碼錯誤）', { source, level: 'warn' });
     sendJson(res, result.status, result.body, result.headers);

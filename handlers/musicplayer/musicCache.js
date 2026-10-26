@@ -7,6 +7,7 @@ const fs   = require('fs');
 const path = require('path');
 const logger = require('../../utils/logger');
 const libraryClient = require('./musicLibraryClient');
+const { parseUrl, youtubeVideoId, bilibiliVideoId } = require('./unifiedQueue/search/urlUtils');
 const normalizer = require('./musicNormalizer');
 
 const ytdlpPath = 'yt-dlp';
@@ -36,7 +37,22 @@ function ensureCacheDir() {
 // ════════════════════════════════════════════════════════
 //  從 URL + title 產生穩定的快取檔名
 //  格式：<清理後的標題> [<影片ID>].mp3
+//  🔒 [快取投毒] 影片 ID 只從網址的固定位置取，而且先依網域決定平台（與 urlUtils.cleanUrl 相同的解析）：
+//  以前在整個網址裡找 BV／av／v=，查詢參數裡的 &x=BV… 就能讓快取檔名跟實際下載的影片不一致；
+//  YouTube 影片 ID 剛好含有「av1」「bv…」時也會被誤認成 Bilibili。
+//  ⚠️ 與 music-library-service 的 ytdlp/musicCache.js 相同，兩邊的快取才會互相命中。
 // ════════════════════════════════════════════════════════
+function getCacheId(url) {
+  const u = parseUrl(url);
+  if (!u) return null;
+  const host = u.hostname.toLowerCase();
+  if (host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com')) {
+    const { id } = youtubeVideoId(u);
+    return id ? `yt_${id}` : null;
+  }
+  return bilibiliVideoId(u);
+}
+
 function getCacheFilename(url, title) {
   const safeTitle = (title || '')
     .replace(/[\\/:*?"<>|]/g, '')
@@ -44,14 +60,8 @@ function getCacheFilename(url, title) {
     .trim()
     .slice(0, 80);
 
-  const bvMatch = url.match(/BV[\w]+/i);
-  const avMatch = url.match(/av(\d+)/i);
-  const ytMatch = url.match(/(?:v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
-
-  const idSuffix = bvMatch ? bvMatch[0]
-    : avMatch              ? `av${avMatch[1]}`
-    : ytMatch              ? `yt_${ytMatch[1]}`
-    : Buffer.from(url).toString('base64').replace(/[^A-Za-z0-9]/g, '').slice(0, 12);
+  const idSuffix = getCacheId(url)
+    || Buffer.from(url).toString('base64').replace(/[^A-Za-z0-9]/g, '').slice(0, 12);
 
   return safeTitle ? `${safeTitle} [${idSuffix}].mp3` : `${idSuffix}.mp3`;
 }
@@ -100,6 +110,11 @@ async function pushToSharedLibrary(filePath, filename) {
     logger.debug('Cache', `已上傳至共用音樂庫: ${filename}`);
     return true;
   } catch (err) {
+    // 共用音樂庫預設不覆寫同名檔案（409）：別的 Bot 或網頁已經放了同一首，不需要再傳
+    if (err.response && err.response.status === 409) {
+      logger.debug('Cache', `共用音樂庫已有同名檔案，略過上傳: ${filename}`);
+      return true;
+    }
     logger.warn('Cache', `上傳共用音樂庫失敗（不影響本地播放）：${err.message}`);
     return false;
   }

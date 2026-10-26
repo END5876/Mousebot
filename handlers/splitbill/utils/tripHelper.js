@@ -52,6 +52,13 @@ function isTripMember(trip, discordUserId) {
   return !!findMemberByDiscordId(trip, discordUserId);
 }
 
+// 🔒 這位使用者能不能在 Discord 面板上看到這個行程的內容（名稱、匯率、帳目摘要）：
+// 行程成員，或 Bot 擁有者（OWNER_USER_ID，在 Splitbill 對所有行程有建立者權限）。
+// 伺服器的預設行程不代表每個人都能看：非成員退回預設行程時，面板不顯示它的內容。
+function canViewTrip(trip, discordUserId) {
+  return !!trip && (isTripMember(trip, discordUserId) || isOwner(discordUserId));
+}
+
 /**
  * 🔒 [修正：孤兒行程] 檢查「移除掉 removeMemberIds 這些成員之後」行程是否仍至少
  * 保留 1 位「已連結」的成員——只剩未連結成員的行程，Discord 這邊就沒有人能操作了
@@ -139,5 +146,6 @@ module.exports = {
   toMemberIds,
   ensureMembersExist,
   isTripMember,
+  canViewTrip,
   wouldLeaveTripNonEmpty,
 };

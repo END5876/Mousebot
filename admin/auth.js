@@ -20,6 +20,9 @@ const path = require('path');
 const logger = require('../utils/logger');
 
 const COOKIE_NAME = 'mb_admin';
+// 成功登入過的裝置：不受全站登入鎖定影響（攻擊者灌錯誤密碼鎖不住擁有者），只受自己來源的計數限制
+const DEVICE_COOKIE = 'mb_admin_dev';
+const DEVICE_DAYS = 90;
 
 // 登入限流：每個來源 10 分鐘內最多失敗 10 次；全站 10 分鐘內最多失敗 50 次（大量 IP 一起猜時整體暫停登入，
 // 已登入的裝置不受影響）
@@ -68,15 +71,42 @@ function loadOrCreateSecret(file) {
 }
 
 // ── 來源 IP（限流用）─────────────────────────────────────
-// 直接連線時用連線位址；連線來自私有網段（部署平台的反向代理）時，
-// 改用 X-Forwarded-For 最右邊那一個——那是最近一層代理親眼看到的來源，偽造不了。
-const PRIVATE_NETS = new net.BlockList();
-for (const [addr, prefix] of [['10.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16], ['127.0.0.0', 8], ['100.64.0.0', 10]]) {
-  PRIVATE_NETS.addSubnet(addr, prefix, 'ipv4');
+// 直接連線時用連線位址；連線來自信任的反向代理時，改用 X-Forwarded-For 最右邊那一個——
+// 那是最近一層代理親眼看到的來源（Caddy 會用真實來源覆寫這個標頭）。
+// 🔒 信任哪些代理由 ADMIN_TRUSTED_PROXIES 決定（逗號分隔的 CIDR，例如 172.18.0.0/16）：
+//   - 沒設定：信任私有網段（10/8、172.16/12、192.168/16、127/8、100.64/10、fc00::/7、fe80::/10、::1），跟以前一樣。
+//     VPS 上 Caddy 經由 Docker 私有網路連進來，需要這個預設才看得到使用者的真實 IP。
+//     代價是同一個私有網路裡的其他程式直接連管理面板時，可以自己帶 X-Forwarded-For 換來源，繞過單一來源的限流
+//     （全站上限仍然有效）。知道代理的網段時，請設成只包含代理的範圍。
+//   - 設成 none 或空字串：完全不讀 X-Forwarded-For（管理面板直接對外、前面沒有代理時）
+const DEFAULT_TRUSTED = [
+  ['10.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16], ['127.0.0.0', 8], ['100.64.0.0', 10],
+  ['fc00::', 7], ['fe80::', 10], ['::1', 128],
+];
+
+function parseTrustedProxies(raw) {
+  const list = new net.BlockList();
+  if (raw === undefined) {
+    for (const [addr, prefix] of DEFAULT_TRUSTED) list.addSubnet(addr, prefix, net.isIPv6(addr) ? 'ipv6' : 'ipv4');
+    return list;
+  }
+  const value = String(raw).trim();
+  if (!value || value.toLowerCase() === 'none') return list;
+  for (const part of value.split(',').map((s) => s.trim()).filter(Boolean)) {
+    const [addr, bits] = part.split('/');
+    const ip = normalizeIp(addr);
+    const family = ip && net.isIPv6(ip) ? 'ipv6' : 'ipv4';
+    const prefix = bits === undefined ? (family === 'ipv6' ? 128 : 32) : Number(bits);
+    if (!ip || !Number.isInteger(prefix) || prefix < 0 || prefix > (family === 'ipv6' ? 128 : 32)) {
+      logger.warn('Admin', `ADMIN_TRUSTED_PROXIES 裡的「${part}」不是合法的 IP／CIDR，已略過`);
+      continue;
+    }
+    list.addSubnet(ip, prefix, family);
+  }
+  return list;
 }
-for (const [addr, prefix] of [['fc00::', 7], ['fe80::', 10], ['::1', 128]]) {
-  PRIVATE_NETS.addSubnet(addr, prefix, 'ipv6');
-}
+
+const TRUSTED_PROXIES = parseTrustedProxies(process.env.ADMIN_TRUSTED_PROXIES);
 
 // '::ffff:1.2.3.4'（IPv4-mapped IPv6）→ '1.2.3.4'；不是合法 IP 時回傳 null
 function normalizeIp(raw) {
@@ -94,18 +124,34 @@ function ipv6Prefix64(ip) {
   return `${groups.slice(0, 4).map((g) => parseInt(g || '0', 16).toString(16)).join(':')}::/64`;
 }
 
-function clientKey(req) {
+// 回傳 { key, peer, forwarded }：key 是限流用的來源；peer 是 TCP 連線的位址；
+// forwarded 表示 key 取自信任代理帶來的 X-Forwarded-For
+function resolveClient(req, trusted = TRUSTED_PROXIES) {
   const peer = normalizeIp(req.socket.remoteAddress);
   let ip = peer;
-  if (peer && PRIVATE_NETS.check(peer, net.isIPv6(peer) ? 'ipv6' : 'ipv4')) {
-    const forwarded = String(req.headers['x-forwarded-for'] || '')
+  let forwarded = false;
+  if (peer && trusted.check(peer, net.isIPv6(peer) ? 'ipv6' : 'ipv4')) {
+    const list = String(req.headers['x-forwarded-for'] || '')
       .split(',')
       .map(normalizeIp)
       .filter(Boolean);
-    if (forwarded.length) ip = forwarded[forwarded.length - 1];
+    if (list.length) {
+      ip = list[list.length - 1];
+      forwarded = true;
+    }
   }
-  if (!ip) return 'unknown';
-  return net.isIPv6(ip) ? ipv6Prefix64(ip) : ip;
+  const key = !ip ? 'unknown' : net.isIPv6(ip) ? ipv6Prefix64(ip) : ip;
+  return { key, peer: peer || 'unknown', forwarded };
+}
+
+function clientKey(req) {
+  return resolveClient(req).key;
+}
+
+// 稽核紀錄用的來源：經由代理時一併記下 TCP 連線的位址，X-Forwarded-For 被偽造時也看得出來
+function describeSource(req) {
+  const { key, peer, forwarded } = resolveClient(req);
+  return forwarded && peer !== key ? `${key}，經由 ${peer}` : key;
 }
 
 function isHttps(req) {
@@ -142,9 +188,22 @@ function createAuth({ password, secretFile, sessionHours }) {
     return safeEqual(mac, sign(exp)) && !revoked.has(mac);
   }
 
-  function cookieString(req, value, maxAgeSec) {
+  function cookieString(req, value, maxAgeSec, name = COOKIE_NAME) {
     const secure = isHttps(req) ? '; Secure' : '';
-    return `${COOKIE_NAME}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAgeSec}${secure}`;
+    return `${name}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAgeSec}${secure}`;
+  }
+
+  // 信任裝置 Cookie：<到期時間>.<簽章>，簽章金鑰同 session（換密碼＝失效）
+  function issueDeviceToken() {
+    const exp = String(Date.now() + DEVICE_DAYS * 86400e3);
+    return `${exp}.${sign(`device:${exp}`)}`;
+  }
+  function isTrustedDevice(req) {
+    const token = getCookie(req, DEVICE_COOKIE);
+    const dot = token ? token.indexOf('.') : -1;
+    if (dot < 0) return false;
+    const exp = token.slice(0, dot);
+    return /^\d+$/.test(exp) && Number(exp) >= Date.now() && safeEqual(token.slice(dot + 1), sign(`device:${exp}`));
   }
 
   const failures = new Map(); // 來源 -> { count, resetAt }
@@ -165,8 +224,9 @@ function createAuth({ password, secretFile, sessionHours }) {
     if (!rec || rec.resetAt <= now) rec = { count: 0, resetAt: now + WINDOW_MS };
     if (globalFails.resetAt <= now) globalFails = { count: 0, resetAt: now + WINDOW_MS };
 
+    // 全站上限不擋成功登入過的裝置（見 DEVICE_COOKIE）；單一來源的上限照樣適用
     const blockedUntil = rec.count >= MAX_FAILS ? rec.resetAt
-      : globalFails.count >= GLOBAL_MAX_FAILS ? globalFails.resetAt : 0;
+      : (globalFails.count >= GLOBAL_MAX_FAILS && !isTrustedDevice(req)) ? globalFails.resetAt : 0;
     if (blockedUntil) {
       const retryAfterSec = Math.ceil((blockedUntil - now) / 1000);
       return {
@@ -188,21 +248,31 @@ function createAuth({ password, secretFile, sessionHours }) {
     failures.delete(source);
     return {
       status: 200,
-      headers: { 'Set-Cookie': cookieString(req, issueToken(), Math.floor(sessionMs / 1000)) },
+      headers: {
+        'Set-Cookie': [
+          cookieString(req, issueToken(), Math.floor(sessionMs / 1000)),
+          cookieString(req, issueDeviceToken(), DEVICE_DAYS * 86400, DEVICE_COOKIE),
+        ],
+      },
       body: { ok: true },
     };
   }
 
+  // revoked：這次請求真的帶著有效的 session 並把它登出了（server.js 只在這時寫稽核紀錄）
   function logout(req) {
     const token = getCookie(req, COOKIE_NAME);
+    let didRevoke = false;
     // 讓這個 Cookie 就算被複製走也不能再用
     if (verifyToken(token)) {
       const dot = token.indexOf('.');
       if (revoked.size >= MAX_REVOKED) revoked.delete(revoked.keys().next().value);
       revoked.set(token.slice(dot + 1), Number(token.slice(0, dot)));
+      didRevoke = true;
     }
     return {
       status: 200,
+      revoked: didRevoke,
+      // 信任裝置 Cookie 保留：這台裝置下次登入仍不受全站鎖定影響
       headers: { 'Set-Cookie': cookieString(req, '', 0) },
       body: { ok: true },
     };
@@ -215,4 +285,7 @@ function createAuth({ password, secretFile, sessionHours }) {
   };
 }
 
-module.exports = { createAuth, clientKey, _clientKey: clientKey, _ipv6Prefix64: ipv6Prefix64 };
+module.exports = {
+  createAuth, clientKey, describeSource,
+  _clientKey: clientKey, _ipv6Prefix64: ipv6Prefix64, _resolveClient: resolveClient, _parseTrustedProxies: parseTrustedProxies,
+};

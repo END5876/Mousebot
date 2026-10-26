@@ -10,6 +10,7 @@ const {
 
 const { _engines, activeSearchMessages } = require('../state');
 const { updateControlPanel, enqueue } = require('../playback');
+const { md } = require('../../../../utils/markdown');
 
 // ════════════════════════════════════════════════════════
 //  共用的「已加入佇列 / 開始播放」回覆
@@ -18,8 +19,8 @@ async function _replyPlayResult(interaction, item, result) {
   const guildId = interaction.guildId;
 
   const descText = item.type === 'bilibili'
-    ? `[${item.title}](${item.url})`
-    : `🎧 **${item.title}**`;
+    ? `[${md(item.title)}](${item.url})`
+    : `🎧 **${md(item.title)}**`;
 
   const fields = item.type === 'bilibili'
     ? [
@@ -115,7 +116,7 @@ async function _handleOnlineSearch(interaction, keyword, guildId) {
   }
 
   const listText = results
-    .map((r, i) => `**${i + 1}.** [${r.platform}] [${r.title}](${r.url})\n　└ ${r.author} · ${r.duration}`)
+    .map((r, i) => `**${i + 1}.** [${r.platform}] [${md(r.title)}](${r.url})\n　└ ${md(r.author)} · ${r.duration}`)
     .join('\n\n');
 
   const message = await interaction.editReply({

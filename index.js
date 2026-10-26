@@ -102,7 +102,7 @@ client.on('interactionCreate', async interaction => {
   try {
     await command.execute(interaction, client);
   } catch (error) {
-    logger.error('Interaction', `執行指令 /${interaction.commandName} 時發生錯誤：${error.stack || error.message}`);
+    logger.error('Interaction', `執行指令 /${interaction.commandName} 時發生錯誤：`, error);
     const reply = {
       content: '❌ 執行指令時發生錯誤，請稍後再試。',
       flags: MessageFlags.Ephemeral,
@@ -135,7 +135,7 @@ async function registerSlashCommands() {
     );
   } catch (err) {
     bootSummary.report('Slash Commands 註冊', 'off', `註冊失敗: ${err.message}`);
-    logger.error('Boot', `Slash Commands 註冊失敗：${err.stack || err.message}`);
+    logger.error('Boot', 'Slash Commands 註冊失敗：', err);
   }
 }
 
@@ -169,7 +169,7 @@ startAdminServer(client);
 
 // ── 錯誤處理 ──────────────────────────────────────────────
 client.on('error', error => {
-  logger.error('Discord', `客戶端錯誤：${error.stack || error.message}`);
+  logger.error('Discord', '客戶端錯誤：', error);
 });
 
 // ── 登入 ──────────────────────────────────────────────────
