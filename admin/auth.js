@@ -18,6 +18,7 @@ const fs = require('fs');
 const net = require('net');
 const path = require('path');
 const logger = require('../utils/logger');
+const { alert } = require('../utils/alert');
 
 const COOKIE_NAME = 'mb_admin';
 // 成功登入過的裝置：不受全站登入鎖定影響（攻擊者灌錯誤密碼鎖不住擁有者），只受自己來源的計數限制
@@ -242,6 +243,13 @@ function createAuth({ password, secretFile, sessionHours }) {
       globalFails.count += 1;
       // 表滿了就不再記新的來源（全站上限仍會計數），不刪舊紀錄——否則灌入大量 IP 就能洗掉別人的失敗次數
       if (failures.has(source) || failures.size < MAX_TRACKED_SOURCES) failures.set(source, rec);
+      // 剛好達到上限的那一次通知維運：有人在猜管理面板密碼
+      if (rec.count === MAX_FAILS) {
+        alert(`admin-lock:${source}`, `管理面板登入失敗 ${MAX_FAILS} 次，來源 ${describeSource(req)} 已暫時鎖定 ${WINDOW_MS / 60000} 分鐘`);
+      }
+      if (globalFails.count === GLOBAL_MAX_FAILS) {
+        alert('admin-lock:global', `管理面板 ${WINDOW_MS / 60000} 分鐘內登入失敗達 ${GLOBAL_MAX_FAILS} 次，全站登入暫時鎖定（成功登入過的裝置不受影響）`);
+      }
       return { status: 401, body: { error: '密碼錯誤' } };
     }
 

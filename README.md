@@ -187,7 +187,7 @@ AI_USER_RATE_WINDOW_SEC=60
 AI_USER_DAILY_TOKEN_BUDGET=0              # 每人每日 token 上限
 AI_DAILY_TOKEN_BUDGET=0                   # 全體每日 token 上限（硬上限，擁有者也受限）
 
-# ── Groq 語音轉文字 STT（選填） ─────────────────────────────────────
+# ── Groq 語音轉文字 STT（選填；未設定時 Bot 照常啟動，只有語音辨識停用） ──
 GROQ_API_KEY=your_groq_api_key
 
 # ── 使用者權限設定（逗號分隔 Discord ID，選填） ───────────────────────
@@ -196,6 +196,13 @@ DEVELOPER_MODE_USER_IDS=123456789012345678
 SAY_AUTHORIZED_ID=123456789012345678      # /say 指令授權使用者
 OWNER_USER_ID=123456789012345678          # Bot 擁有者（可逗號分隔多人）：/ai mode、/response add|remove、/autojoin 變更頻道、可刪除舊版行程；未設定則這些功能全部拒絕
 EXIT_ON_UNCAUGHT=1                        # 未捕捉例外時結束程序交由 supervisord 重啟（設 0 = 只記錄不結束）
+
+# ── 告警與監控（選填；未設定就不送） ─────────────────────────────────
+ALERT_WEBHOOK_URL=                        # Discord webhook：AI 全體預算用完、管理面板登入被鎖定、子程序 FATAL 時通知
+ALERT_NAME=mousebot                       # 告警訊息開頭的名稱
+HEARTBEAT_URL=                            # 外部監控（healthchecks.io、Uptime Kuma Push…）的心跳網址，Discord 連線正常時定期 GET
+HEARTBEAT_INTERVAL_SEC=300
+FATAL_RESTART_MIN_UPTIME_SEC=600          # OWW／bgutil 在容器啟動後這麼多秒內就 FATAL 時不重啟容器（見 docker/fatal-listener.py）
 
 # ── 執行環境（選填） ─────────────────────────────────────────────────
 LOG_LEVEL=info                            # debug | info | warn | error（DEBUG_STARTUP=true 等同 debug）
@@ -231,42 +238,47 @@ SOVITS_MODEL_{KEY}_TEXT_LANG=zh
 # LRU 快取設定
 TTS_CACHE_MAX=30
 TTS_CACHE_TTL_MS=600000
+# 逾時（選填）：SoVITS 一段超過這個時間就改用 edge-tts 念；佇列每段最多等多久，超過就跳過那一段
+SOVITS_TOTAL_TIMEOUT_MS=45000
+TTS_SEGMENT_TIMEOUT_MS=60000
 
-# ── STT / OpenWakeWord 伺服器（選填，有預設值） ───────────────────────
-OWW_HTTP_URL=http://localhost:5000
-OWW_MODEL_PATH=oww-server/models/your_model.onnx
-OWW_PORT=5000
+# ── STT / OpenWakeWord 伺服器（選填；以下都是預設值，不寫也可以） ──────
+OWW_HTTP_URL=http://127.0.0.1:5001        # 預設 http://127.0.0.1:<OWW_PORT>
+OWW_MODEL_PATH=                           # 預設 oww-server/models/hey_taffy.onnx
+OWW_PORT=5001
 OWW_CHUNK_SIZE=1280
-OWW_PROB_THRESHOLD=0.5
+OWW_PROB_THRESHOLD=0.65
 OWW_MIN_CONSECUTIVE=3
-OWW_COOLDOWN_SEC=2
-OWW_MAX_SESSIONS=10
-# 進階 OWW 設定（選填，有預設值）
+OWW_COOLDOWN_SEC=2.0
+OWW_MAX_SESSIONS=50
+# 進階 OWW 設定
 OWW_SESSION_TTL_SEC=120
+OWW_TTL_CHECK_SEC=30
+OWW_MAX_DETECT_SEC=2
 OWW_RATE_LIMIT_MAX_CALLS=10
 OWW_RATE_LIMIT_WINDOW_SEC=1.0
 
-# ── STT 錄音參數（選填，有預設值） ──────────────────────────────────
-STT_RECORD_MS=8000
-STT_SILENCE_MS=1000
-STT_COOLDOWN_MS=3000
-STT_RMS_THRESHOLD=200
+# ── STT 錄音參數（選填；以下都是預設值，不寫也可以） ─────────────────
+STT_RECORD_MS=15000
+STT_SILENCE_MS=1500
+STT_COOLDOWN_MS=2000
+STT_RMS_THRESHOLD=150
 STT_DETECT_WINDOW_MS=2500
 STT_MAX_DETECT_CHUNKS=200
-STT_MAX_RECORD_BYTES=512000
-STT_VAD_THRESHOLD=300
+STT_MAX_RECORD_BYTES=10000000
+STT_VAD_THRESHOLD=100
 STT_VAD_RATIO_MIN=0.1
 STT_MIN_DURATION_MS=500
-STT_START_DELAY_MS=200
-STT_NO_SPEECH_PROB=0.8
-# 進階 STT 設定（選填，有預設值）
-STT_DETECT_INTERVAL_MS=
-STT_OWW_MAX_CONCURRENT=
-STT_OWW_MAX_SOCKETS=
-STT_OWW_QUEUE_MAX=
-STT_USER_IDLE_MS=
-STT_USER_CLEANUP_INTERVAL_MS=
-STT_DEBUG_MEM=
+STT_START_DELAY_MS=1000
+STT_NO_SPEECH_PROB=0.6
+# 進階 STT 設定
+STT_DETECT_INTERVAL_MS=500
+STT_OWW_MAX_CONCURRENT=4
+STT_OWW_MAX_SOCKETS=8
+STT_OWW_QUEUE_MAX=                        # 預設 STT_OWW_MAX_CONCURRENT × 2
+STT_USER_IDLE_MS=600000
+STT_USER_CLEANUP_INTERVAL_MS=60000
+STT_DEBUG_MEM=0
 
 # ── 手動錄音按鈕行為（選填，有預設值） ──────────────────────────────
 HEYJQN_USER_COOLDOWN_MS=4000

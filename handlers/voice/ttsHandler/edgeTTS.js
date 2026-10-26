@@ -53,19 +53,26 @@ function checkEdgeTTS() {
 }
 
 
+// edge-tts 要連微軟的服務，網路卡住時程序會一直掛著；超過這個時間就結束它，這一段視為合成失敗
+const EDGE_TTS_TIMEOUT_MS = 30_000;
+
 function generateEdgeTTS(text, filename, voice) {
   return new Promise((resolve, reject) => {
     // --text= 寫法避免以「-」開頭的文字被 argparse 當成參數
     const proc = spawn('edge-tts', ['--voice', voice, `--text=${text}`, '--write-media', filename, '--rate=+10%']);
     let stderr = '';
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; proc.kill('SIGKILL'); }, EDGE_TTS_TIMEOUT_MS);
     proc.stderr.on('data', (d) => { stderr += d; });
     proc.on('close', (code) => {
+      clearTimeout(timer);
+      if (timedOut) return reject(new Error(`edge-tts 逾時（超過 ${EDGE_TTS_TIMEOUT_MS / 1000} 秒）`));
       if (code === 0) return resolve();
       // 只取最後一行（Python traceback 的例外訊息）
       const lastLine = stderr.trim().split('\n').pop() || '';
       reject(new Error(`edge-tts 退出碼: ${code}${lastLine ? ` (${lastLine.trim()})` : ''}`));
     });
-    proc.on('error', reject);
+    proc.on('error', (err) => { clearTimeout(timer); reject(err); });
   });
 }
 

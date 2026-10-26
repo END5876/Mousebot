@@ -128,7 +128,14 @@ function setupSplitbillCommands(client) {
         await handleSelectInteraction(interaction);
       }
     } catch (error) {
-      logger.error('Splitbill', 'Splitbill UI 發生異常錯誤:', error);
+      // 帶上伺服器、互動與失敗的請求（含行程 ID、狀態碼），才查得到是哪個行程出事；
+      // 分帳服務回的錯誤只記一行摘要（回應內容可能是整個行程），其他錯誤照舊印出堆疊
+      const where = `guild=${interaction.guildId} customId=${interaction.customId || '?'}`;
+      if (error && error.status) {
+        logger.error('Splitbill', `Splitbill UI 操作失敗（${where}）：${splitbillClient.describeError(error)}`);
+      } else {
+        logger.error('Splitbill', `Splitbill UI 發生異常錯誤（${where}）:`, error);
+      }
       const errorMsg = `❌ 操作失敗：${error.message || '未知錯誤'}`;
 
       if (interaction.replied || interaction.deferred) {

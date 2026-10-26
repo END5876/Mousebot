@@ -2,6 +2,7 @@
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const splitbillClient = require('../utils/splitbillClient');
+const logger = require('../../../utils/logger');
 const { memberDisplay, isTripMember, toMemberIds } = require('../utils/tripHelper');
 const { equalSplit, fetchRealTimeRate, round2 } = require('../utils/calculator');
 const { parsePayerField, parseSplitField } = require('../utils/parse');
@@ -158,6 +159,12 @@ module.exports = {
 
       return interaction.editReply({ embeds: [embed] });
     } catch (err) {
+      // 金額加總不符這類輸入錯誤是一般的 Error，只回覆使用者；分帳服務的錯誤與程式錯誤（TypeError 等）才記錄
+      if (err && err.status) {
+        logger.error('Splitbill', `/splitbill-quick 記帳失敗（guild=${interaction.guildId}）：${splitbillClient.describeError(err)}`);
+      } else if (!(err instanceof Error) || err.name !== 'Error') {
+        logger.error('Splitbill', `/splitbill-quick 發生錯誤（guild=${interaction.guildId}）:`, err);
+      }
       return interaction.editReply({ content: `❌ 記帳失敗：${err.message}` });
     }
   }

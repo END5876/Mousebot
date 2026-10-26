@@ -143,7 +143,14 @@ async function joinChannel(voiceChannel) {
     }
   });
 
-  await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+  try {
+    await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+  } catch (err) {
+    // 30 秒還沒連上就放棄：留著這條連線，之後的 /voice、播放、TTS 都會沿用它而沒有聲音
+    try { connection.destroy(); } catch {}
+    cleanupGuild(guildId);
+    throw err;
+  }
   logger.success('Voice', `已加入語音頻道：${voiceChannel.name} (${voiceChannel.guild.name})`);
   return connection;
 }

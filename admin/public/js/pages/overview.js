@@ -2,7 +2,7 @@
 
 import { h, icon, setVar } from '../dom.js';
 import { api } from '../api.js';
-import { fmtCompact, fmtDuration, fmtInt, fmtPercent } from '../format.js';
+import { fmtCompact, fmtDateTime, fmtDuration, fmtInt, fmtPercent } from '../format.js';
 import { avatar, card, emptyState, errorState, loadingState, statusBadge, toastError } from '../ui.js';
 
 const CHECK = {
@@ -171,12 +171,32 @@ export default function mountOverview(root, ctx) {
         : emptyState('Bot 還沒加入任何伺服器'),
     });
 
-    root.replaceChildren(
+    // 上一次未捕捉例外的原因（utils/crashLog.js）；重啟後 log 已經看不到，只有這裡留著
+    const crash = d.lastCrash ? card({
+      title: '上次崩潰',
+      sub: fmtDateTime(d.lastCrash.at),
+      iconName: 'alert',
+      body: h('div', { class: 'rows' },
+        h('div', { class: 'row' },
+          h('div', { class: 'row-main' },
+            h('div', { class: 'row-title' }, `${d.lastCrash.name}: ${d.lastCrash.message}`),
+            h('div', { class: 'row-sub' }, `${d.lastCrash.origin}・啟動後 ${fmtDuration(d.lastCrash.uptimeSec)} 發生`),
+            h('pre', { class: 'row-sub mono crash-stack' }, d.lastCrash.stack.split('\n').slice(0, 8).join('\n')),
+          ),
+        ),
+      ),
+      tight: true,
+      note: '程序已自動重新啟動。這裡只保留最近一次（data/lastCrash.json）。',
+    }) : null;
+
+    // 原生 replaceChildren 會把 null 變成文字「null」，沒有崩潰紀錄時不要傳進去
+    root.replaceChildren(...[
       hero,
       stats,
+      crash,
       h('div', { class: 'grid grid-2' }, services, voice),
       h('div', { class: 'grid grid-2' }, modules, guilds),
-    );
+    ].filter(Boolean));
   }
 
   load();

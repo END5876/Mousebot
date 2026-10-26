@@ -598,6 +598,18 @@ async function _connectTo({ guild, voiceChannel, textChannel, client }) {
 
   requestChannels.set(guildId, textChannel);
 
+  // 沿用既有連線前先確認它還能用：斷線後恢復失敗、卡在 Signalling／Connecting 的連線沿用下去，
+  // 播放會靜悄悄沒有聲音。給它 5 秒恢復，不行就銷毀、改建新連線（沒有指定頻道時只能沿用）。
+  if (connection && voiceChannel && connection.state.status !== VoiceConnectionStatus.Ready) {
+    try {
+      await entersState(connection, VoiceConnectionStatus.Ready, 5_000);
+    } catch {
+      logger.warn('UnifiedQueue', `既有語音連線未就緒（${connection.state.status}），重新建立 (${guildId})`);
+      try { connection.destroy(); } catch {}
+      connection = getVoiceConnection(guildId);
+    }
+  }
+
   if (connection) {
     _adoptConnection({ guildId, connection, voiceChannel, textChannel, client });
     return connection;
@@ -613,7 +625,13 @@ async function _connectTo({ guild, voiceChannel, textChannel, client }) {
     selfMute: false,
   });
 
-  await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+  try {
+    await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+  } catch (err) {
+    // 沒連上的連線留著會讓之後每次播放都沿用這條壞掉的連線，而且 Bot 會卡在頻道裡
+    try { connection.destroy(); } catch {}
+    throw err;
+  }
 
   startSilenceLayer(guildId);
 

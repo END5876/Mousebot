@@ -8,6 +8,7 @@ const bootSummary = require('./utils/bootSummary');
 const { OWNER_USER_IDS } = require('./utils/config');
 const { syncCommands, clientSyncOptions } = require('./utils/commandSync');
 const { startHealthServer } = require('./utils/health');
+const { startHeartbeat } = require('./utils/heartbeat');
 const { startAdminServer } = require('./admin/server');
 
 // ── 導入所有處理器 ─────────────────────────────────────────
@@ -155,6 +156,8 @@ client.once('clientReady', async () => {
   // ── 所有模組都已回報狀態，統一印出開機摘要 ────────────
   // 網頁「正在播放」同步（要在開機摘要之前，才會列進摘要表）
   startWebSync(client);
+  // 外部監控的心跳（設定 HEARTBEAT_URL 才啟用）
+  startHeartbeat(client);
 
   bootSummary.print();
 

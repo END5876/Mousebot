@@ -14,7 +14,7 @@ const { playTTS } = require('./ttsHandler');
 const { restoreActiveLayer } = require('../audioManager');
 
 const {
-  WAKEUP_VOICE_PATH, TEMP_DIR,
+  STT_AVAILABLE, WAKEUP_VOICE_PATH, TEMP_DIR,
   RECORD_MAX_MS, RECORD_SILENCE_MS, WAKEUP_COOLDOWN_MS,
   RMS_THRESHOLD, DETECT_INTERVAL_MS,
   VAD_VOICE_RATIO_MIN, MIN_AUDIO_DURATION_MS, START_DELAY_MS,
@@ -40,7 +40,9 @@ const {
 } = require('./sttSession');
 
 // ── Groq 客戶端 ─────────────────────────────────────────
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+// 沒有金鑰時 groq-sdk 的建構子會直接丟例外（整個 Bot 開不起來），所以只在有設定時建立；
+// 沒有的話辨識那一步會失敗並回覆「語音辨識失敗」，其他功能照常
+const groq = STT_AVAILABLE ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
 
 // [修正 CROSS-4] 程序啟動時清理殘留的 temp .wav 檔案
 // 防止 SIGKILL 等異常退出後磁碟空間逐漸耗盡
@@ -84,6 +86,7 @@ function playWakeupSound(connection) {
 // Groq 語音轉文字
 // ══════════════════════════════════════════════════════════
 async function transcribeWithGroq(wavFilePath) {
+  if (!groq) throw new Error('未設定 GROQ_API_KEY');
   const fileStream = fs.createReadStream(wavFilePath);
   try {
     const transcription = await groq.audio.transcriptions.create({

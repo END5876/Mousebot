@@ -43,13 +43,23 @@ function _encodeRelPath(relPath) {
 // ════════════════════════════════════════════════════════
 //  清單
 // ════════════════════════════════════════════════════════
+// 清單每次都要整份下載（曲目多時數百 KB），服務端支援 ETag：帶上次的 ETag 詢問，
+// 沒變就回 304、沿用上次的結果，不必重新下載與解析。
+let _listEtag = null;
+let _listFiles = [];
+
 async function fetchList() {
   if (!isConfigured()) return [];
-  const { data } = await axios.get(`${LIB_URL}/api/music/list`, {
-    headers: _headers(),
+  const res = await axios.get(`${LIB_URL}/api/music/list`, {
+    headers: _headers(_listEtag ? { 'If-None-Match': _listEtag } : {}),
     timeout: REQUEST_TIMEOUT_MS,
+    validateStatus: (status) => (status >= 200 && status < 300) || status === 304,
   });
-  return Array.isArray(data?.files) ? data.files : [];
+  if (res.status === 304) return _listFiles;
+  const files = Array.isArray(res.data?.files) ? res.data.files : [];
+  _listFiles = files;
+  _listEtag = typeof res.headers?.etag === 'string' ? res.headers.etag : null;
+  return files;
 }
 
 // ════════════════════════════════════════════════════════
