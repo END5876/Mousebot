@@ -7,7 +7,7 @@ const {
 const splitbillClient = require('../utils/splitbillClient');
 const { fetchRealTimeRate, parseMoneyInput } = require('../utils/calculator');
 const { showMainMenu } = require('../commands/splitbill');
-const { canDeleteTrip, isCurrencyCode, CURRENCY_FORMAT_HINT } = require('../utils/tripHelper');
+const { canDeleteTrip, canViewTrip, isCurrencyCode, CURRENCY_FORMAT_HINT } = require('../utils/tripHelper');
 
 const BASELINE_RATES = {
   TWD: 1, JPY: 0.2, USD: 32, KRW: 0.024, EUR: 34.8, THB: 0.89, HKD: 4.1, GBP: 40.5
@@ -21,9 +21,12 @@ async function renderTripNav(interaction, alertMsg = null) {
   const guildId = interaction.guildId;
   // 🔒 [修正：切換行程影響全體] 這裡一律代入 interaction.user.id，
   // 讓畫面顯示的「目前作用行程」永遠是「這個使用者自己的」，不受其他人切換影響。
-  const { guild, trip } = await splitbillClient.resolveTrip(guildId, null, interaction.user.id);
+  const { guild, trip: resolved } = await splitbillClient.resolveTrip(guildId, null, interaction.user.id);
+  // 🔒 只顯示自己是成員的行程（Bot 擁有者看得到全部）：非成員退回伺服器預設行程時，
+  // 不顯示它的名稱與匯率；切換選單也只列出自己參加的行程
+  const trip = canViewTrip(resolved, interaction.user.id) ? resolved : null;
   const activeName = trip ? `**${trip.name}**` : '無';
-  const trips = Object.values(guild.trips).filter(t => !t.archived);
+  const trips = Object.values(guild.trips).filter(t => !t.archived && canViewTrip(t, interaction.user.id));
 
   const embed = new EmbedBuilder()
     .setColor(0xe74c3c)

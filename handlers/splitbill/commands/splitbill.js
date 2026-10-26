@@ -1,7 +1,9 @@
 'use strict';
 
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
 const splitbillClient = require('../utils/splitbillClient');
+const { canViewTrip } = require('../utils/tripHelper');
+const { md } = require('../../../utils/markdown');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -20,7 +22,9 @@ module.exports = {
   async showMainMenu(interaction, alertMsg = null) {
     const guildId = interaction.guildId;
     // 🔒 [修正：切換行程影響全體] 抓取「這個使用者自己」的作用行程，而非全伺服器共用一個
-    const { trip } = await splitbillClient.resolveTrip(guildId, null, interaction.user.id);
+    const { trip: resolved } = await splitbillClient.resolveTrip(guildId, null, interaction.user.id);
+    // 🔒 沒選過行程的人會退回伺服器的預設行程：不是成員就不顯示它的內容（名稱、人數、總花費）
+    const trip = canViewTrip(resolved, interaction.user.id) ? resolved : null;
 
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
@@ -48,7 +52,7 @@ module.exports = {
       // 剩下的「累計帳目」與「總花費」合併成一個滿版（非 inline）欄位，改用換行分開兩項資訊，
       // 避免手機寬度不夠時，長金額文字把整列擠爆或截斷。
       embed.addFields(
-        { name: '🧳 目前行程', value: `**${trip.name}**`, inline: true },
+        { name: '🧳 目前行程', value: `**${md(trip.name)}**`, inline: true },
         { name: '🪙 基準幣別', value: `\`${trip.baseCurrency}\``, inline: true },
         { name: '👥 行程人數', value: `\`${trip.members.length} 人\``, inline: true },
         {
@@ -91,7 +95,9 @@ module.exports = {
     } else if (interaction.isMessageComponent() || interaction.isModalSubmit()) {
       await interaction.update(payload);
     } else {
-      await interaction.reply(payload);
+      // 🔒 只有叫出面板的人看得到：以前是公開訊息，成員在面板上點進帳目、結算時，
+      // 這些畫面也會覆寫在同一則公開訊息上，頻道裡的非成員都看得到完整帳目
+      await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
     }
   }
 };

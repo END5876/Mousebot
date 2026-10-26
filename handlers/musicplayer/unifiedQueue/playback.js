@@ -32,6 +32,7 @@ const {
 } = require('./state');
 const session = require('./session');
 const logger = require('../../../utils/logger');
+const { md } = require('../../../utils/markdown');
 
 // ════════════════════════════════════════════════════════
 //  記錄每個 guild「點歌的頻道」
@@ -97,7 +98,7 @@ function _buildEmbed(guildId) {
 
   if (item.type === 'bilibili') {
     embed
-      .setDescription(`[${item.title}](${item.url})`)
+      .setDescription(`[${md(item.title)}](${item.url})`)
       .addFields(
         { name: '作者', value: item.author || '未知', inline: true },
         { name: '時長', value: item.duration || '未知', inline: true },
@@ -107,7 +108,7 @@ function _buildEmbed(guildId) {
     if (item.thumbnail) embed.setThumbnail(item.thumbnail);
   } else {
     embed
-      .setDescription(`🎧 **${item.title}**`)
+      .setDescription(`🎧 **${md(item.title)}**`)
       .addFields(
         { name: '循環模式', value: loopText, inline: true },
         { name: '佇列', value: `${queue.length} 首`, inline: true },
@@ -322,8 +323,8 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
           .setTitle('▶️ 正在播放（插播）')
           .setDescription(
             manualNext.type === 'bilibili'
-              ? `[${manualNext.title}](${manualNext.url})`
-              : `🎧 **${manualNext.title}**`
+              ? `[${md(manualNext.title)}](${manualNext.url})`
+              : `🎧 **${md(manualNext.title)}**`
           )
           .addFields({ name: '提示', value: '此曲播放完畢後將繼續隨機連播', inline: false })
           .setTimestamp();
@@ -348,7 +349,7 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
       const nextEmbed = new EmbedBuilder()
         .setColor(0xFF8C00)
         .setTitle('🎲 隨機連播 — 下一首')
-        .setDescription(`🎧 **${next.title}**`)
+        .setDescription(`🎧 **${md(next.title)}**`)
         .setTimestamp();
       sendTo.send({ embeds: [nextEmbed] }).catch(() => {});
 
@@ -375,8 +376,8 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
           .setTitle('⏭️ 正在播放下一首')
           .setDescription(
             next.type === 'bilibili'
-              ? `[${next.title}](${next.url})`
-              : `🎧 **${next.title}**`
+              ? `[${md(next.title)}](${next.url})`
+              : `🎧 **${md(next.title)}**`
           )
           .addFields({ name: '剩餘佇列', value: `${queue.length} 首`, inline: true });
 
@@ -409,7 +410,7 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
     if (err.message?.includes('aborted') || err.message?.includes('premature close')) return;
     logger.error('UnifiedQueue', `播放器錯誤 (${guildId}):`, err.message);
     const sendTo = _getNotifyChannel(guildId, channel);
-    sendTo.send(`❌ 播放 **${item.title}** 時發生錯誤，嘗試跳過...`).catch(() => {});
+    sendTo.send(`❌ 播放 **${md(item.title)}** 時發生錯誤，嘗試跳過...`).catch(() => {});
 
     const isRandomPlay = randomPlaySettings.get(guildId) || false;
     if (isRandomPlay) {
@@ -454,7 +455,7 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
     }
   } catch (err) {
     logger.error('UnifiedQueue', '引擎啟動失敗:', err.message);
-    notifyChannel.send(`❌ 無法播放 **${item.title}**：${err.message}`).catch(() => {});
+    notifyChannel.send(`❌ 無法播放 **${md(item.title)}**：${err.message}`).catch(() => {});
     nowPlaying.delete(guildId);
     return;
   }
@@ -722,7 +723,7 @@ async function resumeSavedSessions(client) {
 
       resumed++;
       logger.info('MusicSession', `已恢復 ${guild.name} 的播放：${s.current.title}（佇列 ${s.queue.length} 首）`);
-      await textChannel.send(`🔄 Bot 重新啟動，已接續播放 **${s.current.title}**（佇列 ${s.queue.length} 首）`).catch(() => {});
+      await textChannel.send(`🔄 Bot 重新啟動，已接續播放 **${md(s.current.title)}**（佇列 ${s.queue.length} 首）`).catch(() => {});
       await updateControlPanel(s.guildId, textChannel);
     } catch (err) {
       logger.warn('MusicSession', `恢復 ${s.guildId} 的播放失敗：${err.message}`);

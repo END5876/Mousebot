@@ -46,6 +46,10 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
   }
 
   const cleanInput = cleanUrl(input);
+  // cleanUrl 遇到網址裡互相衝突的影片 ID（例如 /shorts/<A>?v=<B>）會回傳空字串
+  if (!cleanInput && /^https?:\/\//i.test(input.trim())) {
+    return interaction.editReply('❌ 無法辨識這個網址指向哪一部影片（網址裡有互相衝突的影片 ID）');
+  }
   const isUrl = (() => { try { new URL(cleanInput); return true; } catch { return false; } })();
 
   let item;

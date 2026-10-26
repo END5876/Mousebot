@@ -46,6 +46,7 @@ const { stopAll, enqueue, updateControlPanel, resetShuffleBag, getRequestChannel
 const processGuards = require('../../../utils/processGuards');
 const bootSummary = require('../../../utils/bootSummary');
 const logger = require('../../../utils/logger');
+const { md } = require('../../../utils/markdown');
 
 const PUSH_DEBOUNCE_MS = 300;
 const HEARTBEAT_MS = 30 * 1000;
@@ -298,16 +299,16 @@ async function execute(cmd) {
       // 與 commands.js 的 uq_skip 一致：隨機連播交給 Idle 挑下一首；佇列空且不循環才整組停止
       if (randomPlaySettings.get(guildId)) {
         np.player.stop();
-        announce(guildId, `⏭️ 跳過「${np.item.title}」，隨機連播下一首`);
+        announce(guildId, `⏭️ 跳過「${md(np.item.title)}」，隨機連播下一首`);
         return '已跳過，隨機連播下一首';
       }
       if (queue.length === 0 && loopMode === 'off') {
         stopAll(guildId);
-        announce(guildId, `⏭️ 跳過「${np.item.title}」，佇列為空，停止播放`);
+        announce(guildId, `⏭️ 跳過「${md(np.item.title)}」，佇列為空，停止播放`);
         return '已跳過，佇列為空，停止播放';
       }
       np.player.stop();
-      announce(guildId, `⏭️ 跳過「${np.item.title}」`);
+      announce(guildId, `⏭️ 跳過「${md(np.item.title)}」`);
       return '已跳過';
     }
 
@@ -359,7 +360,7 @@ async function execute(cmd) {
       if (!target || (cmd.key && itemKey(target) !== cmd.key)) fail('佇列已經變動，請重新整理後再試');
       queue.splice(i, 1);
       session.schedule();
-      announce(guildId, `➖ 從佇列移除「${target.title}」`);
+      announce(guildId, `➖ 從佇列移除「${md(target.title)}」`);
       return `已移除「${target.title}」`;
     }
 
@@ -373,7 +374,7 @@ async function execute(cmd) {
         if (k > 0) { queue.splice(k, 1); queue.unshift(item); session.schedule(); }
       }
       const where = !result.queued ? '開始播放' : cmd.next ? '下一首播放' : `加入佇列（第 ${result.position} 首）`;
-      announce(guildId, `🎵 ${where}「${item.title}」`);
+      announce(guildId, `🎵 ${where}「${md(item.title)}」`);
       return `${where}「${item.title}」`;
     }
 

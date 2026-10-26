@@ -95,6 +95,11 @@ clearMemoryMessage: 已經清除記憶了喔~
 - 沒有設定 `ADMIN_PASSWORD`（或少於 12 個字元）時完全不啟動；建議使用 24 個字元以上的隨機密碼。
 - 登入後以 HttpOnly、SameSite=Strict 的 Cookie 維持（預設 7 天）。簽章金鑰存在 `data/admin-session-secret`，再和密碼一起衍生：**換密碼等於讓所有裝置登出**。
 - 登入限流：每個來源 10 分鐘內最多失敗 10 次，全站 10 分鐘內最多失敗 50 次（已登入的裝置不受影響）。
+  成功登入過的裝置（`mb_admin_dev` Cookie，90 天）不受全站上限影響，攻擊者灌錯誤密碼鎖不住擁有者。
+- 來源 IP：連線來自信任的反向代理時改用 `X-Forwarded-For`（最右邊那一個）。信任範圍由 `ADMIN_TRUSTED_PROXIES` 決定；
+  沒設定時信任所有私有網段（VPS 上 Caddy 經由 Docker 網路連進來需要這個）。知道代理的網段時，建議設成只包含它，
+  同一個私有網路裡的其他程式就不能自己帶 `X-Forwarded-For` 換來源。操作紀錄在經由代理時會一併記下 TCP 連線的位址。
+- 只有真的登出了一個有效 session 才寫「登出」紀錄：沒登入的請求不能灌爆操作紀錄、把真正的管理操作擠掉。
 - 所有寫入請求都必須帶自訂 header 與 JSON body（防 CSRF）；網頁設有嚴格的 Content-Security-Policy，外部資料（伺服器名稱、回應內容、log）一律以純文字顯示。
 
 ---
@@ -205,6 +210,8 @@ ADMIN_PORT=3940
 ADMIN_HOST=127.0.0.1                      # 0.0.0.0 = 允許其他裝置連線（請務必經由 HTTPS）
 ADMIN_SESSION_HOURS=168                   # 登入有效時數（預設 7 天）
 ADMIN_SESSION_SECRET=                     # 選填，簽 Cookie 的金鑰；未設定時自動產生並存在 data/admin-session-secret
+# ADMIN_TRUSTED_PROXIES=172.18.0.0/16     # 選填，信任哪些反向代理帶來的 X-Forwarded-For（逗號分隔的 CIDR）；
+                                          # 沒設定＝所有私有網段，none＝完全不信任（管理面板直接對外時）
 
 # ── 自動加入語音頻道（選填） ─────────────────────────────────────────
 TARGET_VOICE_CHANNEL_ID=your_voice_channel_id

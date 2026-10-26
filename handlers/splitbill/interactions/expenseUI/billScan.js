@@ -36,6 +36,16 @@ function isImageAttachment(attachment) {
   return BILL_SCAN_IMAGE_EXTENSIONS.some((ext) => name.endsWith(`.${ext}`));
 }
 
+// 實際能辨識的格式：圖片解碼只開放 JPEG／PNG／WebP／GIF（見 handlers/ai/aiUtils.js 的 sharp.block），
+// HEIC／HEIF（iPhone 預設）會被拒絕。isImageAttachment 仍然收下它們，讓掃描流程回一則清楚的提示，
+// 而不是看起來沒反應。
+const UNSUPPORTED_IMAGE_RE = /^image\/hei[cf]/i;
+function isSupportedImageAttachment(attachment) {
+  if (!isImageAttachment(attachment)) return false;
+  if (attachment.contentType && UNSUPPORTED_IMAGE_RE.test(attachment.contentType)) return false;
+  return !/\.hei[cf]$/i.test(attachment.name || '');
+}
+
 // ────────────────────────────────────────────────────────────────
 // 📷 帳單掃描：追蹤每個「guildId:userId」目前是否有一個尚未結束的
 // MessageCollector 在背景監聽上傳圖片。
@@ -213,6 +223,7 @@ module.exports = {
   BILL_SCAN_RATE_LIMIT_WINDOW_MS,
   billScanRateLimiter,
   isImageAttachment,
+  isSupportedImageAttachment,
   billScanKey,
   stopActiveBillScan,
   activeBillScanCollectors,

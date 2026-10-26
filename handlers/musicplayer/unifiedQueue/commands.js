@@ -26,6 +26,7 @@ const {
 const { handlePlay, handleAutocomplete } = require('./search');
 const bootSummary = require('../../../utils/bootSummary');
 const session = require('./session');
+const { md } = require('../../../utils/markdown');
 
 // ════════════════════════════════════════════════════════
 //  setupUnifiedCommands
@@ -177,8 +178,8 @@ function setupUnifiedCommands(client) {
               {
                 name: '🎧 正在播放',
                 value: np.item.type === 'bilibili'
-                  ? `[${np.item.title}](${np.item.url})`
-                  : `**${np.item.title}**`,
+                  ? `[${md(np.item.title)}](${np.item.url})`
+                  : `**${md(np.item.title)}**`,
                 inline: false,
               },
               { name: '循環模式', value: loopText, inline: true },
@@ -189,8 +190,8 @@ function setupUnifiedCommands(client) {
           if (queueList.length > 0) {
             const listText = queueList.map((t, i) =>
               t.type === 'bilibili'
-                ? `${i + 1}. [${t.title}](${t.url})`
-                : `${i + 1}. **${t.title}**`
+                ? `${i + 1}. [${md(t.title)}](${t.url})`
+                : `${i + 1}. **${md(t.title)}**`
             ).join('\n');
             embed.addFields({
               name: '📋 佇列',
@@ -387,8 +388,8 @@ async function handleMusicLoop(interaction) {
         .addFields({
           name: '正在播放',
           value: np.item.type === 'bilibili'
-            ? `[${np.item.title}](${np.item.url})`
-            : `**${np.item.title}**`,
+            ? `[${md(np.item.title)}](${np.item.url})`
+            : `**${md(np.item.title)}**`,
           inline: false,
         })
         .setTimestamp()
@@ -422,8 +423,8 @@ async function handleMusicQueue(interaction) {
     embed.addFields({
       name: '🎧 正在播放',
       value: np.item.type === 'bilibili'
-        ? `[${np.item.title}](${np.item.url})\n作者: ${np.item.author || '未知'}`
-        : `**${np.item.title}**`,
+        ? `[${md(np.item.title)}](${np.item.url})\n作者: ${md(np.item.author || '未知')}`
+        : `**${md(np.item.title)}**`,
       inline: false,
     });
   }
@@ -432,8 +433,8 @@ async function handleMusicQueue(interaction) {
   if (queueList.length > 0) {
     const listText = queueList.map((t, i) =>
       t.type === 'bilibili'
-        ? `${i + 1}. [${t.title}](${t.url})`
-        : `${i + 1}. **${t.title}**`
+        ? `${i + 1}. [${md(t.title)}](${t.url})`
+        : `${i + 1}. **${md(t.title)}**`
     ).join('\n');
     embed.addFields({
       name: `📋 佇列 (${queueList.length} 首)`,
@@ -496,7 +497,7 @@ async function handleMusicRandomPlay(interaction) {
   const embed = new EmbedBuilder()
     .setColor(enableContinuous ? 0xFF8C00 : 0x1DB954)
     .setTitle(enableContinuous ? '🎲 隨機連播已開始' : '🎲 隨機播放')
-    .setDescription(`🎧 **${track.title}**`)
+    .setDescription(`🎧 **${md(track.title)}**`)
     .addFields(
       {
         name: '模式',

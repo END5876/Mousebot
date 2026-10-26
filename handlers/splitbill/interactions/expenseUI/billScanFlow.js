@@ -1,7 +1,7 @@
 'use strict';
 
 const {
-  EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle
+  EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags
 } = require('discord.js');
 const { scanBillImage } = require('../../utils/billScanner');
 const logger = require('../../../../utils/logger');
@@ -15,6 +15,7 @@ const {
   BILL_SCAN_RATE_LIMIT_MAX,
   billScanRateLimiter,
   isImageAttachment,
+  isSupportedImageAttachment,
   billScanKey,
   stopActiveBillScan,
   activeBillScanCollectors,
@@ -75,13 +76,14 @@ async function startBillScan(interaction, trip, cache) {
         await msg.reply(payload);
       } catch (replyErr) {
         logger.error('Splitbill', '回覆使用者圖片訊息失敗，改用 followUp 補發新訊息:', replyErr.message);
-        await interaction.followUp(payload).catch(() => {});
+        // 🔒 只有自己看得到（主控面板也是）：補發的訊息不在使用者自己的圖片底下，不要公開帳目
+        await interaction.followUp({ ...payload, flags: MessageFlags.Ephemeral }).catch(() => {});
       }
     };
 
     // 一次訊息可能夾帶多張圖片，每一張都各自算一筆花費；這裡取所有符合圖片格式的附件，
     // 依訊息中原本的順序處理，並限制單次批次最多處理的張數（見 BILL_SCAN_MAX_IMAGES_PER_BATCH 說明）。
-    const allImageAttachments = [...msg.attachments.values()].filter((a) => isImageAttachment(a));
+    const allImageAttachments = [...msg.attachments.values()].filter((a) => isSupportedImageAttachment(a));
     const imageAttachments = allImageAttachments.slice(0, BILL_SCAN_MAX_IMAGES_PER_BATCH);
     const truncatedCount = allImageAttachments.length - imageAttachments.length;
 
@@ -92,7 +94,7 @@ async function startBillScan(interaction, trip, cache) {
           new EmbedBuilder()
             .setColor(0xe74c3c)
             .setTitle('❌ 辨識失敗')
-            .setDescription('無法讀取您上傳的檔案，請確認上傳的是常見圖片格式 (png/jpg/webp)。')
+            .setDescription('無法讀取您上傳的檔案，請上傳 JPG／PNG／WebP 圖片（iPhone 的 HEIC 照片請先轉成 JPG，或用截圖）。')
         ],
         components: [
           new ActionRowBuilder().addComponents(
@@ -234,7 +236,7 @@ async function startBillScan(interaction, trip, cache) {
     // 而不是原地 editReply——如果 90 秒等待期間頻道還有其他訊息，原地編輯一樣會被洗上去看不到。
     (async () => {
       await interaction.deleteReply().catch(() => {});
-      await interaction.followUp({ embeds: [timeoutEmbed], components: [retryRow] }).catch(() => {});
+      await interaction.followUp({ embeds: [timeoutEmbed], components: [retryRow], flags: MessageFlags.Ephemeral }).catch(() => {});
     })();
   });
 }

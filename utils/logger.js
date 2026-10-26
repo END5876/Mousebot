@@ -72,32 +72,49 @@ function tag(mod) {
   return `${C.cyan}[${mod}]${C.reset}`;
 }
 
+// 🔒 [日誌注入] 使用者能控制的字串（網頁播放器送來的歌名、影片標題、檔名）會被寫進 log：
+// 換行可以在管理面板的「日誌」頁偽造一整行看起來正常的紀錄（例如陌生 IP 登入成功），
+// ESC 序列可以在終端機裡清除或改寫前面的輸出。字串參數裡的控制字元（Tab 以外的 C0、DEL、C1）
+// 一律換成 \n、\x1b 這種看得見的形式；Error 物件不處理（堆疊本來就是多行，內容也不是使用者給的）。
+// eslint-disable-next-line no-control-regex -- 這裡就是要比對控制字元
+const CONTROL_CHARS = /[\x00-\x08\x0a-\x1f\x7f-\x9f]/g;
+const ESCAPES = { '\n': '\\n', '\r': '\\r' };
+function escapeControlChars(s) {
+  return String(s).replace(CONTROL_CHARS, (c) => ESCAPES[c] || `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
+}
+const cleanArgs = (args) => args.map((a) => (typeof a === 'string' ? escapeControlChars(a) : a));
+
 function success(mod, ...args) {
   if (!enabled('info')) return;
+  args = cleanArgs(args);
   console.log(`${C.green}✅${C.reset} ${tag(mod)}`, ...args);
   remember('success', mod, args);
 }
 
 function info(mod, ...args) {
   if (!enabled('info')) return;
+  args = cleanArgs(args);
   console.log(`${C.gray}·${C.reset}  ${tag(mod)}`, ...args);
   remember('info', mod, args);
 }
 
 function warn(mod, ...args) {
   if (!enabled('warn')) return;
+  args = cleanArgs(args);
   console.error(`${C.yellow}⚠️${C.reset}  ${tag(mod)}`, ...args);
   remember('warn', mod, args);
 }
 
 function error(mod, ...args) {
   if (!enabled('error')) return;
+  args = cleanArgs(args);
   console.error(`${C.red}❌${C.reset} ${tag(mod)}`, ...args);
   remember('error', mod, args);
 }
 
 function debug(mod, ...args) {
   if (!enabled('debug')) return;
+  args = cleanArgs(args);
   console.log(`${C.gray}   · [${mod}]${C.reset}`, ...args);
   remember('debug', mod, args);
 }
@@ -115,4 +132,4 @@ function getLevel() {
   return Object.keys(LEVELS).find(k => LEVELS[k] === threshold) ?? 'info';
 }
 
-module.exports = { success, warn, error, info, debug, section, isDebugEnabled, getRecent, getLatestSeq, getLevel };
+module.exports = { success, warn, error, info, debug, section, isDebugEnabled, getRecent, getLatestSeq, getLevel, escapeControlChars };
