@@ -5,7 +5,7 @@ openwakeword==0.6.0
 flask==3.1.0
 
 # 數值運算
-numpy==1.26.4
+numpy==2.5.4
 
 # ONNX 推理引擎（OWW 依賴）
 onnxruntime==1.20.1
