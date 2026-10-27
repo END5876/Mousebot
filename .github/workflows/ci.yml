@@ -17,11 +17,15 @@ jobs:
           node-version: 22
           cache: npm
 
-      # @discordjs/opus 等原生模組需要編譯；這個 job 只跑 lint 與漏洞檢查，不需要語音功能
-      # （單元測試 test/ 不進版本庫，只在本機用 npm test 執行）
+      # @discordjs/opus 等原生模組需要編譯；lint 與單元測試都不需要語音功能
       - run: npm ci --ignore-scripts
 
       - run: npm run lint
+
+      # MUSIC_RESUME=0：測試不寫播放快照（data/musicSession.json）
+      - run: npm test
+        env:
+          MUSIC_RESUME: '0'
 
       # high 以上的漏洞讓 CI 失敗（只在安裝時用到的 tar 例外，見腳本說明）
       - name: npm audit

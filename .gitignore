@@ -5,4 +5,6 @@ data/
 temp/
 __pycache__/
 *.pyc
-test/
+# 會呼叫付費 Gemini API 的模型比較腳本與它的輸出，只在本機用
+test/modelCompare.js
+test/results/

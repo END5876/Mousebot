@@ -123,11 +123,12 @@ clearMemoryMessage: 已經清除記憶了喔~
 git clone https://github.com/END5876/Mousebot.git
 cd Mousebot
 
-# 建立 .env 檔案並填入必要的 Token 與 API 金鑰（見下方「環境變數設定」）
+# 建立 .env 並填入必要的 Token 與 API 金鑰（見下方「環境變數設定」）
+cp .env.example .env
 
-# 建置並啟動容器
+# 建置並啟動容器（data/ 一定要掛載，否則容器重建後設定、prompt、音樂庫都會消失）
 docker build -t mousebot .
-docker run -d --env-file .env --name mousebot mousebot
+docker run -d --name mousebot --restart unless-stopped --env-file .env -v "$(pwd)/data:/app/data" mousebot
 ```
 
 Docker image 以 `node:22-slim` 為基底，已透過 **supervisord** 同時管理 Node.js 主程式與 Python OWW 服務，並自動安裝 `edge-tts`、`yt-dlp` 等執行期工具，無需額外設定。分帳網頁介面已獨立成另一個專案與服務（splitbill-service）；容器內只有選用的管理面板會開網頁 port（預設只監聽 127.0.0.1，見「管理面板」）。
@@ -135,8 +136,9 @@ Docker image 以 `node:22-slim` 為基底，已透過 **supervisord** 同時管�
 ### 方法二：本機直接執行
 
 ```bash
-# 安裝 Node.js 依賴
+# 安裝 Node.js 依賴、建立 .env
 npm install
+cp .env.example .env
 
 # 建立 Python 虛擬環境並安裝 OWW 依賴
 python3 -m venv /opt/oww-env
@@ -157,8 +159,8 @@ npm start
 
 ```bash
 npm run lint    # ESLint（禁止直接使用 console.*，請改用 utils/logger.js）
-npm test        # node:test 單元測試（test/ 只存在本機，不進版本庫）
-npm run check   # 以上兩者（GitHub Actions 每次 push / PR 只跑 lint）
+npm test        # node:test 單元測試（test/*.test.js）
+npm run check   # 以上兩者（GitHub Actions 每次 push / PR 也會跑 lint 與測試）
 ```
 
 開發時建議設定 `DEV_GUILD_ID`，Slash Commands 只註冊到測試伺服器、改完立即生效。
@@ -167,152 +169,24 @@ npm run check   # 以上兩者（GitHub Actions 每次 push / PR 只跑 lint）
 
 ## 環境變數設定
 
-請在專案根目錄建立 `.env` 檔案（已列入 `.gitignore`，請勿提交）。
+複製 `.env.example` 成 `.env` 後填入（`.env` 已列入 `.gitignore`，請勿提交）。**完整清單、預設值與說明以 `.env.example` 為準**，這裡只列出必填與最常用的項目：
 
-```env
-# ── Discord 基本設定（必填） ────────────────────────────────────────
-DISCORD_TOKEN=your_discord_bot_token
-CLIENT_ID=your_discord_application_id
+| 變數 | 必填 | 說明 |
+|---|---|---|
+| `DISCORD_TOKEN`、`CLIENT_ID` | ✅ | Discord Bot Token 與 Application ID |
+| `GEMINI_API_KEY` | ✅ | Google Gemini（`/ai` 對話與帳單照片辨識）；模型預設 `gemini-3.1-flash-lite`，可用 `GEMINI_MODEL` 換 |
+| `OWNER_USER_ID` | 建議 | Bot 擁有者的 Discord ID（逗號分隔）。未設定時 `/ai mode`、`/response add`、`/autojoin` 變更頻道等擁有者功能全部拒絕 |
+| `GROQ_API_KEY` | | Groq Whisper 語音辨識；未設定時只有 STT 停用 |
+| `ADMIN_PASSWORD` | | 啟用管理面板（至少 12 字元，見「管理面板」） |
+| `SOVITS_HOST`／`SOVITS_PORT`／`SOVITS_MODEL_{KEY}_*` | | GPT-SoVITS TTS；未設定時只用 Edge-TTS |
+| `MUSIC_LIB_URL`／`MUSIC_LIB_SECRET` | | 共用音樂庫服務（music-library-service）；未設定則只用本機 `data/music` |
+| `SPLITBILL_SERVICE_URL`／`SPLITBILL_SERVICE_KEY` | | 分帳服務（splitbill-service）；未設定時 `/splitbill` 面板無法使用 |
+| `ALERT_WEBHOOK_URL`／`HEARTBEAT_URL` | | Discord webhook 告警、外部監控心跳 |
+| `DEV_GUILD_ID` | | 開發用：Slash Commands 只註冊到這個伺服器、立即生效 |
 
-# ── Google Gemini AI（必填） ────────────────────────────────────────
-# 同時供 /ai 對話與分帳系統的帳單照片辨識使用
-GEMINI_API_KEY=your_gemini_api_key
-GEMINI_MODEL=                             # 選填，預設 gemini-3.1-flash-lite
-GEMINI_VISION_MODEL=                      # 選填，帳單辨識用模型，預設同 GEMINI_MODEL
-GEMINI_SEARCH_GUILD_IDS=                  # 選填，啟用 Google 搜尋接地的伺服器 ID（逗號分隔）；未設定則停用
+其餘選填項目（AI 額度、STT／OWW 參數、TTS 快取、音樂快取與接續播放、YouTube／Bilibili 認證、WARP 代理…）請見 `.env.example`。
 
-# ── AI 額度（選填，0 = 不限制；擁有者不受單人限制） ─────────────────────
-AI_USER_RATE_LIMIT=8                      # 每人在視窗內最多呼叫次數
-AI_USER_RATE_WINDOW_SEC=60
-AI_USER_DAILY_TOKEN_BUDGET=0              # 每人每日 token 上限
-AI_DAILY_TOKEN_BUDGET=0                   # 全體每日 token 上限（硬上限，擁有者也受限）
-
-# ── Groq 語音轉文字 STT（選填；未設定時 Bot 照常啟動，只有語音辨識停用） ──
-GROQ_API_KEY=your_groq_api_key
-
-# ── 使用者權限設定（逗號分隔 Discord ID，選填） ───────────────────────
-LOVER_MODE_USER_IDS=123456789012345678
-DEVELOPER_MODE_USER_IDS=123456789012345678
-SAY_AUTHORIZED_ID=123456789012345678      # /say 指令授權使用者
-OWNER_USER_ID=123456789012345678          # Bot 擁有者（可逗號分隔多人）：/ai mode、/response add|remove、/autojoin 變更頻道、可刪除舊版行程；未設定則這些功能全部拒絕
-EXIT_ON_UNCAUGHT=1                        # 未捕捉例外時結束程序交由 supervisord 重啟（設 0 = 只記錄不結束）
-
-# ── 告警與監控（選填；未設定就不送） ─────────────────────────────────
-ALERT_WEBHOOK_URL=                        # Discord webhook：AI 全體預算用完、管理面板登入被鎖定、子程序 FATAL 時通知
-ALERT_NAME=mousebot                       # 告警訊息開頭的名稱
-HEARTBEAT_URL=                            # 外部監控（healthchecks.io、Uptime Kuma Push…）的心跳網址，Discord 連線正常時定期 GET
-HEARTBEAT_INTERVAL_SEC=300
-FATAL_RESTART_MIN_UPTIME_SEC=600          # OWW／bgutil 在容器啟動後這麼多秒內就 FATAL 時不重啟容器（見 docker/fatal-listener.py）
-
-# ── 執行環境（選填） ─────────────────────────────────────────────────
-LOG_LEVEL=info                            # debug | info | warn | error（DEBUG_STARTUP=true 等同 debug）
-DEV_GUILD_ID=                             # 設定後 Slash Commands 只註冊到這個伺服器（開發用，立即生效）
-FORCE_COMMAND_SYNC=0                      # 1 = 忽略指令 hash 比對，強制重新註冊
-HEALTH_PORT=3939                          # /healthz 健康檢查埠（0 = 停用）；Docker HEALTHCHECK 使用
-HEALTH_HOST=127.0.0.1
-
-# ── 管理面板（選填；未設定 ADMIN_PASSWORD 就不啟動） ─────────────────
-ADMIN_PASSWORD=                           # 登入密碼，至少 12 個字元（建議 24 字元以上的隨機字串）
-ADMIN_PORT=3940
-ADMIN_HOST=127.0.0.1                      # 0.0.0.0 = 允許其他裝置連線（請務必經由 HTTPS）
-ADMIN_SESSION_HOURS=168                   # 登入有效時數（預設 7 天）
-ADMIN_SESSION_SECRET=                     # 選填，簽 Cookie 的金鑰；未設定時自動產生並存在 data/admin-session-secret
-# ADMIN_TRUSTED_PROXIES=172.18.0.0/16     # 選填，信任哪些反向代理帶來的 X-Forwarded-For（逗號分隔的 CIDR）；
-                                          # 沒設定＝所有私有網段，none＝完全不信任（管理面板直接對外時）
-
-# ── 自動加入語音頻道（選填） ─────────────────────────────────────────
-TARGET_VOICE_CHANNEL_ID=your_voice_channel_id
-
-# ── TTS：GPT-SoVITS（選填，未設定則僅用 Edge-TTS） ───────────────────
-SOVITS_HOST=localhost
-SOVITS_PORT=9880
-SOVITS_DEFAULT_MODEL=your_default_model_key
-# 模型設定（每組一個模型，MODEL_KEY 自訂）
-SOVITS_MODEL_{KEY}_NAME=顯示名稱
-SOVITS_MODEL_{KEY}_GPT=weights/xxx.ckpt
-SOVITS_MODEL_{KEY}_SOVITS=weights/xxx.pth
-SOVITS_MODEL_{KEY}_REF_AUDIO=ref/xxx.wav
-SOVITS_MODEL_{KEY}_PROMPT_TEXT=參考文字
-SOVITS_MODEL_{KEY}_PROMPT_LANG=zh
-SOVITS_MODEL_{KEY}_TEXT_LANG=zh
-# LRU 快取設定
-TTS_CACHE_MAX=30
-TTS_CACHE_TTL_MS=600000
-# 逾時（選填）：SoVITS 一段超過這個時間就改用 edge-tts 念；佇列每段最多等多久，超過就跳過那一段
-SOVITS_TOTAL_TIMEOUT_MS=45000
-TTS_SEGMENT_TIMEOUT_MS=60000
-
-# ── STT / OpenWakeWord 伺服器（選填；以下都是預設值，不寫也可以） ──────
-OWW_HTTP_URL=http://127.0.0.1:5001        # 預設 http://127.0.0.1:<OWW_PORT>
-OWW_MODEL_PATH=                           # 預設 oww-server/models/hey_taffy.onnx
-OWW_PORT=5001
-OWW_CHUNK_SIZE=1280
-OWW_PROB_THRESHOLD=0.65
-OWW_MIN_CONSECUTIVE=3
-OWW_COOLDOWN_SEC=2.0
-OWW_MAX_SESSIONS=50
-# 進階 OWW 設定
-OWW_SESSION_TTL_SEC=120
-OWW_TTL_CHECK_SEC=30
-OWW_MAX_DETECT_SEC=2
-OWW_RATE_LIMIT_MAX_CALLS=10
-OWW_RATE_LIMIT_WINDOW_SEC=1.0
-
-# ── STT 錄音參數（選填；以下都是預設值，不寫也可以） ─────────────────
-STT_RECORD_MS=15000
-STT_SILENCE_MS=1500
-STT_COOLDOWN_MS=2000
-STT_RMS_THRESHOLD=150
-STT_DETECT_WINDOW_MS=2500
-STT_MAX_DETECT_CHUNKS=200
-STT_MAX_RECORD_BYTES=10000000
-STT_VAD_THRESHOLD=100
-STT_VAD_RATIO_MIN=0.1
-STT_MIN_DURATION_MS=500
-STT_START_DELAY_MS=1000
-STT_NO_SPEECH_PROB=0.6
-# 進階 STT 設定
-STT_DETECT_INTERVAL_MS=500
-STT_OWW_MAX_CONCURRENT=4
-STT_OWW_MAX_SOCKETS=8
-STT_OWW_QUEUE_MAX=                        # 預設 STT_OWW_MAX_CONCURRENT × 2
-STT_USER_IDLE_MS=600000
-STT_USER_CLEANUP_INTERVAL_MS=60000
-STT_DEBUG_MEM=0
-
-# ── 手動錄音按鈕行為（選填，有預設值） ──────────────────────────────
-HEYJQN_USER_COOLDOWN_MS=4000
-HEYJQN_BTN_TTL_MS=900000
-
-# ── 音樂播放（選填） ─────────────────────────────────────────────────
-MAX_CACHE_SIZE_MB=2048
-MUSIC_RESUME=1                            # 重啟後自動接續播放（0 = 停用）
-MUSIC_RESUME_MAX_AGE_MIN=15               # 快照超過幾分鐘就不接續
-# 共用音樂庫服務（選填；未設定則只用本機 data/music）
-MUSIC_LIB_URL=                            # 例如 http://<library-service>.internal:3000
-MUSIC_LIB_SECRET=                         # 與音樂庫服務共用的金鑰（x-music-lib-key）
-# 網頁「Bot 正在播放」同步（有設 MUSIC_LIB_URL 時自動啟用）
-WEB_SYNC=1                                # 0 = 關閉
-WEB_SYNC_BOT_NAME=                        # 網頁上顯示的名稱（預設 Bot 使用者名稱）
-WEB_SYNC_BOT_ID=                          # 網頁上識別這台 Bot 的 ID（預設 Discord 應用程式 ID）
-WEB_SYNC_ANNOUNCE=1                       # 網頁操作時在點歌頻道留一行紀錄（0 = 不留）
-WARP_PROXY_URL=                           # Cloudflare WARP Proxy（YouTube 防封用）
-# Bilibili 認證
-BILIBILI_SESSDATA=
-BILIBILI_BILI_JCT=
-BILIBILI_DEDEUSERID=
-# YouTube 認證
-YOUTUBE_PO_TOKEN=                         # 手動 PO Token（已由 bgutil provider 自動產生取代，通常留空）
-YT_POT_PROVIDER_URL=                      # bgutil PO Token 伺服器位址；Docker image 內建於 127.0.0.1:4416，留空即可
-YOUTUBE_VISITOR_INFO=
-YOUTUBE_SESSION_ID=
-
-# ── 分帳系統（連到獨立部署的 splitbill-service，必填才能使用 /splitbill） ─────────
-SPLITBILL_SERVICE_URL=                    # 例如 http://<service-name>.internal:3000（內部網路位址）
-SPLITBILL_SERVICE_KEY=                    # 與 splitbill-service 的 SPLITBILL_API_KEY 相同的共用金鑰
-# （SPLITBILL_SERVICE_KEY 未設定時會退回使用 SPLITBILL_API_KEY）
-# 注意：splitbill-service 也要設定相同的 OWNER_USER_ID，否則 Bot 擁有者刪除他人行程時會被 service 拒絕
-```
+> splitbill-service 也要設定相同的 `OWNER_USER_ID`，否則 Bot 擁有者刪除他人行程時會被 service 拒絕。
 
 ---
 
@@ -320,148 +194,40 @@ SPLITBILL_SERVICE_KEY=                    # 與 splitbill-service 的 SPLITBILL_
 
 ```
 Mousebot/
-├── admin/                            # 管理面板（設定 ADMIN_PASSWORD 才啟動）
-│   ├── server.js                     # HTTP 伺服器（node:http）：靜態檔案、API 路由、安全標頭
-│   ├── auth.js                       # 密碼登入、簽章 Cookie、登入限流
-│   ├── http.js                       # 極簡路由、HttpError、輸入驗證
-│   ├── discordInfo.js                # ID → 伺服器／頻道／使用者名稱、成員搜尋
-│   ├── voiceState.js                 # 語音連線與播放狀態、播放控制與點歌（與控制面板按鈕、網頁播放器同邏輯）
-│   ├── cacheTools.js                 # 音樂下載快取的統計與清除
-│   ├── audit.js                      # 操作紀錄（data/adminAudit.json）
-│   ├── api/                          # 各頁面的 API：overview、responses、prompts、ai、voice、tts、notify、system、logs
-│   └── public/                       # 網頁（原生 JS ES modules，無建置步驟、不載入外部資源）
+├── index.js                 # 主程式入口：建立 Discord Client、載入所有模組
+├── admin/                   # 管理面板（設定 ADMIN_PASSWORD 才啟動）
+│   ├── server.js、auth.js、http.js   # HTTP 伺服器、登入與簽章 Cookie、極簡路由
+│   ├── api/                 # 各頁面的 API
+│   └── public/              # 網頁（原生 JS ES modules，無建置步驟、不載入外部資源）
 ├── handlers/
-│   ├── ai/
-│   │   ├── aiChance.js               # 隨機插話機率控制，持久化至 data/replyChance.json
-│   │   ├── aiCore.js                 # 對話核心：歷史紀錄組裝、system prompt 取自 promptStore
-│   │   ├── aiQuota.js                # AI 額度：每人頻率限制、每人 / 全體每日 token 上限
-│   │   ├── aiHandler.js              # /ai 指令主處理器（ask/clear/tts/mode/chance/gugu/prompt edit）
-│   │   ├── aiSettings.js             # GENERATION_CONFIG、LOVER/DEVELOPER_MODE_USER_IDS
-│   │   ├── aiUtils.js                # TTS 開關、對話記憶快取、圖片壓縮（sharp）、工具函式
-│   │   ├── geminiClient.js           # 唯一的 Gemini 入口（@google/genai、GEMINI_MODEL、safetySettings）
-│   │   ├── gugugagaGenerator.js      # 咕咕嘎嘎文章生成
-│   │   ├── modeSelector.js           # 使用者模式選擇與持久化（data/userModes.json）
-│   │   ├── promptStore.js            # prompt 存放區：載入 data/prompts/*.md、mtime 熱重載、寫入 API
-│   │   └── searchGrounding.js        # Google 搜尋接地：啟用伺服器、搜尋階段 prompt、舊來源行過濾
-│   ├── musicplayer/
-│   │   ├── unifiedQueue/             # 統一播放佇列模組
-│   │   │   ├── index.js              # 對外進入點（彙整子模組，保持 API 介面一致）
-│   │   │   ├── state.js              # 共用狀態 Maps 與引擎注入（registerEngine）
-│   │   │   ├── playback.js           # 播放器生命週期、佇列播放、控制面板更新、重啟後接續播放
-│   │   │   ├── session.js            # 播放快照持久化（data/musicSession.json）
-│   │   │   ├── search/                # /play 核心、搜尋與播放清單匯入
-│   │   │   │   ├── index.js
-│   │   │   │   ├── onlineSearch.js    # YouTube / Bilibili 搜尋
-│   │   │   │   ├── local.js           # 本地音樂搜尋
-│   │   │   │   ├── playlist.js        # 播放清單匯入
-│   │   │   │   ├── autocomplete.js    # Slash Command Autocomplete
-│   │   │   │   └── urlUtils.js
-│   │   │   ├── commands.js           # Slash Commands 註冊、控制面板按鈕互動、閒置監控指令
-│   │   │   └── webSync.js            # 把「正在播放」同步到共用音樂庫服務的網頁，接收網頁的控制指令
-│   │   ├── musicLibraryClient.js     # 共用音樂庫服務客戶端（MUSIC_LIB_URL，選用）
-│   │   ├── localMusicHandler.js      # 本地音樂引擎，支援 mp3/wav/ogg/flac/m4a/aac，播放次數統計
-│   │   ├── musicAntiBot.js           # YouTube/Bilibili 防爬蟲 Headers、Cookies、yt-dlp 參數
-│   │   ├── musicCache.js             # 音樂快取管理（data/music/cache/），自動清理舊快取
-│   │   ├── musicNormalizer.js        # 響度正規化（ffmpeg loudnorm，目標 -16 LUFS）
-│   │   ├── onlineMusicHandler.js     # 線上音樂引擎（yt-dlp），含串流、快取、重試、Bilibili 支援
-│   │   └── voiceActivityMonitor.js   # 閒置監控：30 分無人 → 停止，60 分無人說話 → 停止
-│   ├── voice/
-│   │   ├── sttConfig.js              # STT 環境變數、常數、Semaphore 並發控制、工具函式
-│   │   ├── sttHandler.js             # 喚醒詞偵測 → 錄音 → Groq Whisper → AI 回覆主流程
-│   │   ├── sttSession.js             # Guild/User 狀態管理、音訊訂閱（prism-media）、閒置清理
-│   │   ├── sttwakeupvoice.wav        # 喚醒成功音效
-│   │   └── ttsHandler/               # GPT-SoVITS 主力 + Edge-TTS fallback
-│   │       ├── index.js
-│   │       ├── sovitsClient.js       # SoVITS API 客戶端與健康探測
-│   │       ├── edgeTTS.js            # Edge-TTS fallback
-│   │       ├── generate.js           # 合成流程整合
-│   │       ├── queue.js              # 播放排隊系統
-│   │       ├── cache.js              # LRU 快取
-│   │       ├── models.js             # 多模型設定解析
-│   │       ├── settings.js           # 各伺服器的模型 / edge-tts 聲音（data/ttsSettings.json）
-│   │       ├── textSplitter.js       # 長文分段
-│   │       └── commands.js           # /tts 指令
-│   ├── notice/
-│   │   ├── epicFreeHandler.js        # Epic 限免：官方 API（TW 區），取得及篩選當前免費遊戲
-│   │   ├── noticeHandler.js          # /notify 指令，30 分鐘輪詢，合併管理 Steam & Epic
-│   │   ├── noticeService.js          # 通知框架：頻道清單、已通知去重、HTTP GET（含 Retry）
-│   │   ├── steamFreeHandler.js       # Steam 限免：GamerPower API，過濾 Key Giveaway
-│   │   └── timeAnnouncer.js          # 整點報時：/timeannounce 指令，讀取 data/timeAnnouncer/*.wav
-│   ├── splitbill/
-│   │   ├── commands/
-│   │   │   ├── splitbill.js          # /splitbill 主控台面板（引導式操作）
-│   │   │   ├── splitbillAttach.js    # /splitbill-attach 將網頁行程綁定到伺服器
-│   │   │   └── splitbillQuick.js     # /splitbill-quick 一行快速記帳指令
-│   │   ├── interactions/
-│   │   │   ├── expenseUI/            # 記帳 UI（新增、編輯、刪除花費、帳單照片辨識）
-│   │   │   │   ├── index.js
-│   │   │   │   ├── billScan.js       # 帳單照片辨識（呼叫 utils/billScanner.js）
-│   │   │   │   ├── billScanFlow.js   # 辨識結果確認流程
-│   │   │   │   ├── buttonHandler.js
-│   │   │   │   ├── modalHandler.js
-│   │   │   │   ├── selectMenuHandler.js
-│   │   │   │   ├── expenseCompletion.js
-│   │   │   │   ├── ledger.js
-│   │   │   │   └── helpers.js
-│   │   │   ├── memberUI.js           # 成員 UI（新增、移除成員）
-│   │   │   ├── settleUI.js           # 結算 UI（計算債務、交叉抵銷、預收訂金）
-│   │   │   ├── tripUI.js             # 行程 UI（建立、切換、封存行程，設定幣別與匯率）
-│   │   │   └── quickSplitUI.js       # ⚡ 快速分帳：不需建立行程、不落地寫入資料，算完即丟
-│   │   ├── utils/
-│   │   │   ├── calculator.js         # 金額計算：round2、toBase、equalSplit、parseMoneyInput 等
-│   │   │   ├── settlement.js         # 貪心演算法：最少筆數交叉債務簡化
-│   │   │   ├── deposit.js            # 預收訂金：記錄、與實際花費互相抵銷
-│   │   │   ├── billScanner.js        # 帳單照片辨識（Gemini Vision，結構化 JSON 輸出）
-│   │   │   ├── parse.js              # parsePayerField、parseSplitField（解析代墊/分攤語法）
-│   │   │   ├── splitbillClient.js    # 呼叫獨立部署的 splitbill-service（SPLITBILL_SERVICE_URL / KEY）
-│   │   │   ├── stateCache.js         # 跨面板操作狀態快取（TTL 15 分鐘，自動清除過期項目）
-│   │   │   └── tripHelper.js         # resolveTrip、memberDisplay、ensureMembersExist
-│   │   └── index.js                  # setupSplitbillCommands，統一攔截 Button/Modal/SelectMenu，行程成員權限管控
-│   ├── audioManager.js               # 音頻優先級排程（SILENCE=0 < MUSIC=1 < TTS=2）
-│   ├── autoJoinHandler.js            # 自動加入目標語音頻道（10 秒輪詢），整合 voiceActivityMonitor
-│   ├── commandHandler.js             # /ping、/serverinfo、/say、/nh；「有什麼了不起」被動回應
-│   ├── presenceHandler.js            # Bot 線上狀態與活動文字（data/presence.json）
-│   ├── responseHandler.js            # 自訂關鍵字自動回應（data/responses.json）
-│   └── voiceHandler.js               # /voice 指令群：join/leave/status/stt/silence/record-button
-├── oww-server/
-│   ├── models/                       # OWW ONNX 模型檔案（需自行放置）
-│   ├── requirements.txt              # Python 依賴（見下方）
-│   └── server.py                     # Flask HTTP 伺服器（含 Session TTL、Rate Limiting）
-├── utils/
-│   ├── bootSummary.js                # 開機摘要收集器，啟動時統一列印模組狀態表
-│   ├── commandSync.js                # Slash Commands 同步（hash 比對、DEV_GUILD_ID）
-│   ├── config.js                     # 擁有者身分判斷（OWNER_USER_ID、isOwner）
-│   ├── health.js                     # /healthz 健康檢查端點（Docker HEALTHCHECK）
-│   ├── jsonStore.js                  # data/*.json 原子寫入、.bak 備份、合併寫入
-│   ├── logger.js                     # 統一 log 工具（LOG_LEVEL；success / info / warn / error / debug），保留最近 500 則給管理面板
-│   ├── processGuards.js              # 全域 unhandledRejection / uncaughtException / 關閉流程（onShutdown）
-│   └── rateLimiter.js                # 滑動視窗節流器（AI 額度、帳單辨識）
-├── data/                             # 執行期持久化資料（已列入 .gitignore，不提交）
-│   ├── music/
-│   │   └── cache/                    # 線上音樂下載快取
-│   ├── timeAnnouncer/                # 整點報時音效（需自備 24 個 .wav 檔）
-│   ├── prompts/                      # AI system prompt（_general.md、_voice.md、modes/*.md）
-│   ├── userModes.json                # 使用者 AI 人格模式設定
-│   ├── responses.json                # 自訂關鍵字回應規則
-│   ├── replyChance.json              # 各伺服器 AI 隨機插話機率
-│   ├── replyChanceDisabled.json      # 已停用 AI 隨機插話的頻道清單
-│   ├── musicPlayCount.json           # 本地音樂播放次數統計
-│   ├── musicSession.json             # 播放中的歌單快照（重啟後接續播放）
-│   ├── tokenUsage.json               # Gemini token 用量（每日，保留 90 天）
-│   ├── commandHash.json              # 上次註冊的 Slash Commands hash
-│   ├── timeAnnouncerSettings.json    # 各伺服器整點報時開關
-│   ├── ttsSettings.json              # 各伺服器的 SoVITS 模型、edge-tts 聲音
-│   ├── aiTTS.json                    # 各伺服器的 AI 回覆朗讀開關
-│   ├── presence.json                 # Bot 線上狀態與活動文字
-│   ├── adminAudit.json               # 管理面板操作紀錄（最近 1000 筆）
-│   ├── admin-session-secret          # 管理面板 Cookie 簽章金鑰（管理面板啟動時自動產生）
-│   └── (steam/epic 通知去重 JSON)
-├── temp/                             # STT 暫存 .wav 檔（已列入 .gitignore）
-├── .gitignore
-├── Dockerfile
-├── index.js                          # 主程式入口，初始化 Discord Client、載入所有模組
-└── package.json
+│   ├── ai/                  # /ai 對話、人格 prompt（promptStore）、Gemini 入口、額度與 token 用量、搜尋接地
+│   ├── musicplayer/         # 線上／本地音樂、統一播放佇列（unifiedQueue/）、快取、響度正規化、網頁同步
+│   ├── voice/               # STT（喚醒詞 → 錄音 → Groq Whisper）與 ttsHandler/（SoVITS + Edge-TTS）
+│   ├── notice/              # Steam／Epic 限免通知、整點報時
+│   ├── splitbill/           # /splitbill 面板與指令（呈現層；資料在 splitbill-service）
+│   ├── audioManager.js      # 音頻優先級排程（SILENCE < MUSIC < TTS）
+│   └── …                    # autojoin、自訂回應、狀態文字、/voice 等其他指令
+├── utils/                   # logger、設定、JSON 原子寫入、指令同步、健康檢查、告警、心跳、節流器、關閉流程
+├── oww-server/              # Python OpenWakeWord 喚醒詞服務（Flask）與內建的 hey_taffy.onnx 模型
+├── docker/                  # 容器內的輔助程式（supervisord FATAL 監聽器）
+├── test/                    # node:test 單元測試（npm test）
+├── data/                    # 執行期資料（.gitignore 排除，見下方）
+├── temp/                    # STT 暫存 .wav（.gitignore 排除）
+├── .env.example             # 環境變數範本
+└── Dockerfile
 ```
+
+`data/` 底下主要的檔案（全部由 Bot 自動產生，除了標示「自備」的）：
+
+| 路徑 | 內容 |
+|---|---|
+| `prompts/` | AI 人格 prompt（`_general.md`、`_voice.md`、`modes/*.md`，**自備**，見「AI 對話模式」） |
+| `timeAnnouncer/` | 整點報時音效（**自備** 24 個 .wav） |
+| `music/` | 本地音樂庫與線上歌曲下載快取 |
+| `responses.json`、`userModes.json`、`replyChance*.json` | 自訂回應、使用者人格模式、AI 插話機率 |
+| `ttsSettings.json`、`aiTTS.json`、`presence.json`、`timeAnnouncerSettings.json` | TTS 模型／聲音、AI 朗讀開關、狀態文字、整點報時開關 |
+| `musicPlayCount.json`、`musicSession.json` | 播放次數、播放快照（重啟後接續播放） |
+| `tokenUsage.json`、`adminAudit.json`、`admin-session-secret` | Gemini token 用量、管理面板操作紀錄與 Cookie 簽章金鑰 |
 
 ---
 
@@ -620,42 +386,16 @@ sttHandler.js → OWW Server /detect（HTTP）
 
 ```
 Discord 面板 ──→ splitbillClient.js ──(內部網路 HTTP)──┐
-                                                       ├─→ splitbill-service（資料：JSON 檔）
+                                                       ├─→ splitbill-service（資料：SQLite）
 網頁前端 ─────────────────────────────────────────────┘         │
                                                                 └─→ 任一端寫入後 SSE 廣播 → 所有訂閱該行程的網頁分頁即時更新
 ```
 
 ### 主要技術依賴
 
-**Node.js 套件（package.json）**
-
-| 套件 | 版本 | 用途 |
-|---|---|---|
-| `discord.js` | ^14.25 | Discord API 主框架 |
-| `@discordjs/voice` | ^0.19 | 語音頻道串流管理 |
-| `@discordjs/opus` | ^0.10 | Opus 音訊編碼 |
-| `@google/genai` | ^2.29 | Google Gemini AI API（對話、帳單照片辨識；統一經由 `handlers/ai/geminiClient.js`） |
-| `groq-sdk` | ^1.1 | Groq Whisper 語音轉文字 |
-| `ffmpeg-static` | ^5.3 | 內建 ffmpeg 二進位（prism-media 播放音訊時優先使用） |
-| `prism-media` | ^1.3 | Opus 解碼（STT 收音）、音訊轉碼 |
-| `sharp` | ^0.34 | 圖片壓縮（AI 圖片輸入前處理） |
-| `axios` | ^1.15 | HTTP 請求（共用音樂庫、OWW 喚醒詞服務） |
-| `ws` | ^8.20 | WebSocket 通訊 |
-| `@snazzah/davey` | ^0.1 | Discord 語音 DAVE 端對端加密協定 |
-| `libsodium-wrappers` | ^0.8 | 語音加密（Discord 語音頻道要求） |
-| `dotenv` | ^17 | 環境變數載入 |
-
-**Python 套件（oww-server/requirements.txt）**
-
-| 套件 | 版本 | 用途 |
-|---|---|---|
-| `openwakeword` | 0.6.0 | 喚醒詞偵測核心 |
-| `flask` | 3.1.0 | OWW HTTP 伺服器 |
-| `numpy` | 1.26.4 | 數值運算 |
-| `onnxruntime` | 1.20.1 | ONNX 模型推理引擎 |
-| `python-dotenv` | — | 環境變數載入 |
-| `edge-tts`（pip 額外安裝） | — | Microsoft Edge TTS fallback |
-| `yt-dlp`（pip 額外安裝） | — | 線上音樂下載工具 |
+- **Node.js**（版本見 `package.json`）：`discord.js`、`@discordjs/voice`／`@discordjs/opus`／`@snazzah/davey`／`libsodium-wrappers`（語音與 DAVE 加密）、`@google/genai`（Gemini，統一經由 `handlers/ai/geminiClient.js`）、`groq-sdk`（Whisper STT）、`prism-media`＋`ffmpeg-static`（音訊編解碼）、`sharp`（AI 圖片輸入前處理）。
+- **Python**（版本見 `oww-server/requirements.txt`）：`openwakeword`＋`onnxruntime`（喚醒詞偵測）、`flask`（OWW HTTP 伺服器）。
+- **執行期工具**（Docker image 內建）：`yt-dlp`、`edge-tts`、`ffmpeg`、bgutil PO Token Provider。
 
 ---
 
@@ -664,7 +404,7 @@ Discord 面板 ──→ splitbillClient.js ──(內部網路 HTTP)──┐
 - 本專案為**私人使用**的 Discord 機器人，不對外開放。
 - `data/` 與 `temp/` 資料夾已列入 `.gitignore`，屬於執行期產生的資料，不會被提交。
 - Bilibili / YouTube 認證資訊請透過環境變數提供，**請勿直接提交任何 Token 或 `cookies.txt` 至版本庫**。
-- OWW 模型檔案（`.onnx`）需自行放置於 `oww-server/models/` 資料夾。
+- 預設的喚醒詞模型 `oww-server/models/hey_taffy.onnx` 已隨版本庫提供；要換成自己的模型時放進同一個資料夾，並設定 `OWW_MODEL_PATH`。
 - 整點報時功能需自行準備 24 個對應小時的 `.wav` 音效檔，放置於 `data/timeAnnouncer/` 資料夾。
 - GPT-SoVITS 為外部服務，需自行部署並透過 `SOVITS_HOST` / `SOVITS_PORT` 連線；未部署時 TTS 自動 fallback 為 Edge-TTS。
 - AI 人格 prompt 放在 `data/prompts/`（不隨版本庫提供），首次部署需自行建立 `modes/*.md`，否則會提示找不到任何模式檔。
@@ -674,4 +414,4 @@ Discord 面板 ──→ splitbillClient.js ──(內部網路 HTTP)──┐
 
 ## License
 
-ISC
+[ISC](LICENSE)
