@@ -42,7 +42,7 @@ const {
   randomPlaySettings,
   resetLoopAllCycle,
 } = require('./state');
-const { stopAll, enqueue, updateControlPanel, resetShuffleBag, getRequestChannel, adoptExistingConnection } = require('./playback');
+const { stopAll, enqueue, prefetchUpcoming, updateControlPanel, resetShuffleBag, getRequestChannel, adoptExistingConnection } = require('./playback');
 const processGuards = require('../../../utils/processGuards');
 const bootSummary = require('../../../utils/bootSummary');
 const logger = require('../../../utils/logger');
@@ -371,7 +371,7 @@ async function execute(cmd) {
       if (result.queued && cmd.next) {
         const queue = queues.get(guildId) || [];
         const k = queue.lastIndexOf(item);
-        if (k > 0) { queue.splice(k, 1); queue.unshift(item); session.schedule(); }
+        if (k > 0) { queue.splice(k, 1); queue.unshift(item); session.schedule(); prefetchUpcoming(guildId); }
       }
       const where = !result.queued ? '開始播放' : cmd.next ? '下一首播放' : `加入佇列（第 ${result.position} 首）`;
       announce(guildId, `🎵 ${where}「${md(item.title)}」`);
@@ -406,6 +406,7 @@ async function execute(cmd) {
       if (cmd.next) queue.unshift(...items); else queue.push(...items);
       queues.set(guildId, queue);
       session.schedule();
+      prefetchUpcoming(guildId);
 
       const total = items.length + (started ? 1 : 0);
       const parts = [];

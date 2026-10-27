@@ -283,6 +283,28 @@ function _dequeueManualRequest(guildId) {
 }
 
 // ════════════════════════════════════════════════════════
+//  預先下載：佇列最前面幾首的線上歌曲，在目前這首播放時先下載＋正規化成快取檔。
+//  趕在輪到它之前完成，playStream 就會命中快取直接播本地檔；沒趕上照常串流。
+//  點歌入列、換歌（佇列往前移）、網頁調整佇列順序後呼叫。
+// ════════════════════════════════════════════════════════
+const PREFETCH_AHEAD = 2;
+
+function prefetchUpcoming(guildId) {
+  const engine = _engines.bilibili;
+  if (typeof engine?.prefetch !== 'function' || !nowPlaying.has(guildId)) return;
+
+  const upcoming = (queues.get(guildId) || []).slice(0, PREFETCH_AHEAD);
+  for (const item of upcoming) {
+    if (item?.type !== 'bilibili') continue;
+    engine.prefetch(item, {
+      // 輪到下載時再確認：還在播放、這首也還在佇列前面（沒被移除、清空、停止）
+      isWanted: () => nowPlaying.has(guildId)
+        && (queues.get(guildId) || []).slice(0, PREFETCH_AHEAD).some(q => q.url === item.url),
+    });
+  }
+}
+
+// ════════════════════════════════════════════════════════
 //  核心播放
 // ════════════════════════════════════════════════════════
 async function _playItem(guildId, item, channel, { silent = false, countPlay = true } = {}) {
@@ -465,6 +487,9 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
   if (!silent) {
     logger.info('UnifiedQueue', `🎵 開始播放: ${item.title} [${item.type}] (${guildId})`);
   }
+
+  // 佇列往前移了一首，補上新的「下一首」
+  prefetchUpcoming(guildId);
 }
 
 // ════════════════════════════════════════════════════════
@@ -542,6 +567,7 @@ async function enqueue(guildId, item, channel) {
     queue.push(item);
     queues.set(guildId, queue);
     session.schedule();
+    prefetchUpcoming(guildId);
 
     // 🆕 若目前是隨機連播模式，補充提示：這首歌會在下一次切歌時優先插播
     const isRandomPlay = randomPlaySettings.get(guildId) || false;
@@ -762,6 +788,7 @@ module.exports = {
   stopAll,
   _createPersistentIdleHandler,
   enqueue,
+  prefetchUpcoming,
   ensureConnection,
   isPlaying,
   getNowPlaying,

@@ -23,7 +23,7 @@ setInterval(() => {
       _acCache.delete(key);
     }
   }
-}, AC_CACHE_TTL_MS);
+}, AC_CACHE_TTL_MS).unref(); // 只是清快取，不該讓程序（例如測試）因此無法結束
 
 function _getAcCached(keyword) {
   const hit = _acCache.get(keyword);

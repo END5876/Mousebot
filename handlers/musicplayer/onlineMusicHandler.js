@@ -42,6 +42,13 @@ const errorCounts     = new Map(); // guildId -> number
 // ── 下載鎖（防止同一 URL 同時下載兩次）──────────────────
 const downloadingUrls = new Set();
 
+// ── 預先下載（佇列中還沒輪到的歌）────────────────────────
+// 一次只跑一個，避免跟正在串流的 yt-dlp 搶頻寬、同時打太多請求被判定成機器人
+const PREFETCH_CONCURRENCY = 1;
+const prefetchJobs   = [];        // 排隊中的 { item, isWanted }
+const prefetchActive = new Set(); // 執行中（查快取／下載中）的 URL
+let prefetchRunning  = 0;
+
 // ════════════════════════════════════════════════════════
 //  環境檢查
 // ════════════════════════════════════════════════════════
@@ -366,7 +373,7 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
 
   const platform = antiBot.isYouTubeUrl(item.url) ? 'YouTube' : 'Bilibili';
 
-  const tooLongToCache = !item.durationSec || item.durationSec > MAX_CACHE_DURATION_SEC;
+  const tooLongToCache = !_isCacheable(item);
 
   try {
     const cachedPath = await cache.getCachedPath(item.url, item.title);
@@ -388,47 +395,10 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
 
     if (!tooLongToCache) {
       if (!downloadingUrls.has(item.url)) {
-        downloadingUrls.add(item.url);
-
         if (!silent) logger.info(platform, `⬇️ 背景開始下載快取...`);
-
-        const dlArgs = antiBot.isYouTubeUrl(item.url)
-          ? antiBot.buildYouTubeArgs(
-              item.url,
-              antiBot.YT_CLIENT_STRATEGIES.find(s => s.name === 'default') || antiBot.YT_CLIENT_STRATEGIES[0],
-              false,
-            )
-          : antiBot.buildBilibiliArgs(item.url, false);
-
-        let lastProgress = 0;
-
-        cache.downloadAndCache(
-          item.url,
-          item.title,
-          dlArgs,
-          (progress) => {
-            if (progress - lastProgress >= 20) {
-              lastProgress = progress;
-              if (!silent) logger.debug(platform, `⬇️ 背景下載進度: ${progress.toFixed(1)}%`);
-            }
-          },
-        )
-        .then((filePath) => {
-          // downloadAndCache 完成時已經做完響度正規化（失敗則為一般轉檔），檔案可直接使用
-          if (!silent) logger.success('Cache', `背景下載完成，已儲存至: ${path.basename(filePath)}`);
-
-          // 同步上傳到共用音樂庫，讓其他 Bot 也能直接取用，不必重新下載一次。
-          // 未設定 MUSIC_LIB_URL 時 pushToSharedLibrary() 會直接是 no-op。
-          cache.pushToSharedLibrary(filePath, path.basename(filePath));
-        })
-        .catch((err) => {
-          logger.error('Cache', `背景下載失敗: ${err.message}`);
-        })
-        .finally(() => {
-          downloadingUrls.delete(item.url);
-        });
-
+        _downloadToCache(item, { silent });
       } else {
+        // 可能是預先下載還沒趕上：這次先串流，下載完成後下次就會命中快取
         if (!silent) logger.info('OnlineMusic', `⏳ 此 URL 已經在背景下載中，跳過重複下載任務。`);
       }
     }
@@ -437,6 +407,108 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
     logger.error(platform, `播放前發生錯誤: ${err.message}`);
     _handleStreamError(guildId, item, player, retryCount, err.message, silent);
   }
+}
+
+// 太長、未知長度（直播）的歌只串流，不下載快取
+function _isCacheable(item) {
+  return !!item.durationSec && item.durationSec <= MAX_CACHE_DURATION_SEC;
+}
+
+// 下載＋響度正規化成快取檔，完成後上傳共用音樂庫；playStream 背景下載與預先下載共用。
+// 呼叫端須先確認 downloadingUrls 沒有這個 URL。失敗只記 log，回傳 null。
+function _downloadToCache(item, { silent = false, label = '背景' } = {}) {
+  downloadingUrls.add(item.url);
+  const platform = antiBot.isYouTubeUrl(item.url) ? 'YouTube' : 'Bilibili';
+
+  const dlArgs = antiBot.isYouTubeUrl(item.url)
+    ? antiBot.buildYouTubeArgs(
+        item.url,
+        antiBot.YT_CLIENT_STRATEGIES.find(s => s.name === 'default') || antiBot.YT_CLIENT_STRATEGIES[0],
+        false,
+      )
+    : antiBot.buildBilibiliArgs(item.url, false);
+
+  let lastProgress = 0;
+
+  return cache.downloadAndCache(
+    item.url,
+    item.title,
+    dlArgs,
+    (progress) => {
+      if (progress - lastProgress >= 20) {
+        lastProgress = progress;
+        if (!silent) logger.debug(platform, `⬇️ ${label}下載進度: ${progress.toFixed(1)}%`);
+      }
+    },
+  )
+  .then((filePath) => {
+    // downloadAndCache 完成時已經做完響度正規化（失敗則為一般轉檔），檔案可直接使用
+    if (!silent) logger.success('Cache', `${label}下載完成，已儲存至: ${path.basename(filePath)}`);
+
+    // 同步上傳到共用音樂庫，讓其他 Bot 也能直接取用，不必重新下載一次。
+    // 未設定 MUSIC_LIB_URL 時 pushToSharedLibrary() 會直接是 no-op。
+    cache.pushToSharedLibrary(filePath, path.basename(filePath));
+    return filePath;
+  })
+  .catch((err) => {
+    logger.error('Cache', `${label}下載失敗: ${err.message}`);
+    return null;
+  })
+  .finally(() => {
+    downloadingUrls.delete(item.url);
+  });
+}
+
+// ════════════════════════════════════════════════════════
+//  prefetch（由 unifiedQueue 在點歌入列、換歌時呼叫）
+//  正在播放時先把佇列裡的線上歌曲下載＋正規化成快取檔；
+//  趕在輪到它之前完成，playStream 就會命中快取直接播本地檔，沒趕上則照常串流。
+//  isWanted()：開始執行前再確認一次這首還在佇列前面（可能已被移除、清空或停止播放）
+// ════════════════════════════════════════════════════════
+function prefetch(item, { isWanted = () => true } = {}) {
+  if (!item?.url || !antiBot.isSupportedMediaUrl(item.url) || !_isCacheable(item)) return false;
+  if (downloadingUrls.has(item.url) || prefetchActive.has(item.url)) return false;
+
+  // 同一首已在排隊（例如兩個伺服器都點了）：任一邊還需要就下載
+  const pending = prefetchJobs.find(j => j.item.url === item.url);
+  if (pending) {
+    const prev = pending.isWanted;
+    pending.isWanted = () => prev() || isWanted();
+    return false;
+  }
+
+  prefetchJobs.push({ item, isWanted });
+  _pumpPrefetch();
+  return true;
+}
+
+function _pumpPrefetch() {
+  while (prefetchRunning < PREFETCH_CONCURRENCY && prefetchJobs.length > 0) {
+    const job = prefetchJobs.shift();
+    prefetchRunning++;
+    prefetchActive.add(job.item.url);
+    _runPrefetch(job)
+      .catch(err => logger.warn('Cache', `預先下載失敗: ${err.message}`))
+      .finally(() => {
+        prefetchActive.delete(job.item.url);
+        prefetchRunning--;
+        _pumpPrefetch();
+      });
+  }
+}
+
+async function _runPrefetch({ item, isWanted }) {
+  if (!isWanted() || downloadingUrls.has(item.url)) return;
+
+  // 本地已有，或共用音樂庫已有（getCachedPath 會順便下載成本地快取）就不用再抓
+  if (await cache.getCachedPath(item.url, item.title)) return;
+
+  // 查共用音樂庫期間可能已經輪到它播放、由 playStream 開始下載
+  if (!isWanted() || downloadingUrls.has(item.url)) return;
+
+  const platform = antiBot.isYouTubeUrl(item.url) ? 'YouTube' : 'Bilibili';
+  logger.info(platform, `⏩ 預先下載佇列中的歌曲: ${item.title}`);
+  await _downloadToCache(item, { label: '預先' });
 }
 
 function _playFromFile(guildId, item, player, filePath, silent) {
@@ -586,8 +658,9 @@ async function setupOnlineMusicEngine() {
   registerEngine('bilibili', {
     playStream,
     getInfo,
-    checkPlaylist, 
+    checkPlaylist,
     searchMulti,
+    prefetch,
     clearErrorCount,
     resetYtClient: antiBot.resetYtClient,
   });
@@ -617,6 +690,7 @@ module.exports = {
   getInfo,
   checkPlaylist,
   searchMulti,
+  prefetch,
   getCachedPath: cache.getCachedPath,
   downloadAndCache: (url, title, onProgress) => {
     if (!antiBot.isSupportedMediaUrl(url)) return Promise.reject(new Error('只支援 YouTube 與 Bilibili 的網址'));
