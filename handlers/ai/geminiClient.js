@@ -7,9 +7,10 @@
 //   - 模型名稱：環境變數 GEMINI_MODEL（未設定時用 DEFAULT_MODEL）
 //   - 帳單辨識可另外用 GEMINI_VISION_MODEL 指定（未設定時沿用 GEMINI_MODEL）
 //   - 共用的 safetySettings
+//   - Gemini 3 系列固定 thinkingLevel: minimal（見 THINKING_CONFIG）
 //   - generate()：包好 systemInstruction / 逾時 / AbortSignal 的 generateContent
 
-const { GoogleGenAI, HarmCategory, HarmBlockThreshold } = require('@google/genai');
+const { GoogleGenAI, HarmCategory, HarmBlockThreshold, ThinkingLevel } = require('@google/genai');
 
 const DEFAULT_MODEL = 'gemini-3.1-flash-lite';
 const MODEL_NAME        = process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
@@ -21,6 +22,12 @@ const SAFETY_SETTINGS = [
     HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
 ].map(category => ({ category, threshold: HarmBlockThreshold.BLOCK_NONE }));
+
+// 思考 token 會算進 maxOutputTokens（語音只給 150）。3.1 Flash-Lite 預設就是 minimal，
+// 但其他 Gemini 3 模型預設是 high，換 GEMINI_MODEL 時可能整段被思考吃掉，所以明確指定。
+// 2.x 不支援 thinkingLevel，只對 gemini-3 系列帶；呼叫端的 config 可以覆蓋
+const THINKING_CONFIG = { thinkingLevel: ThinkingLevel.MINIMAL };
+const supportsThinkingLevel = model => /^gemini-3/.test(model);
 
 let client = null;
 function getClient() {
@@ -47,6 +54,7 @@ async function generate({ contents, systemInstruction, config = {}, model = MODE
         model,
         contents,
         config: {
+            ...(supportsThinkingLevel(model) ? { thinkingConfig: THINKING_CONFIG } : {}),
             ...config,
             ...(systemInstruction ? { systemInstruction } : {}),
             safetySettings: SAFETY_SETTINGS,

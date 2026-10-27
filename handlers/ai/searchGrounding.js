@@ -34,7 +34,7 @@ const RESEARCH_PROMPT = [
 ].join('\n');
 const RESEARCH_CONFIG = {
     tools: SEARCH_TOOLS,
-    temperature: 0.2,
+    temperature: 1.0, // Gemini 3 官方建議維持 1.0，調低可能出現重複迴圈
     maxOutputTokens: 600,
 };
 // 第二段附在人格 system instruction 後面的標題
