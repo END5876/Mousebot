@@ -189,6 +189,8 @@ function startMonitoring({ guildId, connection, channel, client, onStop, persist
       }
     } else {
       // 有人在，獨處計時重置；改檢查「沉默計時」
+      // 剛從沒人變成有人：沉默只算有人在的時間，Bot 獨處的那段不能算進 60 分鐘，從現在重新計時
+      if (state.aloneSince !== null) _markActive(state, nowTs);
       state.aloneSince = null;
       state.aloneTriggered = false;
 

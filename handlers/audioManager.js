@@ -68,7 +68,8 @@ function startSilenceLayer(guildId) {
 
   player.play(makeRes());
   player.on(AudioPlayerStatus.Idle, () => {
-    if (state.players.silence) player.play(makeRes());
+    // 只有自己仍是目前的靜音 player 才重播；已被換掉的舊 player 不能再 play（沒人訂閱會永遠卡著）
+    if (state.players.silence === player) player.play(makeRes());
   });
   player.on('error', () => stopSilenceLayer(guildId));
 
@@ -82,7 +83,7 @@ function startSilenceLayer(guildId) {
 function stopSilenceLayer(guildId) {
   const state = getState(guildId);
   if (state.players.silence) {
-    try { state.players.silence.stop(); } catch {}
+    _forceStop(state.players.silence);
     delete state.players.silence;
   }
   if (state.activeLayer === 'silence') {
@@ -223,7 +224,8 @@ function playTTSSegment(guildId, filename, onSegmentEnd) {
 function exitTTSLayer(guildId) {
   const state = getState(guildId);
   if (state.players.tts) {
-    try { state.players.tts.stop(); } catch {}
+    // 中途停止時接著就會改訂閱別層，非強制 stop 會讓舊 player 卡在 AutoPaused（連同 ffmpeg）永遠不結束
+    _forceStop(state.players.tts);
     delete state.players.tts;
   }
   if (state.activeLayer === 'tts') {
@@ -246,6 +248,15 @@ function _restoreAfterTTS(guildId) {
   }
 }
 
+// 丟棄自己管理的 player：先拿掉 Idle 監聽（不再觸發重播 / 佇列回調）再強制停止。
+// 非強制 stop() 只會排 5 幀補白，player 一旦沒有訂閱就停在 AutoPaused，永遠留在全域 20ms 迴圈裡。
+function _forceStop(player) {
+  try {
+    player.removeAllListeners(AudioPlayerStatus.Idle);
+    player.stop(true);
+  } catch {}
+}
+
 function _fallbackToSilence(guildId) {
   const state = getState(guildId);
   if (state.players.silence) {
@@ -262,8 +273,10 @@ function _fallbackToSilence(guildId) {
 // ════════════════════════════════════════════════════
 function cleanupGuild(guildId) {
   const state = getState(guildId);
-  for (const player of Object.values(state.players)) {
-    try { player.stop(); } catch {}
+  for (const [layer, player] of Object.entries(state.players)) {
+    // 靜音 / TTS 是 audioManager 自己的 player，強制停止；音樂 player 的 Idle 由播放模組處理（stopAll 會強制停止）
+    if (layer === 'music') { try { player.stop(); } catch {} }
+    else _forceStop(player);
   }
   guildStates.delete(guildId);
   logger.debug('AudioManager', `🧹 清理完成 (${guildId})`);

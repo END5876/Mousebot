@@ -39,7 +39,28 @@ function formatParticipantsList(trip, participants, currency) {
     .join('\n> ');
 }
 
+// 🔒 新增花費的每一份草稿各自一格快取（跟帳單掃描每張卡的 scanItemCacheUserId 同一招）。
+// 以前整條流程共用 guildId:userId 那一格，同時開著兩張掃描卡時，後送出表單的會蓋掉前一份，
+// 回到前一張卡按分攤就會把別張的資料（甚至還沒選代墊人的半成品）存進行程。
+// 草稿 ID 帶在流程每一步的 customId 尾端：`<baseId>:<draftId>`。
+function expenseDraftCacheUserId(userId, draftId) {
+  return `${userId}:expdraft:${draftId}`;
+}
+
+function withDraftId(baseId, draftId) {
+  return `${baseId}:${draftId}`;
+}
+
+function parseDraftCustomId(customId) {
+  const idx = customId.indexOf(':');
+  if (idx === -1) return { baseId: customId, draftId: '' };
+  return { baseId: customId.slice(0, idx), draftId: customId.slice(idx + 1) };
+}
+
 module.exports = {
+  expenseDraftCacheUserId,
+  withDraftId,
+  parseDraftCustomId,
   parseLedgerSuffix,
   getBackNavConfig,
   formatAmountConversion,

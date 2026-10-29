@@ -8,7 +8,8 @@ const { validateCustomSplit, fetchRealTimeRate, round2, parseMoneyInput } = requ
 const { addDeposit } = require('../../utils/deposit');
 const { showMainMenu } = require('../../commands/splitbill');
 const { parseScanItemSuffix, scanItemCacheUserId, buildScanResultView } = require('./billScan');
-const { renderSplitMethodUI, completeExpenseLoggingWithShares } = require('./expenseCompletion');
+const { renderSplitMethodUI, completeExpenseLoggingWithShares, resolveDraftTrip } = require('./expenseCompletion');
+const { expenseDraftCacheUserId, withDraftId, parseDraftCustomId } = require('./helpers');
 const { memberMention, isCurrencyCode, CURRENCY_FORMAT_HINT } = require('../../utils/tripHelper');
 
 async function handleModal(interaction, cache) {
@@ -184,8 +185,10 @@ async function handleModal(interaction, cache) {
         }
       }
 
-      cache.set(guildId, user.id, {
-        id: `id_${Date.now().toString(36)}`,
+      // 每一份草稿各自一格快取（見 helpers.js 的 expenseDraftCacheUserId），草稿 ID 就是之後的帳目 ID
+      const draftId = `id_${Date.now().toString(36)}`;
+      cache.set(guildId, expenseDraftCacheUserId(user.id, draftId), {
+        id: draftId,
         description: desc,
         amount,
         currency,
@@ -209,7 +212,7 @@ async function handleModal(interaction, cache) {
       const memberOptions = trip.members.slice(0, 25).map(m => ({ label: m.name, value: m.id }));
       const selectRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
-          .setCustomId('exp_select_payer')
+          .setCustomId(withDraftId('exp_select_payer', draftId))
           .setPlaceholder('選擇代墊者 (可多選，最多5人)...')
           .setMinValues(1)
           .setMaxValues(Math.min(memberOptions.length, 5))
@@ -219,13 +222,16 @@ async function handleModal(interaction, cache) {
       return interaction.editReply({ embeds: [embed], components: [selectRow] });
     }
 
-    if (interaction.customId === 'exp_modal_multi_payer') {
+    const { baseId, draftId } = parseDraftCustomId(interaction.customId);
+
+    if (baseId === 'exp_modal_multi_payer') {
       const { guildId, user } = interaction;
-      const state = cache.get(guildId, user.id);
+      const draftKey = expenseDraftCacheUserId(user.id, draftId);
+      const state = cache.get(guildId, draftKey);
       
       if (!state || !state.tempPayerIds) return interaction.reply({ content: '⚠️ 快取過期，請重新開啟。', flags: MessageFlags.Ephemeral });
 
-      // 這一步只是彙整代墊金額、還不會寫入行程資料，故不需要在此解析 trip；
+      // 這一步只是彙整代墊金額、還不會寫入行程資料；
       // 實際寫入（completeExpenseLoggingWithShares／completeExpenseLogging）
       // 會統一使用 state.tripId 鎖定的行程。
 
@@ -243,7 +249,7 @@ async function handleModal(interaction, cache) {
       }
 
       if (Math.abs(sum - state.amount) > 0.01) {
-        cache.delete(guildId, user.id);
+        cache.delete(guildId, draftKey);
         return showMainMenu(interaction, `⚠️ **記帳已取消**：多人代墊金額加總 (**${sum}**) 不等於總花費 (**${state.amount}**)！請重新操作。`);
       }
 
@@ -251,13 +257,15 @@ async function handleModal(interaction, cache) {
       delete state.tempPayerIds;
 
       // 只用來顯示代墊者名字（已連結的 @、未連結的顯示純文字），不寫入任何資料
-      const trip = await splitbillClient.resolveTripById(guildId, state.tripId);
+      const trip = await resolveDraftTrip(interaction, cache, state);
+      if (!trip) return;
       return renderSplitMethodUI(interaction, state, trip);
     }
 
-    if (interaction.customId === 'exp_modal_custom_split') {
+    if (baseId === 'exp_modal_custom_split') {
       const { guildId, user } = interaction;
-      const state = cache.get(guildId, user.id);
+      const draftKey = expenseDraftCacheUserId(user.id, draftId);
+      const state = cache.get(guildId, draftKey);
 
       if (!state || !state.tempCustomParticipantIds) {
         return interaction.reply({ content: '⚠️ 快取過期，請重新開啟。', flags: MessageFlags.Ephemeral });
@@ -265,11 +273,8 @@ async function handleModal(interaction, cache) {
 
       // 🔒 [修正：race condition] 沿用「新增花費」流程一開始鎖定的 tripId，
       // 而不是重新查一次現在的作用行程，最終寫入時就不會跑到別的行程去。
-      const trip = await splitbillClient.resolveTripById(guildId, state.tripId);
-      if (!trip) {
-        cache.delete(guildId, user.id);
-        return showMainMenu(interaction, '⚠️ **記帳已取消**：找不到原本的行程（可能已被刪除）。');
-      }
+      const trip = await resolveDraftTrip(interaction, cache, state);
+      if (!trip) return;
 
       const shares = [];
       for (let i = 0; i < state.tempCustomParticipantIds.length; i++) {
@@ -284,7 +289,7 @@ async function handleModal(interaction, cache) {
       try {
         validateCustomSplit(state.amount, shares);
       } catch (err) {
-        cache.delete(guildId, user.id);
+        cache.delete(guildId, draftKey);
         return showMainMenu(interaction, `⚠️ **記帳已取消**：${err.message}`);
       }
 

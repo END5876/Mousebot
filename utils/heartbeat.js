@@ -13,6 +13,7 @@
 
 const { Status } = require('discord.js');
 const logger = require('./logger');
+const { discordWsStatus } = require('./health');
 const bootSummary = require('./bootSummary');
 
 const URL_ = process.env.HEARTBEAT_URL || '';
@@ -23,7 +24,8 @@ let timer = null;
 let failing = false;
 
 async function beat(client) {
-  if (client.ws.status !== Status.Ready) return;
+  // client.ws.status 第一次 Ready 後就不會再變，要看各 shard 的狀態才知道有沒有斷線
+  if (discordWsStatus(client) !== Status.Ready) return;
   try {
     const res = await fetch(URL_, { signal: AbortSignal.timeout(TIMEOUT_MS) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);

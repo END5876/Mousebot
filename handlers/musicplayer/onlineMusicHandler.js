@@ -11,6 +11,7 @@ const { promisify }   = require('util');
 const path = require('path');
 
 const { registerEngine, stopAll } = require('./unifiedQueue');
+const { nowPlaying } = require('./unifiedQueue/state');
 
 const cache   = require('./musicCache');
 const antiBot = require('./musicAntiBot');
@@ -83,6 +84,12 @@ function formatDuration(seconds) {
   return h > 0
     ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
     : `${m}:${String(s).padStart(2,'0')}`;
+}
+
+// 🐛 [過期重試] 串流失敗時佇列可能已經換到下一首（新的 player）或被停止，
+//    舊 player 的重試／換 client 若繼續跑，會殺掉正在播的歌的 yt-dlp、或對舊 player 發 'error' 害佇列跳歌
+function _isCurrentPlayer(guildId, player) {
+  return nowPlaying.get(guildId)?.player === player;
 }
 
 function cleanupProcess(guildId) {
@@ -362,6 +369,7 @@ async function searchMulti(keyword, limit = 5, fast = false, platforms = ['youtu
 //  playStream（由 unifiedQueue 呼叫）
 // ════════════════════════════════════════════════════════
 async function playStream(guildId, item, player, { retryCount = 0, silent = false } = {}) {
+  if (!_isCurrentPlayer(guildId, player)) return; // 重試排定後已換歌／停止
   cleanupProcess(guildId);
 
   // 播放清單條目、網頁批量點歌、重啟恢復的佇列都不經過 getInfo，這裡再擋一次
@@ -377,6 +385,7 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
 
   try {
     const cachedPath = await cache.getCachedPath(item.url, item.title);
+    if (!_isCurrentPlayer(guildId, player)) return; // 查快取期間已被跳過
 
     if (cachedPath) {
       if (!silent) logger.debug('Cache', `✅ 快取命中，直接播放: ${path.basename(cachedPath)}`);
@@ -574,15 +583,19 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
 
   ytdlp.on('close', (code, signal) => {
     if (!silent) logger.debug(platform, `yt-dlp 進程結束 (code: ${code}, signal: ${signal})`);
+    if (activeProcesses.get(guildId) === ytdlp) activeProcesses.delete(guildId);
 
     if (code !== 0 && !dataReceived && hasError) {
+      if (!_isCurrentPlayer(guildId, player)) return; // 佇列已往下走，不再重試這首
       if (isYT) {
         const classified = antiBot.classifyYouTubeError(errorOutput);
         logger.warn('YouTube', `${classified.msg}`);
 
         if (classified.rotate && antiBot.rotateYtClient(guildId)) {
           if (!silent) logger.info('YouTube', '🔄 使用備用 client 重試...');
-          setTimeout(() => _fallbackStream(guildId, item, player, retryCount, silent), 1000);
+          setTimeout(() => {
+            if (_isCurrentPlayer(guildId, player)) _fallbackStream(guildId, item, player, retryCount, silent);
+          }, 1000);
           return;
         }
       }
@@ -604,6 +617,7 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
 }
 
 function _handleStreamError(guildId, item, player, retryCount, errorMessage, silent = false) {
+  if (!_isCurrentPlayer(guildId, player)) return; // 已換歌／停止：不計錯誤、不重試、不對舊 player 發 'error'
   const currentErrors = (errorCounts.get(guildId) || 0) + 1;
   errorCounts.set(guildId, currentErrors);
 

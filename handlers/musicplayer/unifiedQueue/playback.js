@@ -16,7 +16,7 @@ const {
   ButtonStyle,
 } = require('discord.js');
 
-const { setMusicPlayer, stopMusicLayer, startSilenceLayer } = require('../../audioManager');
+const { setMusicPlayer, stopMusicLayer, startSilenceLayer, restoreActiveLayer } = require('../../audioManager');
 const voiceMonitor = require('../voiceActivityMonitor');
 
 const {
@@ -307,6 +307,11 @@ function prefetchUpcoming(guildId) {
 // ════════════════════════════════════════════════════════
 //  核心播放
 // ════════════════════════════════════════════════════════
+// 連續幾首都放不出來就停止（例如共用音樂庫掛掉、每首都下載失敗），
+// 不然隨機連播會無限換歌、每秒洗一則錯誤訊息。有一首真的開始播放就歸零。
+const MAX_CONSECUTIVE_PLAY_ERRORS = 5;
+const playErrorCounts = new Map();
+
 async function _playItem(guildId, item, channel, { silent = false, countPlay = true } = {}) {
   const connection = connections.get(guildId) || getVoiceConnection(guildId);
   if (!connection) {
@@ -317,18 +322,23 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
   const notifyChannel = _getNotifyChannel(guildId, channel);
 
   const player = createAudioPlayer();
+  // 每個 player 只換一次歌：串流錯誤時 'error' 之後緊接著 Idle，兩邊都換會一次吃掉兩首
+  let advanced = false;
+  // 這首出錯了：交給 'error' 監聽器換歌，也不再單曲循環／列表循環重播這首壞掉的歌
+  let failed = false;
 
-  // ── Idle：播放結束後的邏輯 ───────────────────────────
-  player.on(AudioPlayerStatus.Idle, async () => {
+  // ── 換下一首（播放結束或出錯後）────────────────────
+  const _advance = async () => {
     const current = nowPlaying.get(guildId);
-    if (!current || current.player !== player) return;
+    if (!current || current.player !== player || advanced) return;
+    advanced = true;
 
     const loopMode = loopSettings.get(guildId) || 'off';
     const isRandomPlay = randomPlaySettings.get(guildId) || false;
     const sendTo = _getNotifyChannel(guildId, channel);
 
     // 單曲循環
-    if (loopMode === 'one') {
+    if (loopMode === 'one' && !failed) {
       await _playItem(guildId, item, channel, { silent: true, countPlay: false });
       return;
     }
@@ -384,7 +394,7 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
     const queue = queues.get(guildId) || [];
     const isLoopAll = loopMode === 'all';
 
-    if (isLoopAll) queue.push(item);
+    if (isLoopAll && !failed) queue.push(item);
 
     if (queue.length > 0) {
       const next = queue.shift();
@@ -423,43 +433,44 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
     } else {
       logger.success('UnifiedQueue', '播放完畢，佇列為空');
       stopAll(guildId);
-      sendTo.send('✅ 所有歌曲播放完畢').catch(() => {});
+      if (!failed) sendTo.send('✅ 所有歌曲播放完畢').catch(() => {});
     }
+  };
+
+  // ── Idle：播放結束後的邏輯 ───────────────────────────
+  player.on(AudioPlayerStatus.Idle, () => {
+    if (failed) return; // 出錯造成的 Idle：'error' 監聽器已排好換歌
+    _advance();
+  });
+
+  player.on(AudioPlayerStatus.Playing, () => {
+    if (nowPlaying.get(guildId)?.player === player) playErrorCounts.delete(guildId);
   });
 
   // ── 錯誤處理 ─────────────────────────────────────────
   player.on('error', (err) => {
+    // 已被換掉／停止的舊 player（引擎重試完才回報的錯誤）不能再動目前的佇列
+    if (nowPlaying.get(guildId)?.player !== player) return;
     if (err.message?.includes('aborted') || err.message?.includes('premature close')) return;
     logger.error('UnifiedQueue', `播放器錯誤 (${guildId}):`, err.message);
     const sendTo = _getNotifyChannel(guildId, channel);
-    sendTo.send(`❌ 播放 **${md(item.title)}** 時發生錯誤，嘗試跳過...`).catch(() => {});
+    failed = true;
 
-    const isRandomPlay = randomPlaySettings.get(guildId) || false;
-    if (isRandomPlay) {
-      // 🆕 錯誤重試時，同樣優先播放使用者手動點的歌
-      const manualNext = _dequeueManualRequest(guildId);
-      if (manualNext) {
-        setTimeout(() => _playItem(guildId, manualNext, channel, { countPlay: true }), 1000);
-        return;
-      }
-
-      const next = _pickRandomLocalTrack(guildId);
-      if (next) {
-        setTimeout(() => _playItem(guildId, next, channel, { countPlay: false }), 1000);
-      } else {
-        stopAll(guildId);
-      }
+    const errorCount = (playErrorCounts.get(guildId) || 0) + 1;
+    playErrorCounts.set(guildId, errorCount);
+    if (errorCount >= MAX_CONSECUTIVE_PLAY_ERRORS) {
+      logger.error('UnifiedQueue', `連續 ${errorCount} 首播放失敗，停止播放 (${guildId})`);
+      stopAll(guildId);
+      sendTo.send(`❌ 連續 ${errorCount} 首播放失敗，已停止播放`).catch(() => {});
       return;
     }
 
-    const queue = queues.get(guildId) || [];
-    if (queue.length > 0) {
-      const next = queue.shift();
-      queues.set(guildId, queue);
-      setTimeout(() => _playItem(guildId, next, channel), 1000);
-    } else {
-      stopAll(guildId);
-    }
+    sendTo.send(`❌ 播放 **${md(item.title)}** 時發生錯誤，嘗試跳過...`).catch(() => {});
+
+    // 串流錯誤時 @discordjs/voice 會在 emit('error') 之後把 player 切到 Idle；引擎自己 emit 的錯誤
+    // （下載失敗、重試用盡）則可能已經是 Idle。兩種都只在這裡換一次歌，
+    // 1 秒後 _advance 會再確認這期間沒有被停止或換歌
+    setTimeout(_advance, 1000);
   });
 
   nowPlaying.set(guildId, { player, item });
@@ -478,7 +489,20 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
   } catch (err) {
     logger.error('UnifiedQueue', '引擎啟動失敗:', err.message);
     notifyChannel.send(`❌ 無法播放 **${md(item.title)}**：${err.message}`).catch(() => {});
-    nowPlaying.delete(guildId);
+    if (nowPlaying.get(guildId)?.player === player) nowPlaying.delete(guildId);
+    return;
+  }
+
+  // 載入（下載）期間已被停止或換歌：stopAll 對還在 Idle 的 player 呼叫 stop() 沒有作用，
+  // 不擋下來的話這首會照樣訂閱播出，而且沒有任何控制鍵停得掉
+  const current = nowPlaying.get(guildId);
+  if (current?.player !== player) {
+    try { player.stop(true); } catch {}
+    return;
+  }
+  // 載入期間按了跳過（見 skipCurrent）：現在才真的停下，交給 Idle 換下一首
+  if (current.skipRequested) {
+    player.stop(true);
     return;
   }
 
@@ -512,6 +536,7 @@ function stopAll(guildId) {
   randomPlaySettings.delete(guildId);
   resetShuffleBag(guildId);
   resetLoopAllCycle(guildId);
+  playErrorCounts.delete(guildId);
 
   if (np) {
     try { np.player.stop(true); } catch {}
@@ -527,6 +552,17 @@ function stopAll(guildId) {
   session.schedule();
 
   logger.info('UnifiedQueue', `⏹️ 停止播放 (${guildId})`);
+}
+
+// ════════════════════════════════════════════════════════
+//  跳過目前這首（交給 Idle 依循環 / 隨機連播 / 佇列決定下一首）
+// ════════════════════════════════════════════════════════
+function skipCurrent(guildId) {
+  const np = nowPlaying.get(guildId);
+  if (!np) return false;
+  // 還在載入（下載中）的 player 仍是 Idle，stop() 沒有作用：先記下來，載入完成後 _playItem 再跳過
+  if (!np.player.stop()) np.skipRequested = true;
+  return true;
 }
 
 // ════════════════════════════════════════════════════════
@@ -660,6 +696,9 @@ async function _connectTo({ guild, voiceChannel, textChannel, client }) {
   }
 
   startSilenceLayer(guildId);
+  // 上面若是銷毀卡住的舊連線後重建：舊連線的訂閱跟著被解除，nowPlaying 的 player 會停在 AutoPaused、
+  // 永遠等不到 Idle；靜音層已存在時 startSilenceLayer 也不會重新訂閱。把目前那一層訂閱到新連線
+  restoreActiveLayer(guildId);
 
   voiceMonitor.startMonitoring({
     guildId,
@@ -718,6 +757,18 @@ function adoptExistingConnection(guild, client, textChannel) {
   const voiceChannel = guild.channels.cache.get(connection.joinConfig.channelId) || null;
   _adoptConnection({ guildId: guild.id, connection, voiceChannel, textChannel, client });
   return connection;
+}
+
+/**
+ * 別的模組（autojoin 的恢復流程）銷毀並重建了這個伺服器的語音連線之後呼叫，同 _connectTo 的重建處理：
+ * 銷毀舊連線會一併解除訂閱，播放器沒人訂閱就停在 AutoPaused、永遠不會 Idle（佇列不會往下走）。
+ * connections 裡的舊物件換成新連線，並把 audioManager 目前那一層（音樂／TTS／靜音）訂閱到新連線。
+ * @param {string} guildId
+ * @param {import('@discordjs/voice').VoiceConnection} connection 新的連線
+ */
+function rebindConnection(guildId, connection) {
+  if (connections.has(guildId)) connections.set(guildId, connection);
+  restoreActiveLayer(guildId);
 }
 
 // ════════════════════════════════════════════════════════
@@ -797,4 +848,6 @@ module.exports = {
   resumeSavedSessions,
   getRequestChannel,
   adoptExistingConnection,
+  rebindConnection,
+  skipCurrent,
 };

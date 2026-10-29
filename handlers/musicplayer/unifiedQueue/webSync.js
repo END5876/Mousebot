@@ -42,7 +42,7 @@ const {
   randomPlaySettings,
   resetLoopAllCycle,
 } = require('./state');
-const { stopAll, enqueue, prefetchUpcoming, updateControlPanel, resetShuffleBag, getRequestChannel, adoptExistingConnection } = require('./playback');
+const { stopAll, enqueue, prefetchUpcoming, updateControlPanel, resetShuffleBag, getRequestChannel, adoptExistingConnection, skipCurrent } = require('./playback');
 const processGuards = require('../../../utils/processGuards');
 const bootSummary = require('../../../utils/bootSummary');
 const logger = require('../../../utils/logger');
@@ -297,8 +297,9 @@ async function execute(cmd) {
       const queue = queues.get(guildId) || [];
       const loopMode = loopSettings.get(guildId) || 'off';
       // 與 commands.js 的 uq_skip 一致：隨機連播交給 Idle 挑下一首；佇列空且不循環才整組停止
+      // 用 skipCurrent：還在下載的那首 player 仍是 Idle，直接 stop() 不會生效
       if (randomPlaySettings.get(guildId)) {
-        np.player.stop();
+        skipCurrent(guildId);
         announce(guildId, `⏭️ 跳過「${md(np.item.title)}」，隨機連播下一首`);
         return '已跳過，隨機連播下一首';
       }
@@ -307,7 +308,7 @@ async function execute(cmd) {
         announce(guildId, `⏭️ 跳過「${md(np.item.title)}」，佇列為空，停止播放`);
         return '已跳過，佇列為空，停止播放';
       }
-      np.player.stop();
+      skipCurrent(guildId);
       announce(guildId, `⏭️ 跳過「${md(np.item.title)}」`);
       return '已跳過';
     }
@@ -448,9 +449,11 @@ async function handleCommand(cmd) {
 // ════════════════════════════════════════════════════════
 async function pollLoop() {
   let backoff = 0;
+  let earlyEmpty = 0;
   while (running) {
     pollAbort = new AbortController();
     try {
+      const startedAt = Date.now();
       const { data } = await axios.get(`${libraryClient.getBaseUrl()}/api/music/bots/${botId}/commands`, {
         params: { wait: POLL_WAIT_SEC },
         headers: libraryClient.authHeaders(),
@@ -458,8 +461,18 @@ async function pollLoop() {
         signal: pollAbort.signal,
       });
       backoff = 0;
-      for (const cmd of Array.isArray(data?.commands) ? data.commands : []) {
+      const commands = Array.isArray(data?.commands) ? data.commands : [];
+      for (const cmd of commands) {
         if (cmd && typeof cmd.id === 'string') await handleCommand(cmd); // 依序執行，保持網頁送出的順序
+      }
+      // 🐛 服務端每個 Bot ID 只留一條長輪詢，新的會把舊的提早以空結果結束；
+      //    兩個行程用同一個 Bot ID 時會互踢、無間隔重連變成請求風暴 → 提早空手而回就先等一下（逐次加長）
+      if (!commands.length && Date.now() - startedAt < (POLL_WAIT_SEC - 5) * 1000) {
+        earlyEmpty++;
+        if (earlyEmpty === 5) logger.warn('WebSync', `長輪詢一直被提早結束，可能有另一個行程使用同一個 Bot ID（${botId}）`);
+        if (running) await sleep(Math.min(30 * 1000, 1000 * 2 ** Math.min(earlyEmpty - 1, 5)));
+      } else {
+        earlyEmpty = 0;
       }
     } catch (err) {
       if (!running) break;

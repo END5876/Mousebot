@@ -525,10 +525,13 @@ function setupAICommands(client) {
         const botId     = client.user.id;
         const channel   = message.channel;
         const messageId = message.id;
-        const isMentioned = message.mentions.has(client.user);
-
         const mentionedUsers = message.mentions.users;
         const mentionedRoles = message.mentions.roles;
+        // 🐛 預設 has() 會把 @everyone/@here 與「Bot 也有的身分組」都算成 @Bot，公告會觸發完整回覆；
+        //    只認直接 @Bot（含回覆 Bot 的訊息）與 Bot 自己的整合身分組
+        const isMentioned =
+            message.mentions.has(client.user, { ignoreEveryone: true, ignoreRoles: true }) ||
+            mentionedRoles.some(r => r.tags?.botId === botId);
         const hasOtherMention =
             mentionedUsers.some(u => u.id !== botId) ||
             mentionedRoles.size > 0;

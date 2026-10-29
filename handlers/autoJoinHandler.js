@@ -23,6 +23,7 @@ const logger = require('../utils/logger');
 const bootSummary = require('../utils/bootSummary');
 const { isOwner } = require('../utils/config');
 const voiceMonitor = require('./musicplayer/voiceActivityMonitor');
+const { cleanupGuild } = require('./audioManager');
 
 // 延後載入，避免模組載入順序造成耦合。
 function getPlaybackModule() {
@@ -83,6 +84,8 @@ const listenedConnections = new WeakSet();
 const recovery = { connection: null, since: null, attempts: 0 };
 // 連續重建但仍未就緒的次數；連線恢復健康後歸零。
 let failedRebuilds = 0;
+// 上次確認健康的連線物件；換了新物件代表連線被重建過，要把播放層重新訂閱上去。
+let lastAdoptedConnection = null;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -204,6 +207,10 @@ function startPersistentMonitor(client, channel, connection) {
 function settleManagedGuild(guildId) {
   if (managedGuildId && managedGuildId !== guildId) {
     logger.info('AutoJoin', `🧹 目標已移至其他伺服器，清理舊伺服器 (${managedGuildId}) 的連線`);
+    // 只銷毀連線不會停止音樂（Destroyed 不會觸發播放端的斷線處理）：同 /voice leave，
+    // 先清掉舊伺服器的播放狀態、播放器與串流，否則面板一直顯示播放中，重啟後還會依快照跑回去續播
+    getPlaybackModule().stopAll(managedGuildId);
+    cleanupGuild(managedGuildId);
     destroyConnection(managedGuildId, undefined, { announceLeave: true });
   }
 
@@ -217,6 +224,13 @@ function adoptConnection(client, channel, connection, { restartMonitor }) {
   resetRecovery();
   failedRebuilds = 0;
   settleManagedGuild(guildId);
+
+  // 換成了新的連線物件（銷毀重建、或被其他模組重建）：舊連線銷毀時訂閱一併解除，
+  // 音樂／靜音層的 player 沒人訂閱會停在 AutoPaused，要重新訂閱到新連線。
+  if (lastAdoptedConnection !== connection) {
+    lastAdoptedConnection = connection;
+    getPlaybackModule().rebindConnection(guildId, connection);
+  }
 
   if (restartMonitor) voiceMonitor.stopMonitoring(guildId);
 

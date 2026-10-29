@@ -37,7 +37,7 @@ async function startBillScan(interaction, trip, cache) {
     .setDescription(
       `請在 **${BILL_SCAN_TIMEOUT_MS / 1000} 秒內**，直接在本頻道傳送帳單／收據照片（拍照或截圖皆可）。\n` +
       `我會自動幫你判讀項目名稱、金額與幣別，稍後仍可再手動確認或修改！\n` +
-      `*(可以一次夾帶多張圖片，每一張會各自算成一筆花費，單則訊息最多處理 ${BILL_SCAN_MAX_IMAGES_PER_BATCH} 張；僅接受圖片格式。這則訊息稍後會被刪除，辨識結果會直接回覆在你上傳的照片下方)*`
+      `*(可以一次夾帶多張圖片，每一張會各自算成一筆花費，單則訊息最多處理 ${BILL_SCAN_MAX_IMAGES_PER_BATCH} 張；僅接受圖片格式。這則訊息稍後會被刪除，辨識結果會另外傳一則只有你看得到的訊息)*`
     );
 
   const cancelRow = new ActionRowBuilder().addComponents(
@@ -60,24 +60,22 @@ async function startBillScan(interaction, trip, cache) {
 
   collector.on('collect', async (msg) => {
     // 頻道訊息量一多，原本那個面板訊息很容易被洗到畫面上方看不到，使用者往往找不到結果在哪。
-    // 因此這裡不再「編輯」面板訊息，而是直接刪除它，改成用 msg.reply() 建立一則新訊息，
-    // 直接回覆在使用者剛剛上傳的那張照片下面——不管頻道多熱鬧，使用者的目光本來就會停在
-    // 自己剛傳的圖片附近，結果就直接錨定在那裡，也不會留下一則過時、多餘的面板訊息。
-    // 另外搭配在該訊息上加表情符號反應，讓使用者第一時間就知道機器人有收到、正在處理。
+    // 因此這裡不再「編輯」面板訊息，而是直接刪除它，改成另外補發一則新訊息（會出現在頻道最下方），
+    // 也不會留下一則過時、多餘的面板訊息。
+    // 另外在使用者的圖片訊息上加表情符號反應，讓使用者第一時間就知道機器人有收到、正在處理。
     await interaction.deleteReply().catch(() => {});
     await msg.react('⏳').catch(() => {});
 
-    // 統一的「送出結果」函式：優先直接回覆在使用者的圖片訊息下面；
-    // 萬一因權限等問題 reply 失敗，才退而求其次用 followUp() 補發一則新訊息——
-    // 面板已經被刪除了，這裡不能再用 editReply（沒有訊息可編輯）。一次批次裡每張圖／
-    // 每個提示訊息都會各自呼叫一次，彼此獨立送出。
+    // 統一的「送出結果」函式：用 followUp() 補發一則新訊息——面板已經被刪除了，
+    // 這裡不能再用 editReply（沒有訊息可編輯）。一次批次裡每張圖／每個提示訊息都會各自呼叫一次，彼此獨立送出。
+    // 🔒 只有自己看得到（主控面板也是）：以前用 msg.reply() 公開回覆在圖片底下，之後「確認並送出」
+    // →選代墊人→主控台→結算都在那則公開訊息上更新，整個行程的帳目會被頻道裡的人看光，
+    // 別人也能點上面的按鈕把它換成自己的面板（或重新掃描時把它刪掉）。
     const deliverResult = async (payload) => {
       try {
-        await msg.reply(payload);
-      } catch (replyErr) {
-        logger.error('Splitbill', '回覆使用者圖片訊息失敗，改用 followUp 補發新訊息:', replyErr.message);
-        // 🔒 只有自己看得到（主控面板也是）：補發的訊息不在使用者自己的圖片底下，不要公開帳目
-        await interaction.followUp({ ...payload, flags: MessageFlags.Ephemeral }).catch(() => {});
+        await interaction.followUp({ ...payload, flags: MessageFlags.Ephemeral });
+      } catch (err) {
+        logger.error('Splitbill', '送出帳單辨識結果失敗:', err.message);
       }
     };
 

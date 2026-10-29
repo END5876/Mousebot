@@ -440,6 +440,7 @@ async function manualRecordOnce(guildId, userId, member, textChannel, onWakeupOv
 // ══════════════════════════════════════════════════════════
 function startSTTListening(connection, guild, textChannel, onWakeup) {
   const guildId = guild.id;
+  let state = null;
 
   if (guildStates.has(guildId)) {
     const existing = guildStates.get(guildId);
@@ -449,19 +450,27 @@ function startSTTListening(connection, guild, textChannel, onWakeup) {
         existing.textChannel = textChannel || existing.textChannel;
         if (onWakeup) existing.onWakeup = onWakeup;
         startUserIdleCleanup(guildId, existing);
-        logger.info('STT', `${guildId} 已在監聽中（已更新 textChannel）`);
-        return;
+        if (existing._onSpeakingStart) {
+          logger.info('STT', `${guildId} 已在監聽中（已更新 textChannel）`);
+          return;
+        }
+        // 手動錄音按鈕建立的 session 沒有 speaking 監聽：沿用它（不打斷進行中的手動錄音），補上喚醒詞監聽
+        state = existing;
+        state.manualOnly = false;
+      } else {
+        logger.info('STT', `${guildId} 偵測到新 connection，先停止舊監聽再重新建立`);
+        stopSTTListening(guildId);
       }
-      logger.info('STT', `${guildId} 偵測到新 connection，先停止舊監聽再重新建立`);
-      stopSTTListening(guildId);
     } else {
       guildStates.delete(guildId);
     }
   }
 
-  const state = createGuildState(connection, guild, textChannel, onWakeup);
-  guildStates.set(guildId, state);
-  startUserIdleCleanup(guildId, state);
+  if (!state) {
+    state = createGuildState(connection, guild, textChannel, onWakeup);
+    guildStates.set(guildId, state);
+    startUserIdleCleanup(guildId, state);
+  }
 
   // 訂閱頻道內現有成員
   const voiceChannel = guild.channels.cache.get(connection.joinConfig.channelId);

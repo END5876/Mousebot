@@ -24,6 +24,11 @@ function isTempName(name) {
   return /\.tmp(\.[A-Za-z0-9]+)?$/i.test(name);
 }
 
+// 自動下載的快取檔名：「<標題> [<ID>].mp3」或沒有標題時的「<ID>.mp3」（與 getCacheFilename、
+// music-library-service musicStore.js 的 CACHE_NAME_RE 相同）
+const CACHE_ID = String.raw`(?:yt_[A-Za-z0-9_-]{11}|BV[0-9A-Za-z]+|av\d+|aHR0c[A-Za-z0-9]{7})`;
+const CACHE_NAME_RE = new RegExp(String.raw`(?:^|\s)\[${CACHE_ID}\]\.mp3$|^${CACHE_ID}\.mp3$`);
+
 // ════════════════════════════════════════════════════════
 //  確保快取資料夾存在
 // ════════════════════════════════════════════════════════
@@ -122,30 +127,42 @@ async function pushToSharedLibrary(filePath, filename) {
 
 // ════════════════════════════════════════════════════════
 //  快取大小管理：超過上限時刪除最舊的檔案
-//  - 不遞迴：只處理第一層檔案，子資料夾完全不碰
 //  - 只處理音訊副檔名
 //  - 排除暫存檔，避免誤刪正在下載／正規化的檔案
+//  🐛 [誤刪本地音樂] 沒設 MUSIC_LIB_URL 時 data/music 就是使用者自己的音樂庫：
+//     只清理根目錄第一層、檔名是快取格式的檔案，子資料夾與其他檔案一律不碰（同 ML 的 isCacheFileName）。
+//  🐛 [鏡像無上限] 共用音樂庫模式下 data/music 全是可重新下載的鏡像，連子資料夾（fav/ 等）一起算進上限。
 // ════════════════════════════════════════════════════════
+function _collectEvictable(dir, shared, out) {
+  for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
+    const fp = path.join(dir, d.name);
+    if (d.isDirectory()) {
+      if (shared) _collectEvictable(fp, shared, out);
+      continue;
+    }
+    if (!d.isFile()
+        || isTempName(d.name)
+        || !SUPPORTED_EXTENSIONS.includes(path.extname(d.name).toLowerCase())
+        || (!shared && !CACHE_NAME_RE.test(d.name))) continue;
+    const stat = fs.statSync(fp);
+    out.push({ fp, mtime: stat.mtimeMs, size: stat.size });
+  }
+  return out;
+}
+
 function evictCacheIfNeeded() {
   try {
-    const files = fs.readdirSync(CACHE_DIR, { withFileTypes: true })
-      .filter(d => d.isFile()
-                && !isTempName(d.name)
-                && SUPPORTED_EXTENSIONS.includes(path.extname(d.name).toLowerCase()))
-      .map(d => {
-        const fp   = path.join(CACHE_DIR, d.name);
-        const stat = fs.statSync(fp);
-        return { fp, mtime: stat.mtimeMs, size: stat.size };
-      })
+    const files = _collectEvictable(CACHE_DIR, libraryClient.isConfigured(), [])
       .sort((a, b) => a.mtime - b.mtime); // 最舊排前面
 
     let totalMB = files.reduce((sum, f) => sum + f.size, 0) / 1024 / 1024;
 
     while (totalMB > MAX_CACHE_SIZE_MB && files.length > 0) {
       const oldest = files.shift();
-      fs.unlinkSync(oldest.fp);
+      // Windows 上正在播放的鏡像刪不掉（EBUSY），略過它繼續清下一個，不要整個清理中斷
+      try { fs.unlinkSync(oldest.fp); } catch { continue; }
       totalMB -= oldest.size / 1024 / 1024;
-      logger.info('Cache', `🗑️ 快取已滿，刪除舊檔: ${path.basename(oldest.fp)}`);
+      logger.info('Cache', `🗑️ 快取已滿，刪除舊檔: ${path.relative(CACHE_DIR, oldest.fp)}`);
     }
   } catch (err) {
     logger.error('Cache', '快取清理失敗:', err);

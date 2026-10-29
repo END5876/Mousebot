@@ -7,11 +7,11 @@ const {
 const splitbillClient = require('../../utils/splitbillClient');
 const { memberDisplay } = require('../../utils/tripHelper');
 const { showMainMenu } = require('../../commands/splitbill');
-const { parseLedgerSuffix } = require('./helpers');
+const { parseLedgerSuffix, expenseDraftCacheUserId, withDraftId, parseDraftCustomId } = require('./helpers');
 const { stopActiveBillScan, parseScanItemSuffix, scanItemCacheUserId } = require('./billScan');
 const { startBillScan } = require('./billScanFlow');
 const { renderLedgerPage } = require('./ledger');
-const { completeExpenseLogging } = require('./expenseCompletion');
+const { completeExpenseLogging, resolveDraftTrip } = require('./expenseCompletion');
 
 async function handleButton(interaction, cache) {
     const { customId, guildId, user } = interaction;
@@ -213,25 +213,35 @@ async function handleButton(interaction, cache) {
       return renderLedgerPage(interaction, trip, page, '↩️ 已取消刪除操作，帳目未變動。', source);
     }
 
-    if (customId === 'exp_btn_split_all') {
-      const state = cache.get(guildId, interaction.user.id);
+    // 新增花費流程的分攤按鈕都帶著草稿 ID（見 helpers.js 的 expenseDraftCacheUserId）
+    const { baseId, draftId } = parseDraftCustomId(customId);
+    const draftKey = expenseDraftCacheUserId(interaction.user.id, draftId);
+
+    if (baseId === 'exp_btn_split_all') {
+      const state = cache.get(guildId, draftKey);
       if (!state) return interaction.reply({ content: '⚠️ 狀態過期，請重新操作。', flags: MessageFlags.Ephemeral });
-      const allMemberIds = trip.members.map(m => m.id);
-      // 🔒 [修正：race condition] 優先用流程一開始鎖定的 tripId 寫入，避免中途漂移
-      const pinnedTrip = (await splitbillClient.resolveTripById(guildId, state.tripId)) || trip;
+      // 🔒 [修正：race condition] 全體成員跟寫入都用流程一開始鎖定的 tripId，避免中途漂移
+      const pinnedTrip = await resolveDraftTrip(interaction, cache, state);
+      if (!pinnedTrip) return;
+      const allMemberIds = pinnedTrip.members.map(m => m.id);
       return completeExpenseLogging(interaction, pinnedTrip, state, allMemberIds, cache);
     }
 
-    if (customId === 'exp_btn_split_custom') {
+    if (baseId === 'exp_btn_split_custom') {
+      const state = cache.get(guildId, draftKey);
+      if (!state) return interaction.reply({ content: '⚠️ 狀態過期，請重新操作。', flags: MessageFlags.Ephemeral });
+      const pinnedTrip = await resolveDraftTrip(interaction, cache, state);
+      if (!pinnedTrip) return;
+
       const embed = new EmbedBuilder()
         .setColor(0xe67e22)
         .setTitle('🎯 選擇分攤成員')
         .setDescription('請使用下方選單選擇需要一起平分這筆錢的成員：');
 
-      const memberOptions = trip.members.slice(0, 25).map(m => ({ label: m.name, value: m.id }));
+      const memberOptions = pinnedTrip.members.slice(0, 25).map(m => ({ label: m.name, value: m.id }));
       const selectRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
-          .setCustomId('exp_select_participants')
+          .setCustomId(withDraftId('exp_select_participants', draftId))
           .setPlaceholder('挑選分攤此花費的人...')
           .setMinValues(1)
           .setMaxValues(memberOptions.length)
@@ -241,11 +251,13 @@ async function handleButton(interaction, cache) {
       return interaction.update({ embeds: [embed], components: [selectRow] });
     }
 
-    if (customId === 'exp_btn_split_custom_amount') {
-      const state = cache.get(guildId, interaction.user.id);
+    if (baseId === 'exp_btn_split_custom_amount') {
+      const state = cache.get(guildId, draftKey);
       if (!state) return interaction.reply({ content: '⚠️ 狀態過期，請重新操作。', flags: MessageFlags.Ephemeral });
+      const pinnedTrip = await resolveDraftTrip(interaction, cache, state);
+      if (!pinnedTrip) return;
 
-      const maxSelect = Math.min(trip.members.length, 5);
+      const maxSelect = Math.min(pinnedTrip.members.length, 5);
       const embed = new EmbedBuilder()
         .setColor(0xe74c3c)
         .setTitle('✏️ 自訂金額分攤')
@@ -256,10 +268,10 @@ async function handleButton(interaction, cache) {
           `*(💡 若某人不需付錢，填入 0 即可)*`
         );
 
-      const memberOptions = trip.members.slice(0, 25).map(m => ({ label: m.name, value: m.id }));
+      const memberOptions = pinnedTrip.members.slice(0, 25).map(m => ({ label: m.name, value: m.id }));
       const selectRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
-          .setCustomId('exp_select_custom_participants')
+          .setCustomId(withDraftId('exp_select_custom_participants', draftId))
           .setPlaceholder(`選擇成員 (最多 ${maxSelect} 人)...`)
           .setMinValues(1)
           .setMaxValues(maxSelect)

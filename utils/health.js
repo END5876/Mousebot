@@ -39,8 +39,16 @@ async function probe(url) {
     }
 }
 
+// 🐛 client.ws.status 在第一次 Ready 後就不會再變，斷線只會改各 shard 的 status
+//    → 改看 shard：全部 Ready 才算連線正常，回報最差的那個 shard 狀態
+function discordWsStatus(client) {
+    const shards = [...client.ws.shards.values()];
+    if (!shards.length) return Status.Idle; // 還沒登入／shard 尚未建立
+    return shards.find(s => s.status !== Status.Ready)?.status ?? Status.Ready;
+}
+
 function checkDiscord(client) {
-    const wsStatus = client.ws.status;
+    const wsStatus = discordWsStatus(client);
     const ready = wsStatus === Status.Ready;
     if (ready) notReadySince = null;
     else notReadySince ??= Date.now();
@@ -101,4 +109,4 @@ function startHealthServer(client) {
     return server;
 }
 
-module.exports = { startHealthServer, collectHealth: collect };
+module.exports = { startHealthServer, collectHealth: collect, discordWsStatus };

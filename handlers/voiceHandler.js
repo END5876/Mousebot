@@ -27,7 +27,7 @@ const {
 const { getGeminiResponseVoice } = require('./ai/aiHandler');
 const logger = require('../utils/logger');
 const { isQuotaError, quotaMessage } = require('./ai/aiQuota');
-const { playTTS } = require('./voice/ttsHandler');
+const { playTTS, stopTTS } = require('./voice/ttsHandler');
 const bootSummary = require('../utils/bootSummary');
 
 // 改用 audioManager 統一管理靜音層
@@ -51,6 +51,10 @@ const manualUserCooldown = new Map(); // `${guildId}:${userId}` -> timestamp
 
 const HEYJQN_USER_COOLDOWN_MS = parseInt(process.env.HEYJQN_USER_COOLDOWN_MS || '4000', 10);
 const HEYJQN_BTN_TTL_MS       = parseInt(process.env.HEYJQN_BTN_TTL_MS || String(15 * 60 * 1000), 10);
+
+// joinVoiceChannel 會沿用同伺服器現有的連線，監聽器要以「連線」為單位只掛一次
+const wiredConnections   = new WeakSet();
+const watchedConnections = new WeakSet();
 
 // interactionCreate 防重複註冊
 let heyjqnBound      = false;
@@ -108,6 +112,21 @@ function buildSilenceMenu(guildId) {
 //  語音連線與喚醒詞監聽（/voice 指令與管理面板共用）
 // ════════════════════════════════════════════════════════
 
+/**
+ * 連線不論被誰 destroy（播放器自己的斷線處理、autojoin 重建…）都要清掉 STT 狀態，
+ * 否則監聽器留在死連線上，重新加入後 /voice stt start 卻回「已在運行中」
+ */
+function watchConnectionDestroyed(connection, guildId) {
+  if (watchedConnections.has(connection)) return;
+  watchedConnections.add(connection);
+  connection.on(VoiceConnectionStatus.Destroyed, () => {
+    if (getVoiceConnection(guildId)) return; // 已有新連線，狀態屬於新連線
+    stopSTTListening(guildId);
+    sttActiveGuilds.delete(guildId);
+    manualGuildLocks.delete(guildId);
+  });
+}
+
 /** 加入指定語音頻道（同伺服器已有連線時會直接移過去），等到連線就緒才回傳 */
 async function joinChannel(voiceChannel) {
   const guildId = voiceChannel.guild.id;
@@ -119,29 +138,44 @@ async function joinChannel(voiceChannel) {
     selfMute:       false,
   });
 
-  connection.on(VoiceConnectionStatus.Ready, () => {
-    logger.success('Voice', '語音連接已就緒');
-  });
+  watchConnectionDestroyed(connection, guildId);
 
-  connection.on(VoiceConnectionStatus.Disconnected, async () => {
-    try {
-      await Promise.race([
-        entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-        entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
-      ]);
-    } catch (error) {
-      connection.destroy();
-      logger.warn('Voice', '語音連接已斷開');
-      cleanupGuild(guildId);
+  // 重複 /voice join 拿到的是同一條連線，不能每次都再疊一組監聽
+  if (!wiredConnections.has(connection)) {
+    wiredConnections.add(connection);
 
-      if (sttActiveGuilds.has(guildId)) {
-        stopSTTListening(guildId);
-        sttActiveGuilds.delete(guildId);
+    connection.on(VoiceConnectionStatus.Ready, () => {
+      logger.success('Voice', '語音連接已就緒');
+    });
+
+    connection.on(VoiceConnectionStatus.Disconnected, async () => {
+      try {
+        await Promise.race([
+          entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+          entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+        ]);
+      } catch (error) {
+        // 播放器自己的斷線處理可能已先 destroy；重複 destroy 會丟例外並跳過下面的清理
+        if (connection.state.status !== VoiceConnectionStatus.Destroyed) {
+          try { connection.destroy(); } catch {}
+        }
+        // 已經被重建成新連線就不能清掉新連線的狀態
+        const current = getVoiceConnection(guildId);
+        if (current && current !== connection) return;
+
+        logger.warn('Voice', '語音連接已斷開');
+        stopTTS(guildId); // 正在播的 TTS 段落等不到 Idle，佇列要主動重置
+        cleanupGuild(guildId);
+
+        if (sttActiveGuilds.has(guildId)) {
+          stopSTTListening(guildId);
+          sttActiveGuilds.delete(guildId);
+        }
+
+        manualGuildLocks.delete(guildId);
       }
-
-      manualGuildLocks.delete(guildId);
-    }
-  });
+    });
+  }
 
   try {
     await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
@@ -161,6 +195,7 @@ function leaveGuild(guild) {
   const connection = getVoiceConnection(guildId);
   if (!connection) return false;
 
+  stopTTS(guildId); // 正在播的 TTS 段落等不到 Idle，不重置的話重新加入後 TTS 永遠排隊不播
   cleanupGuild(guildId);
 
   // ★ Bug 修正：先前這裡從未呼叫 stopMonitoring，導致 /voice leave 後
@@ -208,6 +243,7 @@ function startWakeWord(guild, textChannel) {
   if (!connection) return 'no_connection';
   if (sttActiveGuilds.has(guildId)) return 'already';
 
+  watchConnectionDestroyed(connection, guildId);
   startSTTListening(
     connection,
     guild,

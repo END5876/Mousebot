@@ -22,6 +22,7 @@ const {
   ensureConnection,
   playRandomLocal,
   resetShuffleBag, // ★ 新增：開啟隨機連播時用來重置洗牌袋，確保是全新一輪
+  skipCurrent,
 } = require('./playback');
 const { handlePlay, handleAutocomplete } = require('./search');
 const bootSummary = require('../../../utils/bootSummary');
@@ -84,7 +85,7 @@ function setupUnifiedCommands(client) {
           // 隨機連播模式下，skip 直接觸發 player.stop()，
           // Idle 事件會自動隨機挑下一首
           if (isRandomPlay) {
-            np.player.stop();
+            skipCurrent(guildId);
             await interaction.reply({ content: '⏭️ 跳過，隨機連播下一首', flags: MessageFlags.Ephemeral });
             break;
           }
@@ -96,7 +97,7 @@ function setupUnifiedCommands(client) {
             stopAll(guildId);
             await interaction.reply({ content: '⏭️ 已跳過，佇列為空，停止播放', flags: MessageFlags.Ephemeral });
           } else {
-            np.player.stop();
+            skipCurrent(guildId);
             await interaction.reply({ content: '⏭️ 跳過當前歌曲', flags: MessageFlags.Ephemeral });
           }
           break;
@@ -349,7 +350,7 @@ async function handleMusicSkip(interaction) {
 
   // 隨機連播模式下，skip 直接觸發 player.stop()，Idle 事件自動隨機下一首
   if (isRandomPlay) {
-    np.player.stop();
+    skipCurrent(interaction.guildId);
     return interaction.reply({ content: '⏭️ 跳過，隨機連播下一首' });
   }
 
@@ -358,7 +359,7 @@ async function handleMusicSkip(interaction) {
     stopAll(interaction.guildId);
     return interaction.reply({ content: '⏭️ 已跳過，佇列為空，停止播放' });
   }
-  np.player.stop();
+  skipCurrent(interaction.guildId);
   await interaction.reply({ content: '⏭️ 跳過當前歌曲' });
 }
 
@@ -482,6 +483,9 @@ async function handleMusicRandomPlay(interaction) {
     return interaction.editReply('❌ 加入語音頻道時發生錯誤');
   }
   if (!connection) return interaction.editReply('❌ 你必須先加入語音頻道！');
+
+  // 同 /play：下指令就算頻道仍活躍，重置沉默計時（剛進頻道還沒開麥的人不會被立刻判定無人說話）
+  voiceMonitor.touchActivity(guildId);
 
   // 若目前正在播放，先停止（隨機播放視為全新開始）
   if (nowPlaying.has(guildId)) {

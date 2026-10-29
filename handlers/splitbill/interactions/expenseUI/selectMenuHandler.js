@@ -6,9 +6,12 @@ const {
 } = require('discord.js');
 const { memberDisplay } = require('../../utils/tripHelper');
 const splitbillClient = require('../../utils/splitbillClient');
-const { formatAmountConversion, formatParticipantsList, parseLedgerSuffix } = require('./helpers');
+const {
+  formatAmountConversion, formatParticipantsList, parseLedgerSuffix,
+  expenseDraftCacheUserId, withDraftId, parseDraftCustomId
+} = require('./helpers');
 const { parseScanItemSuffix, scanItemCacheUserId, buildScanResultView, SCAN_CURRENCY_CUSTOM_VALUE } = require('./billScan');
-const { renderSplitMethodUI, completeExpenseLogging } = require('./expenseCompletion');
+const { renderSplitMethodUI, completeExpenseLogging, resolveDraftTrip } = require('./expenseCompletion');
 
 async function handleSelectMenu(interaction, cache) {
     const { customId, guildId, values, user } = interaction;
@@ -89,9 +92,18 @@ async function handleSelectMenu(interaction, cache) {
     if (customId === 'exp_select_deposit_collector') {
       const state = cache.get(guildId, user.id);
       if (!state || !state.depositCurrency) return interaction.reply({ content: '⚠️ 快取失效，請重新操作。', flags: MessageFlags.Ephemeral });
+      // 🔒 [修正：中途切換行程] 付款人選項也要用選幣別時鎖定的行程，不是現在的作用行程
+      const pinnedTrip = await splitbillClient.resolveTripById(guildId, state.tripId);
+      if (!pinnedTrip) {
+        cache.delete(guildId, user.id);
+        return interaction.reply({ content: '⚠️ 找不到原本的行程（可能已被刪除），操作已取消，請重新開始。', flags: MessageFlags.Ephemeral });
+      }
+      if (!pinnedTrip.members.some(m => m.id === values[0])) {
+        return interaction.reply({ content: '⚠️ 選擇的使用者不在此行程的成員名單內！', flags: MessageFlags.Ephemeral });
+      }
       state.depositCollectorId = values[0];
       
-      const availableMembers = trip.members.filter(m => m.id !== values[0]);
+      const availableMembers = pinnedTrip.members.filter(m => m.id !== values[0]);
       const maxSelect = Math.min(availableMembers.length, 5);
 
       const embed = new EmbedBuilder()
@@ -116,7 +128,16 @@ async function handleSelectMenu(interaction, cache) {
       if (!state || !state.depositCurrency || !state.depositCollectorId) {
         return interaction.reply({ content: '⚠️ 快取失效，請重新操作。', flags: MessageFlags.Ephemeral });
       }
-      
+      // 🔒 [修正：中途切換行程] 用鎖定的行程找成員名字，作用行程換掉後這裡會找不到人而報錯
+      const pinnedTrip = await splitbillClient.resolveTripById(guildId, state.tripId);
+      if (!pinnedTrip) {
+        cache.delete(guildId, user.id);
+        return interaction.reply({ content: '⚠️ 找不到原本的行程（可能已被刪除），操作已取消，請重新開始。', flags: MessageFlags.Ephemeral });
+      }
+      if (values.some(id => !pinnedTrip.members.some(m => m.id === id))) {
+        return interaction.reply({ content: '⚠️ 選擇的使用者不在此行程的成員名單內！', flags: MessageFlags.Ephemeral });
+      }
+
       state.depositPayerIds = values;
 
       const modal = new ModalBuilder()
@@ -124,7 +145,7 @@ async function handleSelectMenu(interaction, cache) {
         .setTitle(`💰 步驟 4/4：輸入訂金金額 (${state.depositCurrency})`);
 
       values.forEach((id, idx) => {
-        const memberName = trip.members.find(m => m.id === id).name;
+        const memberName = pinnedTrip.members.find(m => m.id === id).name;
         const amountInput = new TextInputBuilder()
           .setCustomId(`dep_amount_${idx}`)
           .setLabel(`${memberName} 付了多少 (${state.depositCurrency})？`)
@@ -161,25 +182,32 @@ async function handleSelectMenu(interaction, cache) {
       return interaction.showModal(modal);
     }
 
-    if (customId === 'exp_select_payer') {
-      const state = cache.get(guildId, user.id);
+    // 新增花費流程的選單都帶著草稿 ID（見 helpers.js 的 expenseDraftCacheUserId）
+    const { baseId, draftId } = parseDraftCustomId(customId);
+    const draftKey = expenseDraftCacheUserId(user.id, draftId);
+
+    if (baseId === 'exp_select_payer') {
+      const state = cache.get(guildId, draftKey);
       if (!state) return interaction.reply({ content: '⚠️ 快取過期，請重新開啟。', flags: MessageFlags.Ephemeral });
+      // 🔒 [修正：中途切換行程] 驗證跟顯示都用草稿鎖定的行程
+      const pinnedTrip = await resolveDraftTrip(interaction, cache, state);
+      if (!pinnedTrip) return;
 
       const payerIds = values;
-      const invalid = payerIds.filter(id => !trip.members.some(m => m.id === id));
+      const invalid = payerIds.filter(id => !pinnedTrip.members.some(m => m.id === id));
       if (invalid.length) {
         return interaction.reply({ content: '⚠️ 選擇的使用者不在此行程的成員名單內！', flags: MessageFlags.Ephemeral });
       }
 
       if (payerIds.length === 1) {
         state.payers = [{ userId: payerIds[0], amount: state.amount }];
-        return renderSplitMethodUI(interaction, state, trip);
+        return renderSplitMethodUI(interaction, state, pinnedTrip);
       } else {
         state.tempPayerIds = payerIds; 
-        const modal = new ModalBuilder().setCustomId('exp_modal_multi_payer').setTitle(`輸入多人代墊金額 (總計: ${state.amount})`);
+        const modal = new ModalBuilder().setCustomId(withDraftId('exp_modal_multi_payer', draftId)).setTitle(`輸入多人代墊金額 (總計: ${state.amount})`);
 
         payerIds.forEach((id, idx) => {
-          const memberName = trip.members.find(m => m.id === id).name;
+          const memberName = pinnedTrip.members.find(m => m.id === id).name;
           const input = new TextInputBuilder().setCustomId(`payer_${idx}`).setLabel(`${memberName} 付了多少？`).setStyle(TextInputStyle.Short).setRequired(true);
           modal.addComponents(new ActionRowBuilder().addComponents(input));
         });
@@ -188,24 +216,28 @@ async function handleSelectMenu(interaction, cache) {
       }
     }
 
-    if (customId === 'exp_select_participants') {
-      const state = cache.get(guildId, user.id);
+    if (baseId === 'exp_select_participants') {
+      const state = cache.get(guildId, draftKey);
       if (!state) return interaction.reply({ content: '⚠️ 快取已失效。', flags: MessageFlags.Ephemeral });
 
-      const participantIds = values.filter(id => trip.members.some(m => m.id === id));
+      // 🔒 [修正：race condition] 驗證成員跟最終寫入都用流程一開始鎖定的 tripId，
+      // 而不是這次互動當下重新查到的作用行程——避免中途漂移到別的行程。
+      const pinnedTrip = await resolveDraftTrip(interaction, cache, state);
+      if (!pinnedTrip) return;
+
+      const participantIds = values.filter(id => pinnedTrip.members.some(m => m.id === id));
       if (!participantIds.length) return interaction.reply({ content: '⚠️ 所選成員皆不在行程中。', flags: MessageFlags.Ephemeral });
 
-      // 🔒 [修正：race condition] 最終寫入時，優先使用流程一開始鎖定的 tripId，
-      // 而不是這次互動當下重新查到的作用行程——避免中途漂移到別的行程。
-      const pinnedTrip = (await splitbillClient.resolveTripById(guildId, state.tripId)) || trip;
       return completeExpenseLogging(interaction, pinnedTrip, state, participantIds, cache);
     }
 
-    if (customId === 'exp_select_custom_participants') {
-      const state = cache.get(guildId, user.id);
+    if (baseId === 'exp_select_custom_participants') {
+      const state = cache.get(guildId, draftKey);
       if (!state) return interaction.reply({ content: '⚠️ 快取過期，請重新開啟。', flags: MessageFlags.Ephemeral });
+      const pinnedTrip = await resolveDraftTrip(interaction, cache, state);
+      if (!pinnedTrip) return;
 
-      const invalid = values.filter(id => !trip.members.some(m => m.id === id));
+      const invalid = values.filter(id => !pinnedTrip.members.some(m => m.id === id));
       if (invalid.length) {
         return interaction.reply({ content: '⚠️ 選擇的使用者不在此行程的成員名單內！', flags: MessageFlags.Ephemeral });
       }
@@ -213,11 +245,11 @@ async function handleSelectMenu(interaction, cache) {
       state.tempCustomParticipantIds = values;
 
       const modal = new ModalBuilder()
-        .setCustomId('exp_modal_custom_split')
+        .setCustomId(withDraftId('exp_modal_custom_split', draftId))
         .setTitle(`✏️ 輸入各自應付金額 (總計: ${state.amount})`);
 
       values.forEach((id, idx) => {
-        const memberName = trip.members.find(m => m.id === id).name;
+        const memberName = pinnedTrip.members.find(m => m.id === id).name;
         const input = new TextInputBuilder()
           .setCustomId(`share_${idx}`)
           .setLabel(`${memberName} 應付多少 (免費請填 0)？`)

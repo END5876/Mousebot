@@ -17,6 +17,7 @@ const { registerEngine } = require('./unifiedQueue');
 const logger = require('../../utils/logger');
 const { readJson, createDebouncedWriter } = require('../../utils/jsonStore');
 const libraryClient = require('./musicLibraryClient');
+const cache = require('./musicCache');
 
 // ── 音樂資料夾路徑 ────────────────────────────────────────
 // 多 Bot 共用音樂庫模式下，這裡是「本地小快取磁碟」的路徑，不再是音樂庫
@@ -271,11 +272,34 @@ function getTrackInfo(filename) {
 //    library-service 下載一份到本地小快取磁碟，再播放。
 //    playback.js 呼叫這裡時本來就有 await，所以改成 async 不影響呼叫端。
 // ════════════════════════════════════════════════════════
+// 🐛 [鏡像過期] 共用音樂庫上同一路徑的檔案被換掉後，本地鏡像大小會跟最新清單對不上，要重新下載
+function _isStaleMirror(item) {
+  const remote = _libraryListCache.find(f => f.filename === item.filename);
+  if (!remote || typeof remote.size !== 'number') return false;
+  try {
+    return fs.statSync(item.filePath).size !== remote.size;
+  } catch {
+    return false;
+  }
+}
+
 async function playStream(guildId, item, player, { silent = false, countPlay = true } = {}) {
+  if (libraryClient.isConfigured() && fs.existsSync(item.filePath) && _isStaleMirror(item)) {
+    try {
+      if (!silent) logger.info('LocalMusic', `🔄 本地鏡像與共用音樂庫不一致，重新下載: ${item.filename}`);
+      await libraryClient.downloadToFile(item.filename, item.filePath);
+    } catch (err) {
+      // 重新下載失敗（例如 Windows 上檔案正被別的伺服器播放）就先播舊的鏡像
+      logger.warn('LocalMusic', `重新下載失敗，沿用本地鏡像: ${item.filename} (${err.message})`);
+    }
+  }
+
   if (!fs.existsSync(item.filePath)) {
     if (libraryClient.isConfigured()) {
       try {
         if (!silent) logger.info('LocalMusic', `⬇️ 本地無此檔案，向共用音樂庫下載: ${item.filename}`);
+        // 🐛 [鏡像無上限] 鏡像也算進 MAX_CACHE_SIZE_MB，下載前先清理（子資料夾的鏡像以前永遠不會被刪）
+        cache.evictCacheIfNeeded();
         await libraryClient.downloadToFile(item.filename, item.filePath);
       } catch (err) {
         logger.error('LocalMusic', `向共用音樂庫下載失敗: ${item.filename} (${err.message})`);

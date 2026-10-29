@@ -170,11 +170,18 @@ module.exports = {
       const name = interaction.fields.getTextInputValue('name').trim();
       const baseCur = (interaction.fields.getTextInputValue('baseCur').trim() || 'TWD').toUpperCase();
 
-      const baseRate = BASELINE_RATES[baseCur] ?? 1;
+      // BASELINE_RATES 是對 TWD 的匯率，本位幣不在表內（SGD、CNY…）就換算不出來，
+      // 不能把對 TWD 的數字直接當成對本位幣的匯率（100 USD 訂金會被算成 3200 SGD），
+      // 這時只帶本位幣，其他幣別讓使用者用「🪙 新增幣別」加（會抓即時匯率）。
+      const hasBaselineRates = BASELINE_RATES[baseCur] !== undefined;
       const autoRates = { [baseCur]: 1 };
-      for (const [cur, rateToTWD] of Object.entries(BASELINE_RATES)) {
-        if (cur !== baseCur) {
-          autoRates[cur] = parseFloat((rateToTWD / baseRate).toFixed(4));
+      if (hasBaselineRates) {
+        const baseRate = BASELINE_RATES[baseCur];
+        for (const [cur, rateToTWD] of Object.entries(BASELINE_RATES)) {
+          if (cur !== baseCur) {
+            // 取有效數字而不是固定 4 位小數：本位幣是 USD 時 KRW 0.00075 會被捨成 0.0008
+            autoRates[cur] = Number((rateToTWD / baseRate).toPrecision(6));
+          }
         }
       }
 
@@ -197,7 +204,10 @@ module.exports = {
       // 不會動到伺服器裡其他人正在使用的行程。
       await splitbillClient.setUserActiveTrip(guildId, interaction.user.id, newTrip.id);
 
-      return showMainMenu(interaction, `🎉 成功創立新行程！\n**名稱**：${name}\n**本位幣別**：${baseCur}\n已自動帶入常用多國匯率，並切換為你的作用行程！`);
+      const ratesNote = hasBaselineRates
+        ? '已自動帶入常用多國匯率'
+        : `\`${baseCur}\` 沒有內建的參考匯率，其他幣別請到「🧳 行程設定 → 🪙 新增幣別」加入`;
+      return showMainMenu(interaction, `🎉 成功創立新行程！\n**名稱**：${name}\n**本位幣別**：${baseCur}\n${ratesNote}，並切換為你的作用行程！`);
     }
 
     // 🪙 新增幣別：驗證格式 → 手動匯率優先，留空則嘗試即時匯率

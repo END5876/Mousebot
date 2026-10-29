@@ -1,6 +1,6 @@
 'use strict';
 
-const { getVoiceConnection } = require('@discordjs/voice');
+const { getVoiceConnection, VoiceConnectionStatus } = require('@discordjs/voice');
 const logger = require('../../../utils/logger');
 const fs   = require('fs');
 const path = require('path');
@@ -20,6 +20,20 @@ const { detectLanguage } = require('./edgeTTS');
 // 讓播放器能在「合成完成」後立即銜接，實現播放與合成真正並行。
 const ttsQueues    = new Map();  // guildId → QueueItem[]
 const ttsIsPlaying = new Map();  // guildId → boolean
+// 佇列目前播放所用的連線。離開 / 斷線時正在播的那段永遠等不到 Idle，
+// 重新加入後靠這個認出「綁在舊連線上的卡死佇列」並重置。
+const ttsConnections = new Map(); // guildId → VoiceConnection
+const watchedConnections = new WeakSet();
+
+// 連線不論被誰 destroy（/voice leave、斷線、播放器或 autojoin 重建）都立刻重置綁在它上面的佇列；
+// 同一條連線只掛一次監聽
+function watchConnection(guildId, connection) {
+  if (watchedConnections.has(connection)) return;
+  watchedConnections.add(connection);
+  connection.on(VoiceConnectionStatus.Destroyed, () => {
+    if (ttsConnections.get(guildId) === connection) stopTTS(guildId);
+  });
+}
 
 // 隊首這一段最多等多久合成完成。SoVITS 本身有 45 秒總逾時（逾時改用 edge-tts），這裡是最後一道保險：
 // 任何一段卡住（edge-tts 也卡住、未預期的 Promise 永遠不 settle）都不能讓整個佇列和被暫停的音樂一直停著。
@@ -71,6 +85,7 @@ async function processQueue(guildId) {
   if (!queue || queue.length === 0) {
     ttsQueues.delete(guildId);
     ttsIsPlaying.delete(guildId);
+    ttsConnections.delete(guildId);
     exitTTSLayer(guildId); // ★ 佇列已空，離開 TTS 層，恢復音樂/靜音
     return;
   }
@@ -81,6 +96,7 @@ async function processQueue(guildId) {
     const items = [...queue];
     ttsQueues.delete(guildId);
     ttsIsPlaying.delete(guildId);
+    ttsConnections.delete(guildId);
     exitTTSLayer(guildId); // ★ 連線已斷，一併釋放 TTS 層
     for (const item of items) {
       item.readyPromise.then(r => { if (r?.file) safeUnlink(r.file); }).catch(() => {});
@@ -89,23 +105,34 @@ async function processQueue(guildId) {
   }
 
   ttsIsPlaying.set(guildId, true);
+  ttsConnections.set(guildId, connection);
+  watchConnection(guildId, connection);
 
   // ★ 整段 TTS 佇列只在這裡「嘗試」進入 TTS 層一次；
   //   enterTTSLayer 具冪等性，若已在 TTS 層則直接返回，不會重複觸發音樂暫停。
   enterTTSLayer(guildId);
 
   const item = queue[0];
+  // 佇列陣列本身就是這一輪的識別：stopTTS 會刪掉它，新的 playTTS 會建新陣列。
+  // await 回來或片段播完時若已不是同一個陣列，代表被停止過，不能再碰新一輪的 player / 佇列。
+  const isStale = () => ttsQueues.get(guildId) !== queue;
 
   // 等待隊首項目的合成完成（若已完成則立即繼續）
   let result;
   try {
     result = await waitForSegment(item);
   } catch (err) {
+    if (isStale()) return;
     logger.error('TTS', `合成失敗，跳過此段: ${err.message}`);
     queue.shift();
     ttsIsPlaying.delete(guildId);
     if (queue.length === 0) exitTTSLayer(guildId); // ★ 真正清空才離開
     processQueue(guildId);
+    return;
+  }
+
+  if (isStale()) {
+    // 檔案已由 stopTTS 等 readyPromise settle 後刪除
     return;
   }
 
@@ -121,6 +148,7 @@ async function processQueue(guildId) {
   //   因此段落之間切換完全不影響音樂/靜音層。
   const ok = playTTSSegment(guildId, result.file, () => {
     safeUnlink(result.file);
+    if (isStale()) return;
     queue.shift();
     ttsIsPlaying.delete(guildId);
     if (queue.length === 0) exitTTSLayer(guildId); // ★ 只有整段序列播完才恢復音樂
@@ -148,6 +176,13 @@ async function processQueue(guildId) {
 async function playTTS(guildId, text) {
   const connection = getVoiceConnection(guildId);
   if (!connection) return { success: false, reason: 'no_connection' };
+
+  // 上一輪佇列還綁在已經換掉的連線上（離開 / 斷線時正在播，Idle 永遠不會來）→ 卡死，先重置
+  const prevConnection = ttsConnections.get(guildId);
+  if (prevConnection && prevConnection !== connection) {
+    logger.warn('TTS', `偵測到綁在舊語音連線上的 TTS 佇列，重置 (${guildId})`);
+    stopTTS(guildId);
+  }
 
   const tempDir = path.join(__dirname, '../temp');
   if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
@@ -248,6 +283,7 @@ function stopTTS(guildId) {
     ttsQueues.delete(guildId);
   }
   ttsIsPlaying.delete(guildId);
+  ttsConnections.delete(guildId);
   exitTTSLayer(guildId); // ★ 手動停止時也要釋放 TTS 層，恢復音樂/靜音
   return true;
 }

@@ -333,7 +333,8 @@ async function convertNetToSingleCurrency(netByCurrency, targetCurrency, trip) {
     }
 
     const liveRate = await fetchRealTimeRate(currency, targetCurrency);
-    if (typeof liveRate === 'number') {
+    // 匯率 0 或負數不能用：乘下去那些人的餘額會整個消失，又不會被列進 failedCurrencies
+    if (typeof liveRate === 'number' && liveRate > 0) {
       rates[currency] = liveRate;
       continue;
     }
@@ -341,7 +342,8 @@ async function convertNetToSingleCurrency(netByCurrency, targetCurrency, trip) {
     const toBaseFrom = trip.rates?.[currency];
     const toBaseTarget = trip.rates?.[targetCurrency];
     if (toBaseFrom && toBaseTarget) {
-      rates[currency] = round2(toBaseFrom / toBaseTarget);
+      // 匯率不能 round2：KRW→TWD 0.024 會變 0.02、VND→TWD 直接變 0，只對結果金額取整
+      rates[currency] = Number((toBaseFrom / toBaseTarget).toPrecision(6));
     } else {
       rates[currency] = null;
       failedCurrencies.push(currency);
@@ -404,8 +406,10 @@ async function fetchRealTimeRate(fromCurrency, toCurrency) {
   if (from === to) return 1;
 
   const rates = await loadRateTable(from);
-  if (rates && rates[to]) {
-    return Math.round((rates[to] + Number.EPSILON) * 10000) / 10000;
+  if (rates && Number.isFinite(rates[to]) && rates[to] > 0) {
+    // 取 6 位有效數字而不是固定 4 位小數：IDR→USD 0.0000615 固定 4 位會變 0.0001（貴 63%）、
+    // VND→USD 直接變 0；金額本身才在換算後 round2
+    return Number(rates[to].toPrecision(6));
   }
   return null;
 }
