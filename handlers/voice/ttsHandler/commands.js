@@ -134,9 +134,12 @@ function setupTTSCommands(client) {
         const result = await playTTS(guildId, text);
 
         if (!result.success) {
-          const reason = result.reason === 'tts_failed'
-            ? '❌ TTS 生成失敗（SoVITS 離線且 edge-tts 不可用）'
-            : '❌ Bot 不在語音頻道';
+          // 只剩標點 / emoji 時會被分段全部濾掉，不是不在語音頻道
+          const reason = result.reason === 'empty_text'
+            ? '❌ 沒有可朗讀的內容'
+            : result.reason === 'no_connection'
+              ? '❌ Bot 不在語音頻道'
+              : '❌ TTS 生成失敗（SoVITS 離線且 edge-tts 不可用）';
           return interaction.editReply({ content: reason });
         }
 

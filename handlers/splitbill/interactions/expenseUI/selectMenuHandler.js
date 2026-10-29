@@ -4,7 +4,7 @@ const {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, MessageFlags
 } = require('discord.js');
-const { memberDisplay } = require('../../utils/tripHelper');
+const { memberDisplay, nameLabel } = require('../../utils/tripHelper');
 const splitbillClient = require('../../utils/splitbillClient');
 const {
   formatAmountConversion, formatParticipantsList, parseLedgerSuffix,
@@ -148,7 +148,7 @@ async function handleSelectMenu(interaction, cache) {
         const memberName = pinnedTrip.members.find(m => m.id === id).name;
         const amountInput = new TextInputBuilder()
           .setCustomId(`dep_amount_${idx}`)
-          .setLabel(`${memberName} 付了多少 (${state.depositCurrency})？`)
+          .setLabel(nameLabel(memberName, ` 付了多少 (${state.depositCurrency})？`))
           .setStyle(TextInputStyle.Short)
           .setRequired(true);
         modal.addComponents(new ActionRowBuilder().addComponents(amountInput));
@@ -208,7 +208,7 @@ async function handleSelectMenu(interaction, cache) {
 
         payerIds.forEach((id, idx) => {
           const memberName = pinnedTrip.members.find(m => m.id === id).name;
-          const input = new TextInputBuilder().setCustomId(`payer_${idx}`).setLabel(`${memberName} 付了多少？`).setStyle(TextInputStyle.Short).setRequired(true);
+          const input = new TextInputBuilder().setCustomId(`payer_${idx}`).setLabel(nameLabel(memberName, ' 付了多少？')).setStyle(TextInputStyle.Short).setRequired(true);
           modal.addComponents(new ActionRowBuilder().addComponents(input));
         });
 
@@ -252,7 +252,7 @@ async function handleSelectMenu(interaction, cache) {
         const memberName = pinnedTrip.members.find(m => m.id === id).name;
         const input = new TextInputBuilder()
           .setCustomId(`share_${idx}`)
-          .setLabel(`${memberName} 應付多少 (免費請填 0)？`)
+          .setLabel(nameLabel(memberName, ' 應付多少 (免費請填 0)？'))
           .setStyle(TextInputStyle.Short)
           .setPlaceholder('例如：0、1000、2000')
           .setRequired(true);

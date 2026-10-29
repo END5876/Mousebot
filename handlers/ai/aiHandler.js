@@ -15,6 +15,8 @@ const {
     getGeminiResponse,
     getGeminiResponseVoice,
     getShortResponse,
+    isEmptyResponseError,
+    EMPTY_RESPONSE_MESSAGE,
 } = require('./aiCore');
 
 const {
@@ -25,7 +27,7 @@ const {
     processCustomEmojis,
     processImageUrls,
     processEmbeds,
-    withTyping, speakWithTTS,
+    withTyping, speakWithTTS, splitMessage,
     replaceMentions, 
 } = require('./aiUtils');
 
@@ -57,6 +59,11 @@ const QUOTA_NOTICE_TTL_MS = 10 * 1000;
 async function replyQuotaNotice(message, error) {
     const sent = await message.reply({ content: quotaMessage(error), allowedMentions: { repliedUser: false } }).catch(() => null);
     if (sent) setTimeout(() => sent.delete().catch(() => {}), QUOTA_NOTICE_TTL_MS).unref?.();
+}
+
+// 模型沒有產生文字時至少回一句，不要讓使用者 @ 了卻毫無反應
+async function replyEmptyNotice(message) {
+    await message.reply({ content: EMPTY_RESPONSE_MESSAGE, allowedMentions: { repliedUser: false } }).catch(() => {});
 }
 
 // ════════════════════════════════════════════════════════
@@ -235,6 +242,10 @@ async function handleAsk(interaction) {
             await interaction.editReply({ content: quotaMessage(error) }).catch(() => {});
             return;
         }
+        if (isEmptyResponseError(error)) {
+            await interaction.editReply({ content: EMPTY_RESPONSE_MESSAGE }).catch(() => {});
+            return;
+        }
         logger.error('AI', `/ai ask 錯誤：${error.message}`);
         await interaction.deleteReply().catch(() => {});
     }
@@ -309,6 +320,16 @@ async function handleMode(interaction) {
 // Discord TextInput 上限 4000 字，超過的 prompt 請直接改檔案。
 const PROMPT_MODAL_MAX        = 4000;
 const PROMPT_MODAL_TIMEOUT_MS = 15 * 60 * 1000;
+// 與管理面板（admin/api/prompts.js）的長度上限一致
+const MODE_NAME_MAX           = 100;
+const CLEAR_MESSAGE_MAX       = 500;
+
+// 預填值超過 max_length 時 Discord 會整個拒絕 Modal；過長就不預填（留空送出時 saveMode 會保留原值）
+function setPrefill(input, value, max) {
+    if (!value) return;
+    if (value.length <= max) input.setValue(value);
+    else input.setPlaceholder(`目前的值有 ${value.length} 字，超過 ${max} 字未帶入；留空即保持不變`);
+}
 
 async function handlePromptEdit(interaction) {
     if (!isOwner(interaction.user.id)) {
@@ -357,17 +378,17 @@ async function handlePromptEdit(interaction) {
             .setCustomId('name')
             .setLabel('顯示名稱（例如：戀人模式）')
             .setStyle(TextInputStyle.Short)
-            .setMaxLength(50)
+            .setMaxLength(MODE_NAME_MAX)
             .setRequired(false);
-        if (existing?.name) nameInput.setValue(existing.name);
+        setPrefill(nameInput, existing?.name, MODE_NAME_MAX);
 
         const clearInput = new TextInputBuilder()
             .setCustomId('clearMemoryMessage')
             .setLabel('/ai clear 時的回覆訊息')
             .setStyle(TextInputStyle.Short)
-            .setMaxLength(200)
+            .setMaxLength(CLEAR_MESSAGE_MAX)
             .setRequired(false);
-        if (existing?.clearMemoryMessage) clearInput.setValue(existing.clearMemoryMessage);
+        setPrefill(clearInput, existing?.clearMemoryMessage, CLEAR_MESSAGE_MAX);
 
         modal.addComponents(
             new ActionRowBuilder().addComponents(nameInput),
@@ -488,7 +509,10 @@ async function handleGugu(interaction) {
 
     try {
         const article = await generateGuguArticle(topic, interaction.user.id);
-        await interaction.editReply({ content: article });
+        // 主題可能誘導模型寫超長文，超過 2000 字要切開送，否則整篇作廢
+        const [first, ...rest] = splitMessage(article);
+        await interaction.editReply({ content: first });
+        for (const chunk of rest) await interaction.followUp({ content: chunk });
     } catch (error) {
         await interaction.editReply({ content: getGuguErrorMessage(error) });
     }
@@ -571,6 +595,7 @@ function setupAICommands(client) {
                     await speakWithTTS(message, answer, guildId);
                 } catch (error) {
                     if (isQuotaError(error)) await replyQuotaNotice(message, error);
+                    else if (isEmptyResponseError(error)) await replyEmptyNotice(message);
                     else logger.error('AI', `引用 @ 回覆錯誤：${error.message}`);
                 }
                 return;
@@ -592,6 +617,7 @@ function setupAICommands(client) {
                     await speakWithTTS(message, answer, guildId);
                 } catch (error) {
                     if (isQuotaError(error)) await replyQuotaNotice(message, error);
+                    else if (isEmptyResponseError(error)) await replyEmptyNotice(message);
                     else logger.error('AI', `打招呼回覆錯誤：${error.message}`);
                 }
                 return;
@@ -646,6 +672,7 @@ function setupAICommands(client) {
                 await speakWithTTS(message, answer, guildId);
             } catch (error) {
                 if (isQuotaError(error)) await replyQuotaNotice(message, error);
+                else if (isEmptyResponseError(error)) await replyEmptyNotice(message);
                 else logger.error('AI', `@ 回覆錯誤：${error.message}`);
             }
 

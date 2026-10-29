@@ -83,7 +83,8 @@ async function getSteamFreeGames() {
       const steamUrl = steamAppId ? `https://store.steampowered.com/app/${steamAppId}/` : finalUrl;
       const twInfo   = await getSteamTWInfo(steamAppId);
 
-      let finalDesc = twInfo.description ?? game.description ?? '快去 Steam 領取！';
+      // GamerPower 的 description 可能是 ''，用 || 才會退回預設文字（空字串會讓 setDescription 丟錯）
+      let finalDesc = twInfo.description || game.description || '快去 Steam 領取！';
       if (finalDesc.length > MAX_DESC_LENGTH) finalDesc = finalDesc.substring(0, MAX_DESC_LENGTH) + '...';
 
       games.push({
@@ -102,8 +103,9 @@ async function getSteamFreeGames() {
     }
     return games;
   } catch (e) {
+    // 往上丟：查詢失敗不能被當成「沒有限免遊戲」回報給 /notify check 與管理面板
     logger.error('SteamFree', '獲取限免遊戲失敗（已耗盡重試次數）:', e.message);
-    return [];
+    throw e;
   }
 }
 
@@ -131,14 +133,15 @@ function buildMessage(game) {
     .setAuthor({ name: 'Steam 限時免費', iconURL: 'https://cdn.cloudflare.steamstatic.com/steamcommunity/public/images/steamworks_docs/english/logo_steam.png' })
     .setTitle(game.name)
     .setURL(game.url)
-    .setDescription(game.description)
+    .setDescription(game.description || '快去 Steam 領取！')
     .setColor(0x43B581)
     .addFields(
       { name: '💰 價格資訊', value: `${priceText} ➔ **免費**`, inline: true },
       { name: '🎮 支援平台', value: game.platforms, inline: true },
       { name: '⏳ 截止時間', value: endDateDisplay, inline: false }
     )
-    .setImage(game.image)
+    // 沒有可用的圖片時 image 是 ''，setImage('') 會直接丟錯讓整則通知送不出去
+    .setImage(/^https?:\/\//.test(game.image ?? '') ? game.image : null)
     .setTimestamp()
     .setFooter({ text: 'Steam 乞丐超人 · Mousebot' });
 

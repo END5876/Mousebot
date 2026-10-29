@@ -78,8 +78,9 @@ async function getEpicFreeGames() {
 
     return freeGames;
   } catch (e) {
+    // 往上丟：查詢失敗不能被當成「沒有限免遊戲」回報給 /notify check 與管理面板
     logger.error('EpicFree', '獲取 Epic 限免遊戲失敗:', e.message);
-    return [];
+    throw e;
   }
 }
 
@@ -105,14 +106,15 @@ function buildMessage(game) {
     .setAuthor({ name: 'Epic Games 限時免費', iconURL: 'https://img.icons8.com/ios-filled/512/epic-games.png' })
     .setTitle(game.name)
     .setURL(game.url)
-    .setDescription(game.description)
+    .setDescription(game.description || '快去 Epic Games 領取！')
     .setColor(0xFFFFFF)
     .addFields(
       { name: '💰 價格資訊', value: `${priceText} ➔ **免費**`, inline: true },
       { name: '🎮 支援平台', value: game.platforms, inline: true },
       { name: '⏳ 截止時間', value: endDateDisplay, inline: false }
     )
-    .setImage(game.image)
+    // 沒有可用的圖片時 image 是 ''，setImage('') 會直接丟錯讓整則通知送不出去
+    .setImage(/^https?:\/\//.test(game.image ?? '') ? game.image : null)
     .setTimestamp()
     .setFooter({ text: 'Epic 乞丐超人 · Mousebot' });
 

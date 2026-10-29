@@ -150,9 +150,25 @@ function _buildButtons(guildId) {
   );
 }
 
+// guildId → 進行中的面板更新（同一個 guild 的更新排隊執行）
+const _panelUpdates = new Map();
+
 async function updateControlPanel(guildId, channel) {
   // 循環 / 隨機連播 / 佇列變動後都會更新面板，順便排程寫出播放快照
   session.schedule();
+  // 播完換曲、/play 回覆、按鈕、網頁都會各自更新面板；同時進行時會讀到同一個舊面板、
+  // 各送出一個新的，只有最後一個被記住，其他的永遠刪不掉 → 同一個 guild 排隊依序執行
+  const prev = _panelUpdates.get(guildId) || Promise.resolve();
+  const run = prev.catch(() => {}).then(() => _doUpdateControlPanel(guildId, channel));
+  _panelUpdates.set(guildId, run);
+  try {
+    await run;
+  } finally {
+    if (_panelUpdates.get(guildId) === run) _panelUpdates.delete(guildId);
+  }
+}
+
+async function _doUpdateControlPanel(guildId, channel) {
   const embed = _buildEmbed(guildId);
   if (!embed) return;
   const row = _buildButtons(guildId);

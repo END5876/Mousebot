@@ -287,7 +287,8 @@ function setupCustomResponses(client) {
         }
       }
 
-      const responses = loadResponses();
+      // 用副本修改：寫檔失敗時快取維持原狀（saveResponses 成功才換掉快取）
+      const responses = listResponses();
 
       // ── add ─────────────────────────────────────────────
       if (sub === 'add') {

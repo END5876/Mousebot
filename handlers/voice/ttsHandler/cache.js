@@ -1,6 +1,7 @@
 'use strict';
 
 const fs   = require('fs');
+const crypto = require('crypto');
 const logger = require('../../../utils/logger');
 const path = require('path');
 
@@ -8,7 +9,7 @@ const path = require('path');
 // 對相同文字+模型的合成結果做記憶體快取，命中時 0 延遲
 const TTS_CACHE_MAX  = parseInt(process.env.TTS_CACHE_MAX  || '30');
 const TTS_CACHE_TTL_MS = parseInt(process.env.TTS_CACHE_TTL_MS || String(10 * 60 * 1000));
-// key: `${modelKey}::${text}` → { file, engine, voice, model, createdAt }
+// key: `${modelKey}::${text}`（edge-tts 結果用 `edge:${voice}`）→ { file, engine, voice, model, createdAt }
 const ttsCache = new Map();
 
 // ════════════════════════════════════════════════════════
@@ -43,7 +44,8 @@ async function getCached(text, modelKey, destDir) {
 
   // 複製到新路徑供播放使用（播放後會刪除副本，原始快取保留）
   const ext     = path.extname(entry.file);
-  const newFile = path.join(destDir, `tts_cache_${Date.now()}${ext}`);
+  // 同一毫秒內可能有多段 / 多伺服器同時命中，只用時間戳會互相覆蓋、播完還刪掉別人的檔
+  const newFile = path.join(destDir, `tts_cache_${Date.now()}_${crypto.randomUUID()}${ext}`);
   try {
     await fs.promises.copyFile(entry.file, newFile);
   } catch {

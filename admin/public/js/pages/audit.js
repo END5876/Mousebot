@@ -64,7 +64,8 @@ export default function mountAudit(root, ctx) {
       h('thead', null, h('tr', null, h('th', null, '時間'), h('th', null, '操作'), h('th', null, '來源'))),
       h('tbody', null, shown.map((e) => h('tr', { class: e.level === 'warn' ? 'is-warn' : null },
         h('td', { class: 'audit-time', 'data-label': '時間' }, fmtDateTime(e.ts)),
-        h('td', { class: 'audit-action' }, e.level === 'warn' ? [icon('alert', 'ic-sm'), ' '] : null, e.action),
+        h('td', { class: 'audit-action' }, e.level === 'warn' ? [icon('alert', 'ic-sm'), ' '] : null, e.action,
+          e.count > 1 ? `（${fmtInt(e.count)} 次）` : null), // 同一來源短時間內連續登入失敗會合併成一筆
         h('td', { class: 'audit-source mono', 'data-label': '來源' }, e.source || '—'),
       ))),
     )));

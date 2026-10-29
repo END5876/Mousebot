@@ -56,6 +56,15 @@ test('prefetch：一次只下載一首，前一首完成才換下一首；重複
   assert.deepEqual(downloads.map((d) => d.url), [yt('a1').url, yt('b1').url]);
 });
 
+test('prefetch：同一支影片的不同網址（&t=、youtu.be）寫同一個暫存檔，只下載一次', async () => {
+  const item = yt('dQw4w9WgXcQ');
+  assert.equal(online.prefetch(item), true);
+  assert.equal(online.prefetch({ ...item, url: `${item.url}&t=30` }), false);
+  assert.equal(online.prefetch({ ...item, url: 'https://youtu.be/dQw4w9WgXcQ' }), false);
+  await tick(); await tick(); await tick();
+  assert.deepEqual(downloads.map((d) => d.url), [item.url]);
+});
+
 test('prefetch：已有快取、或輪到時已不需要（被移出佇列）就不下載', async () => {
   cached.add(yt('c1').url);
   online.prefetch(yt('c1'));

@@ -64,14 +64,20 @@ function writeJsonAtomic(file, data, { pretty = true } = {}) {
 
     const fd = fs.openSync(tmp, 'w');
     try {
-        fs.writeSync(fd, json, null, 'utf-8');
+        // writeFileSync 會一直寫到全部寫完；單次 writeSync 在磁碟快滿時可能只寫一部分卻不報錯
+        fs.writeFileSync(fd, json, 'utf-8');
         fs.fsyncSync(fd);
-    } finally {
+    } catch (err) {
         fs.closeSync(fd);
+        fs.rmSync(tmp, { force: true });
+        throw err;
     }
+    fs.closeSync(fd);
 
     try {
-        if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak`);
+        // 主檔能解析才輪替成 .bak：避免損毀的主檔蓋掉最後一份好的備份
+        const current = tryParse(file);
+        if (current.exists && !current.error) fs.copyFileSync(file, `${file}.bak`);
         fs.renameSync(tmp, file);
     } catch (err) {
         fs.rmSync(tmp, { force: true });

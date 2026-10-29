@@ -85,7 +85,9 @@ function toWebItem(item) {
   if (item.type === 'bilibili') {
     return {
       kind: 'online',
-      url: item.url,
+      // 服務端只收 https:// 的網址，http://b23.tv/... 這類會被濾掉，
+      // 後面每一首的編號都會錯位（removeQueue 永遠對不上）→ 這裡先統一成 https
+      url: String(item.url || '').replace(/^http:\/\//i, 'https://'),
       title: item.title,
       author: item.author || '',
       platform: platformOf(item.url),
@@ -369,6 +371,9 @@ async function execute(cmd) {
       const channel = prepareVoice(guildId); // 先確認在語音頻道，才去查影片資訊
       const item = await resolveItem(cmd.item);
       const result = await enqueue(guildId, item, channel);
+      // 沒在播放時 enqueue 會直接開始播，播放失敗（例如音樂庫下載失敗）也一樣回傳 queued:false，
+      // 要確認真的有在播才能回報成功（與 enqueueMany 相同）
+      if (!result.queued && !nowPlaying.has(guildId)) fail(`無法開始播放「${item.title}」`);
       if (result.queued && cmd.next) {
         const queue = queues.get(guildId) || [];
         const k = queue.lastIndexOf(item);

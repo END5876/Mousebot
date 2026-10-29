@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { registerEngine } = require('./unifiedQueue');
+const { nowPlaying } = require('./unifiedQueue/state');
 const logger = require('../../utils/logger');
 const { readJson, createDebouncedWriter } = require('../../utils/jsonStore');
 const libraryClient = require('./musicLibraryClient');
@@ -151,9 +152,11 @@ function _scanMusicFilesLocalWalk() {
 
     const allFiles = walkFiles(MUSIC_DIR);
 
+    // 下載／轉檔中的暫存檔（xxx.enc_123.tmp.mp3 也是 .mp3 結尾）不能出現在清單裡
     const files = allFiles
       .filter(filePath =>
         SUPPORTED_EXTENSIONS.includes(path.extname(filePath).toLowerCase())
+        && !cache.isTempName(path.basename(filePath))
       )
       .map(filePath => {
         const relPath = path.relative(MUSIC_DIR, filePath); // e.g. cache/xxx.mp3
@@ -312,6 +315,10 @@ async function playStream(guildId, item, player, { silent = false, countPlay = t
       return;
     }
   }
+
+  // 🐛 [停止後照播] 向共用音樂庫下載期間被停止／換歌：這個 player 已經不是目前的播放，
+  //    不要再播、也不計播放次數（收尾交給 playback.js）
+  if (nowPlaying.get(guildId)?.player !== player) return;
 
   // 專案內沒有任何地方調整音樂音量，不需要 inlineVolume 的逐幀 PCM 運算
   const resource = createAudioResource(item.filePath, {

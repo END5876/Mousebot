@@ -35,6 +35,8 @@ const registerApi = require('./api');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const SECRET_FILE = path.join(__dirname, '..', 'data', 'admin-session-secret');
+// 已登出的 Cookie（ADMIN_REVOKED_FILE：改放到別的位置，給測試用）
+const REVOKED_FILE = process.env.ADMIN_REVOKED_FILE || path.join(__dirname, '..', 'data', 'admin-revoked.json');
 const MIN_PASSWORD_LENGTH = 12;
 const MAX_BODY_BYTES = 256 * 1024;
 const LOGIN_BODY_BYTES = 2 * 1024;
@@ -188,7 +190,8 @@ async function handleApi(req, res, url, { auth, router }) {
     // 送 1000 次就能把稽核紀錄（與日誌頁）裡真正的管理操作全部擠掉
     if (!isLogin) { if (result.revoked) audit.record('登出', { source }); }
     else if (result.status === 200) audit.record('登入成功', { source });
-    else if (result.status === 401) audit.record('登入失敗（密碼錯誤）', { source, level: 'warn' });
+    // 🔒 登入失敗不需要登入就能觸發：標成 unauth，在操作紀錄裡另有上限，擠不掉真正的管理操作（見 audit.js）
+    else if (result.status === 401) audit.record('登入失敗（密碼錯誤）', { source, level: 'warn', unauth: true });
     sendJson(res, result.status, result.body, result.headers);
     return;
   }
@@ -276,7 +279,7 @@ function startAdminServer(client) {
   const host = process.env.ADMIN_HOST || '127.0.0.1';
   const sessionHours = Math.max(1, Number.parseFloat(process.env.ADMIN_SESSION_HOURS || '168') || 168);
 
-  const auth = createAuth({ password, secretFile: SECRET_FILE, sessionHours });
+  const auth = createAuth({ password, secretFile: SECRET_FILE, sessionHours, revokedFile: REVOKED_FILE });
   const router = new Router();
   registerApi(router, client);
 

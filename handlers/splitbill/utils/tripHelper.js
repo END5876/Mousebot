@@ -126,6 +126,23 @@ function toMemberIds(trip, discordUserIds) {
   return ids;
 }
 
+// Discord 的 Modal 欄位標籤最多 45 字：成員名字（Discord 顯示名稱最長 32 字、網頁建立的成員可到 60 字）
+// 加上「付了多少？」這類後綴很容易超過，builder 會在 showModal 前直接丟錯，所以名字超長時截斷加「…」
+const MODAL_LABEL_MAX = 45;
+
+function nameLabel(name, suffix) {
+  const text = String(name || '');
+  const max = MODAL_LABEL_MAX - suffix.length;
+  if (text.length <= max) return text + suffix;
+  // 依字元（code point）截，避免把 emoji 切成半個
+  let out = '';
+  for (const ch of text) {
+    if (out.length + ch.length > max - 1) break;
+    out += ch;
+  }
+  return `${out}…${suffix}`;
+}
+
 /** 確認一批「成員 ID」都存在於行程中。 */
 function ensureMembersExist(trip, memberIds) {
   const existing = new Set(trip.members.map((m) => m.id));
@@ -140,6 +157,7 @@ module.exports = {
   canRemoveMember,
   isCurrencyCode,
   CURRENCY_FORMAT_HINT,
+  nameLabel,
   memberDisplay,
   memberMention,
   findMemberByDiscordId,

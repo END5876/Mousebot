@@ -93,7 +93,9 @@ module.exports = function registerNotify(router, client) {
   // 目前的限免遊戲（只查詢，不會推播到任何頻道）
   router.get('/api/notify/:platform/games', async ({ params }) => {
     const { provider } = platformOf(params);
-    const games = await provider.getFreeGames();
+    // 抓取失敗時 getFreeGames 會丟錯（不再假裝成「沒有限免」），轉成看得懂的訊息顯示在網頁上
+    let games;
+    try { games = await provider.getFreeGames(); } catch (err) { throw new HttpError(502, `查詢失敗：${err.message}`); }
     return {
       games: games.map((g) => ({
         name: g.name,

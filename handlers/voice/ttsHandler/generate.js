@@ -47,11 +47,17 @@ async function generateTTS(text, filename, guildId) {
   if (!getHasEdgeTTS()) throw new Error('SoVITS 不可用且 edge-tts 未安裝');
 
   const voice    = resolveVoice(text, guildId);
+  // edge-tts 結果另用「引擎 + 聲音」當 key：放在模型 key 下會被共用預設模型的伺服器拿到別的聲音，
+  // SoVITS 恢復後也會繼續播 edge 的聲音
+  const edgeKey  = `edge:${voice}`;
+  const edgeCached = await getCached(text, edgeKey, tempDir);
+  if (edgeCached) return edgeCached;
+
   const edgeFile = filename.replace(/\.\w+$/, '_edge.mp3');
   await generateEdgeTTS(text, edgeFile, voice);
   logger.debug('edge-tts', `✅ 生成成功: ${text.slice(0, 20)}...`);
   const result = { file: edgeFile, engine: 'edge', voice };
-  putCache(text, model.key, result);
+  putCache(text, edgeKey, result);
   return result;
 }
 

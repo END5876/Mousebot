@@ -249,6 +249,8 @@ async function enqueueFromPanel(client, guild, cmd) {
   const item = await resolveItem(cmd.item);
   // 沒有可發訊息的頻道時給一個不發訊息的頻道，enqueue 內部的通知不會出錯
   const result = await playback.enqueue(guild.id, item, notify || { id: null, send: async () => {} });
+  // 引擎沒播起來（例如共用庫裡的檔案已經刪掉）會清掉 nowPlaying：不能回報「開始播放」、也不寫稽核紀錄
+  if (!result.queued && !state.nowPlaying.has(guild.id)) throw new HttpError(502, `無法開始播放「${item.title}」`);
   if (result.queued && cmd.next) {
     const queue = state.queues.get(guild.id) || [];
     const k = queue.lastIndexOf(item);
@@ -256,6 +258,8 @@ async function enqueueFromPanel(client, guild, cmd) {
       queue.splice(k, 1);
       queue.unshift(item);
       session.schedule();
+      // enqueue 預先下載時它還在佇列尾端，移到最前面後要重新觸發
+      playback.prefetchUpcoming(guild.id);
     }
   }
   voiceMonitor.touchActivity(guild.id);

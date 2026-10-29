@@ -1,6 +1,7 @@
 'use strict';
 
-const { _engines, SEARCH_MARKER } = require('../state');
+const crypto = require('crypto');
+const { _engines, SEARCH_MARKER, LOCAL_KEY_MARKER } = require('../state');
 
 // ════════════════════════════════════════════════════════
 //  即時線上搜尋（Autocomplete 用）— 節流 + 快取 + 搶時間
@@ -64,6 +65,27 @@ function _raceOnlineSearch(engine, keyword) {
 }
 
 // ════════════════════════════════════════════════════════
+//  本地檔案的 choice value：Discord 限制 value 最多 100 字，
+//  長檔名截斷後 getTrackInfo 對不到（會被當成線上搜尋），改用「標記 + 檔名雜湊」，送出時再換回完整檔名
+// ════════════════════════════════════════════════════════
+function _localKeyHash(filename) {
+  return crypto.createHash('sha1').update(String(filename).replace(/\\/g, '/')).digest('hex').slice(0, 20);
+}
+
+function _localChoiceValue(filename) {
+  return filename.length <= 100 ? filename : LOCAL_KEY_MARKER + _localKeyHash(filename);
+}
+
+// 標記 + 雜湊 → 完整檔名；音樂庫已變動找不到時回傳 null
+function resolveLocalKey(input) {
+  const localEngine = _engines.local;
+  if (!localEngine) return null;
+  const hash = input.slice(LOCAL_KEY_MARKER.length);
+  const found = localEngine.getMusicFiles().find(f => _localKeyHash(f.filename) === hash);
+  return found ? found.filename : null;
+}
+
+// ════════════════════════════════════════════════════════
 //  Autocomplete（即時顯示，可直接選歌）
 // ════════════════════════════════════════════════════════
 async function handleAutocomplete(interaction) {
@@ -99,7 +121,7 @@ async function handleAutocomplete(interaction) {
         .slice(0, 23)
         .map(f => ({
           name : `📁 ${f.name}`.slice(0, 100),
-          value: f.filename.slice(0, 100),
+          value: _localChoiceValue(f.filename),
         }))
     : [];
 
@@ -111,8 +133,10 @@ async function handleAutocomplete(interaction) {
   }
 
   // 保底：一定會顯示的「送出後搜尋」選項，即時搜尋失敗/逾時時墊底用
+  // name 超過 100 字 Discord 會拒絕整個 respond（所有建議都不顯示），長輸入先截斷再放進標籤
+  const fallbackLabel = focusedRaw.length > 60 ? `${focusedRaw.slice(0, 60)}…` : focusedRaw;
   const fallbackSearchChoice = {
-    name : `🔍 搜尋線上：「${focusedRaw}」（YouTube + Bilibili）`,
+    name : `🔍 搜尋線上：「${fallbackLabel}」（YouTube + Bilibili）`.slice(0, 100),
     value: (SEARCH_MARKER + focusedRaw).slice(0, 100),
   };
 
@@ -164,4 +188,4 @@ async function handleAutocomplete(interaction) {
   return true;
 }
 
-module.exports = { handleAutocomplete };
+module.exports = { handleAutocomplete, resolveLocalKey };

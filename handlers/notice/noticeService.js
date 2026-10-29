@@ -108,9 +108,12 @@ function createNoticeService({ label, notifiedFileName, channelFileName }) {
       return [...notifyChannelIds];
     },
 
-    clearChannels() {
-      const count = notifyChannelIds.length;
-      notifyChannelIds = [];
+    // shouldRemove：只清掉符合條件的頻道（/notify channel clear 只能清自己伺服器的）；不給就全部清除
+    clearChannels(shouldRemove = () => true) {
+      const kept = notifyChannelIds.filter(id => !shouldRemove(id));
+      const count = notifyChannelIds.length - kept.length;
+      if (count === 0) return 0;
+      notifyChannelIds = kept;
       saveChannelConfig();
       return count;
     },
@@ -199,7 +202,13 @@ function createPollingLoop({ client, service, getFreeGames, buildMessage, idFiel
       return { skipped: '所有設定的頻道都無法存取' };
     }
 
-    const games = await getFreeGames();
+    // 查詢失敗要回報成失敗，不能當成「沒有新遊戲」（provider 已經記過 log）
+    let games;
+    try {
+      games = await getFreeGames();
+    } catch (e) {
+      return { skipped: `查詢失敗：${e.message}` };
+    }
     const newGames = games.filter(game => !service.hasNotified(game[idField]));
     if (newGames.length === 0) return { found: games.length, newGames: [], channels: channels.length, failed: 0 };
 
@@ -207,20 +216,32 @@ function createPollingLoop({ client, service, getFreeGames, buildMessage, idFiel
 
     let failed = 0;
     for (const game of newGames) {
-      service.markNotified(game[idField], game.name);
+      // 先組訊息：資料有缺導致組訊息丟錯時只跳過這一款，不能讓後面的遊戲也跟著沒推播
+      let message;
+      try {
+        message = buildMessage(game);
+      } catch (e) {
+        failed += channels.length;
+        logger.error(service.label, `組合通知訊息失敗（${game.name}）:`, e.message);
+        continue;
+      }
 
       const results = await Promise.allSettled(
-        channels.map(ch => ch.send(buildMessage(game)))
+        channels.map(ch => ch.send(message))
       );
 
+      let sent = 0;
       results.forEach((result, i) => {
         if (result.status === 'fulfilled') {
+          sent++;
           logger.success(service.label, `已通知 #${channels[i].name}：${game.name}`);
         } else {
           failed++;
           logger.error(service.label, `發送至 #${channels[i].name} 失敗:`, result.reason?.message);
         }
       });
+      // 至少送出一個頻道才算通知過；全部失敗的話下次檢查會再試
+      if (sent > 0) service.markNotified(game[idField], game.name);
     }
 
     service.persistNotified();

@@ -25,8 +25,13 @@ function setupBasicCommands(client) {
         ) {
             const target = content.replace('有什麼了不起', '').trim();
             if (target) {
-                message.channel.send(`${target}有什麼了不起 爛${target}🙁🤙`);
-                logger.info('Command', `🙁 了不起回應: ${target}`);
+                // 沒有發言權限的頻道會 reject，接住避免變成未處理的 Promise 拒絕
+                try {
+                    await message.channel.send(`${target}有什麼了不起 爛${target}🙁🤙`);
+                    logger.info('Command', `🙁 了不起回應: ${target}`);
+                } catch (err) {
+                    logger.warn('Command', `了不起回應失敗：${err.message}`);
+                }
             }
         }
     });
@@ -62,6 +67,10 @@ function setupBasicCommands(client) {
 
         async execute(interaction) {
             const { guild } = interaction;
+            // 全域指令在私訊裡也看得到，這時沒有 guild
+            if (!interaction.inGuild() || !guild) {
+                return interaction.reply({ content: '❌ 這個指令只能在伺服器裡使用。', flags: MessageFlags.Ephemeral });
+            }
             await interaction.reply({ embeds: [
                 new EmbedBuilder()
                     .setColor(0x5865F2)
@@ -153,6 +162,11 @@ function setupBasicCommands(client) {
                     content: '別想操控我 爛咖👎',
                     flags: MessageFlags.Ephemeral
                 });
+            }
+
+            // 私訊頻道沒被快取時 channel 是 null，先擋下來，免得回了「已發送」才失敗
+            if (!interaction.channel) {
+                return interaction.reply({ content: '❌ 無法在這裡發送訊息。', flags: MessageFlags.Ephemeral });
             }
 
             const sayText = interaction.options.getString('text');

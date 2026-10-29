@@ -27,6 +27,19 @@ const HISTORY_FETCH_LIMIT  = 30;
 const HISTORY_PAIR_LIMIT   = 12; 
 const HISTORY_TIME_LIMIT_MS = 10 * 60 * 1000;
 
+// 模型沒有產生任何文字（多半是被內容過濾擋下）
+const EMPTY_RESPONSE_MESSAGE = '🤔 這次沒有產生任何回覆（可能被內容過濾擋下了），換個說法再試一次吧。';
+
+class AiEmptyResponseError extends Error {
+    constructor(finishReason) {
+        super(`AI 回覆為空 (finishReason: ${finishReason})`);
+        this.name = 'AiEmptyResponseError';
+        this.finishReason = finishReason;
+    }
+}
+
+const isEmptyResponseError = err => err instanceof AiEmptyResponseError;
+
 // ════════════════════════════════════════════════════════
 //  工具函式：將 imageParts 陣列轉換為 Gemini API 格式
 // ════════════════════════════════════════════════════════
@@ -376,10 +389,16 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
         const response = await sendWithHistory({ mode, history, parts: messageParts, config: GENERATION_CONFIG, guildId, userId });
         recordUsage('chat', response, { userId, mode });
         const text = response.text ?? '';
+        // 被擋下（PROHIBITED_CONTENT/RECITATION 等）時沒有任何文字，送空訊息會被 Discord 拒絕，改丟專用錯誤讓呼叫端提示使用者
+        if (!text.trim()) {
+            const finishReason = response.candidates?.[0]?.finishReason ?? response.promptFeedback?.blockReason ?? 'unknown';
+            throw new AiEmptyResponseError(finishReason);
+        }
         // text：純回答（給 TTS 朗讀）；chunks：切好的 Discord 訊息
         return { text, chunks: splitMessage(text) };
     } catch (error) {
-        if (!isQuotaError(error)) logger.error('AI', `Gemini Error (${MODEL_NAME}): ${error.message}`);
+        if (isEmptyResponseError(error)) logger.warn('AI', error.message);
+        else if (!isQuotaError(error)) logger.error('AI', `Gemini Error (${MODEL_NAME}): ${error.message}`);
         throw error;
     }
 }
@@ -445,4 +464,6 @@ module.exports = {
     getGeminiResponse,
     getGeminiResponseVoice,
     getShortResponse,
+    isEmptyResponseError,
+    EMPTY_RESPONSE_MESSAGE,
 };

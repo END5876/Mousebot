@@ -234,7 +234,9 @@ function adoptConnection(client, channel, connection, { restartMonitor }) {
 
   if (restartMonitor) voiceMonitor.stopMonitoring(guildId);
 
-  if (!voiceMonitor.isMonitoring(guildId)) {
+  // 閒置監控被關閉時 isMonitoring 永遠是 false：不先檢查的話每 10 秒的健康檢查都會重跑一次，
+  // 每次都記一行「閒置監控功能已關閉」的 log
+  if (!voiceMonitor.isMonitoring(guildId) && voiceMonitor.isEnabled(guildId)) {
     startPersistentMonitor(client, channel, connection);
   }
 }

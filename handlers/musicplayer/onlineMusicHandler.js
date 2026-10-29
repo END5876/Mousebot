@@ -40,14 +40,17 @@ const GET_INFO_TIMEOUT_MS = 15_000;
 const activeProcesses = new Map(); // guildId -> ChildProcess
 const errorCounts     = new Map(); // guildId -> number
 
-// ── 下載鎖（防止同一 URL 同時下載兩次）──────────────────
+// ── 下載鎖（防止同一首同時下載兩次）──────────────────────
+// 🐛 [暫存檔互寫] 以快取檔名當 key，不用原始網址：同一支影片的不同網址（&t=30、youtu.be…）
+//    暫存檔與輸出檔是同一個，以前會兩個 yt-dlp 同時寫同一個 .tmp／.part
 const downloadingUrls = new Set();
+const _dlKey = (item) => cache.getCacheFilename(item.url, item.title);
 
 // ── 預先下載（佇列中還沒輪到的歌）────────────────────────
 // 一次只跑一個，避免跟正在串流的 yt-dlp 搶頻寬、同時打太多請求被判定成機器人
 const PREFETCH_CONCURRENCY = 1;
 const prefetchJobs   = [];        // 排隊中的 { item, isWanted }
-const prefetchActive = new Set(); // 執行中（查快取／下載中）的 URL
+const prefetchActive = new Set(); // 執行中（查快取／下載中）的 _dlKey
 let prefetchRunning  = 0;
 
 // ════════════════════════════════════════════════════════
@@ -403,7 +406,7 @@ async function playStream(guildId, item, player, { retryCount = 0, silent = fals
     _fallbackStream(guildId, item, player, retryCount, silent);
 
     if (!tooLongToCache) {
-      if (!downloadingUrls.has(item.url)) {
+      if (!downloadingUrls.has(_dlKey(item))) {
         if (!silent) logger.info(platform, `⬇️ 背景開始下載快取...`);
         _downloadToCache(item, { silent });
       } else {
@@ -424,9 +427,10 @@ function _isCacheable(item) {
 }
 
 // 下載＋響度正規化成快取檔，完成後上傳共用音樂庫；playStream 背景下載與預先下載共用。
-// 呼叫端須先確認 downloadingUrls 沒有這個 URL。失敗只記 log，回傳 null。
+// 呼叫端須先確認 downloadingUrls 沒有這首（_dlKey）。失敗只記 log，回傳 null。
 function _downloadToCache(item, { silent = false, label = '背景' } = {}) {
-  downloadingUrls.add(item.url);
+  const key = _dlKey(item);
+  downloadingUrls.add(key);
   const platform = antiBot.isYouTubeUrl(item.url) ? 'YouTube' : 'Bilibili';
 
   const dlArgs = antiBot.isYouTubeUrl(item.url)
@@ -464,7 +468,7 @@ function _downloadToCache(item, { silent = false, label = '背景' } = {}) {
     return null;
   })
   .finally(() => {
-    downloadingUrls.delete(item.url);
+    downloadingUrls.delete(key);
   });
 }
 
@@ -476,10 +480,11 @@ function _downloadToCache(item, { silent = false, label = '背景' } = {}) {
 // ════════════════════════════════════════════════════════
 function prefetch(item, { isWanted = () => true } = {}) {
   if (!item?.url || !antiBot.isSupportedMediaUrl(item.url) || !_isCacheable(item)) return false;
-  if (downloadingUrls.has(item.url) || prefetchActive.has(item.url)) return false;
+  const key = _dlKey(item);
+  if (downloadingUrls.has(key) || prefetchActive.has(key)) return false;
 
   // 同一首已在排隊（例如兩個伺服器都點了）：任一邊還需要就下載
-  const pending = prefetchJobs.find(j => j.item.url === item.url);
+  const pending = prefetchJobs.find(j => _dlKey(j.item) === key);
   if (pending) {
     const prev = pending.isWanted;
     pending.isWanted = () => prev() || isWanted();
@@ -495,11 +500,11 @@ function _pumpPrefetch() {
   while (prefetchRunning < PREFETCH_CONCURRENCY && prefetchJobs.length > 0) {
     const job = prefetchJobs.shift();
     prefetchRunning++;
-    prefetchActive.add(job.item.url);
+    prefetchActive.add(_dlKey(job.item));
     _runPrefetch(job)
       .catch(err => logger.warn('Cache', `預先下載失敗: ${err.message}`))
       .finally(() => {
-        prefetchActive.delete(job.item.url);
+        prefetchActive.delete(_dlKey(job.item));
         prefetchRunning--;
         _pumpPrefetch();
       });
@@ -507,13 +512,13 @@ function _pumpPrefetch() {
 }
 
 async function _runPrefetch({ item, isWanted }) {
-  if (!isWanted() || downloadingUrls.has(item.url)) return;
+  if (!isWanted() || downloadingUrls.has(_dlKey(item))) return;
 
   // 本地已有，或共用音樂庫已有（getCachedPath 會順便下載成本地快取）就不用再抓
   if (await cache.getCachedPath(item.url, item.title)) return;
 
   // 查共用音樂庫期間可能已經輪到它播放、由 playStream 開始下載
-  if (!isWanted() || downloadingUrls.has(item.url)) return;
+  if (!isWanted() || downloadingUrls.has(_dlKey(item))) return;
 
   const platform = antiBot.isYouTubeUrl(item.url) ? 'YouTube' : 'Bilibili';
   logger.info(platform, `⏩ 預先下載佇列中的歌曲: ${item.title}`);
@@ -560,7 +565,12 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
 
   let hasError = false, errorOutput = '', dataReceived = false;
 
-  ytdlp.stdout.on('data', () => { dataReceived = true; });
+  // 🐛 [熔斷失效] 連續錯誤計數要等真的收到音訊才歸零；以前一 spawn 就歸零，每次重試都從 0 開始，
+  //    MAX_CONSECUTIVE_ERRORS 永遠不會觸發
+  ytdlp.stdout.on('data', () => {
+    if (!dataReceived && _isCurrentPlayer(guildId, player)) errorCounts.set(guildId, 0);
+    dataReceived = true;
+  });
   ytdlp.stderr.on('data', data => {
     for (const line of data.toString().split(/\r?\n/)) {
       if (!line.trim() || line.includes('Deleting original file')) continue;
@@ -613,7 +623,6 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
   });
 
   player.play(resource);
-  errorCounts.set(guildId, 0);
 }
 
 function _handleStreamError(guildId, item, player, retryCount, errorMessage, silent = false) {
@@ -650,6 +659,14 @@ function clearErrorCount(guildId) {
 async function setupOnlineMusicEngine() {
   antiBot.initCookies();
   cache.ensureCacheDir();
+
+  // 清掉重啟前遺留的下載／轉檔暫存檔；剛留下的還沒過期，之後每小時再清一次
+  const cleanTemps = () => {
+    const n = cache.cleanupStaleTemps();
+    if (n) logger.info('Cache', `🧹 已清除 ${n} 個殘留暫存檔`);
+  };
+  cleanTemps();
+  setInterval(cleanTemps, 60 * 60 * 1000).unref();
 
   const [ytdlpOk, ffmpegOk, potVersion] = await Promise.all([
     checkYtDlp(), checkFFmpeg(), antiBot.checkPotProvider(),

@@ -45,6 +45,16 @@ test('jsonStore：主檔損毀時改讀 .bak；兩者都壞才用 fallback', () 
   assert.deepEqual(readJson(file, 'fallback'), 'fallback');
 });
 
+test('jsonStore：主檔損毀時寫入不會用它蓋掉 .bak', () => {
+  const file = path.join(tmpDir(), 'b2.json');
+  writeJsonAtomic(file, { v: 1 });
+  writeJsonAtomic(file, { v: 2 });
+  fs.writeFileSync(file, '{"v": 2, "trunc');
+  writeJsonAtomic(file, { v: 3 });
+  assert.deepEqual(readJson(file, null), { v: 3 });
+  assert.deepEqual(JSON.parse(fs.readFileSync(`${file}.bak`, 'utf-8')), { v: 1 });
+});
+
 test('jsonStore：主檔不存在但有 .bak 時從備份還原', () => {
   const file = path.join(tmpDir(), 'c.json');
   fs.writeFileSync(`${file}.bak`, JSON.stringify({ restored: true }));

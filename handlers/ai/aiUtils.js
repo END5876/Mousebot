@@ -574,6 +574,8 @@ async function withTyping(channel, asyncFn) {
     const typingLoop = async () => {
         while (!stop) {
             await channel.sendTyping().catch(() => {});
+            // asyncFn 可能在 sendTyping 途中就結束（此時 wakeUp 叫不醒這輪），要再檢查一次，否則會多睡 8 秒才回傳
+            if (stop) break;
             await new Promise(res => {
                 wakeUp = res;
                 setTimeout(res, 8000);

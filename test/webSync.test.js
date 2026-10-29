@@ -27,6 +27,8 @@ test('toWebItem：本地與線上曲目轉成網頁格式', () => {
     type: 'bilibili', url: 'https://www.youtube.com/watch?v=x', title: 'T', author: 'A', duration: '3:00', durationSec: 180, thumbnail: 'x',
   }), { kind: 'online', url: 'https://www.youtube.com/watch?v=x', title: 'T', author: 'A', platform: 'YouTube', duration: '3:00', durationSec: 180 });
   assert.equal(webSync._toWebItem({ type: 'bilibili', url: 'https://www.bilibili.com/video/BV1' }).platform, 'Bilibili');
+  // 服務端會濾掉非 https 的網址（後面的佇列編號就會錯位），http 短網址要先轉成 https
+  assert.equal(webSync._toWebItem({ type: 'bilibili', url: 'http://b23.tv/abc' }).url, 'https://b23.tv/abc');
   assert.equal(webSync._toWebItem(null), null);
 });
 

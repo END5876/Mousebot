@@ -115,7 +115,7 @@ export default function mountNotify(root, ctx) {
     let result = null;
     const done = await withBusy(button, async () => { result = await api.post(`/api/notify/${seg(p.key)}/check`); });
     if (!done) return;
-    if (result.skipped) toast(`沒有檢查：${result.skipped}`, { type: 'info' });
+    if (result.skipped) toast(`沒有檢查：${result.skipped}`, { type: result.skipped.startsWith('查詢失敗') ? 'error' : 'info' });
     else if (!result.newGames.length) toast(`目前 ${result.found} 款限免都已經通知過，沒有新遊戲`, { type: 'info' });
     else toast(`已推播 ${result.newGames.length} 款：${result.newGames.join('、')}${result.failed ? `（${result.failed} 則發送失敗，詳見日誌）` : ''}`);
   }

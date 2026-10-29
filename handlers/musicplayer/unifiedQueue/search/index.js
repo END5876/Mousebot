@@ -4,7 +4,7 @@
 
 const { EmbedBuilder } = require('discord.js');
 
-const { _engines, SEARCH_MARKER } = require('../state');
+const { _engines, SEARCH_MARKER, LOCAL_KEY_MARKER } = require('../state');
 const { enqueue, ensureConnection } = require('../playback');
 const voiceMonitor = require('../../voiceActivityMonitor');
 const { isSupportedMediaUrl } = require('../../musicAntiBot');
@@ -13,7 +13,7 @@ const { cleanUrl, _isYouTubeWithoutList } = require('./urlUtils');
 const { _handlePlayAll, _handleLocalMultiSelect } = require('./local');
 const { _askPlaylistChoice, _handleAddPlaylist } = require('./playlist');
 const { _replyPlayResult, _handleOnlineSearch } = require('./onlineSearch');
-const { handleAutocomplete } = require('./autocomplete');
+const { handleAutocomplete, resolveLocalKey } = require('./autocomplete');
 
 // ════════════════════════════════════════════════════════
 //  handlePlay（/play 核心邏輯）
@@ -45,12 +45,22 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
     return _handleOnlineSearch(interaction, keyword, guildId);
   }
 
+  // autocomplete 選了長檔名的本地音樂（value 是標記 + 雜湊）→ 換回完整檔名
+  if (input.startsWith(LOCAL_KEY_MARKER)) {
+    const filename = resolveLocalKey(input);
+    if (!filename) return interaction.editReply('❌ 找不到這首本地音樂（音樂庫可能已變動），請重新選擇');
+    input = filename;
+  }
+
   const cleanInput = cleanUrl(input);
   // cleanUrl 遇到網址裡互相衝突的影片 ID（例如 /shorts/<A>?v=<B>）會回傳空字串
   if (!cleanInput && /^https?:\/\//i.test(input.trim())) {
     return interaction.editReply('❌ 無法辨識這個網址指向哪一部影片（網址裡有互相衝突的影片 ID）');
   }
-  const isUrl = (() => { try { new URL(cleanInput); return true; } catch { return false; } })();
+  // 只有「scheme://」形式才算網址：new URL('Re:Zero opening') 也會成功（協定是 're:'），
+  // 這種關鍵字/檔名要走本地或線上搜尋，不能被當成不支援的網址拒絕
+  const isUrl = /^[a-z][a-z0-9+.-]*:\/\//i.test(cleanInput)
+    && (() => { try { new URL(cleanInput); return true; } catch { return false; } })();
 
   let item;
 

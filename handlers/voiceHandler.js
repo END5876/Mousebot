@@ -327,19 +327,19 @@ async function handleJoin(interaction) {
         });
       }
 
+      // 等連線就緒最多 30 秒，超過 3 秒互動就失效，要先 defer
+      await interaction.deferReply();
+
       try {
         await joinChannel(voiceChannel);
 
-        await interaction.reply(
+        await interaction.editReply(
           `✅ 已加入語音頻道：**${voiceChannel.name}**\n💡 可用 \`/voice stt start\`（喚醒詞）或 \`/voice record-button\`（按鈕手動錄音）`
         );
 
       } catch (error) {
         logger.error('Voice', '加入語音頻道時發生錯誤：', error);
-        await interaction.reply({
-          content: '❌ 加入語音頻道時發生錯誤',
-          flags: MessageFlags.Ephemeral
-        });
+        await interaction.editReply({ content: '❌ 加入語音頻道時發生錯誤' });
       }
 }
 
@@ -518,15 +518,19 @@ function setupVoiceCommands(client) {
         }
 
         startSilenceLayer(guildId);
+        // 音樂 / TTS 播放中時靜音層只是待命，等目前播放結束才接手
         await interaction.update({
-          content: '🔇 **已開始播放靜音音頻**，防止被踢出頻道',
+          content: getActiveLayer(guildId) === 'silence'
+            ? '🔇 **已開始播放靜音音頻**，防止被踢出頻道'
+            : '🔇 **已開啟靜音防踢**，目前的播放結束後會改播靜音音頻',
           components: [buildSilenceMenu(guildId)],
         });
       }
 
       // ── stop ────────────────────────────────────────
       else if (selected === 'stop') {
-        if (getActiveLayer(guildId) !== 'silence') {
+        // 音樂 / TTS 播放中時靜音層可能在背景待命，也要能停掉，否則播放結束後又會接手
+        if (!getActiveLayer(guildId)) {
           return interaction.update({
             content: '❌ 目前沒有播放靜音音頻',
             components: [buildSilenceMenu(guildId)],

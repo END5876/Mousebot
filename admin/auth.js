@@ -8,7 +8,7 @@
 //   - 換密碼 = 所有裝置登出
 //   - 金鑰檔不在 Cookie 裡，拿到 Cookie 也無法離線暴力猜密碼
 //   - 不需要 session 表，Bot 重新啟動後仍維持登入
-// 登出時把該 Cookie 的簽章記進撤銷清單（只存在記憶體；重新啟動後清空，Cookie 本身仍會到期）。
+// 登出時把該 Cookie 的簽章記進撤銷清單，並存到 data/admin-revoked.json（重新啟動後仍然有效，到期後自動清掉）。
 //
 // CSRF：Cookie 是 SameSite=Strict，且 server.js 要求所有寫入請求帶自訂 header 與 JSON body——
 // 跨站的表單無法自訂 header，要自訂就得先過 CORS 預檢，而這裡沒有開 CORS。
@@ -19,6 +19,7 @@ const net = require('net');
 const path = require('path');
 const logger = require('../utils/logger');
 const { alert } = require('../utils/alert');
+const { readJson, writeJsonAtomic } = require('../utils/jsonStore');
 
 const COOKIE_NAME = 'mb_admin';
 // 成功登入過的裝置：不受全站登入鎖定影響（攻擊者灌錯誤密碼鎖不住擁有者），只受自己來源的計數限制
@@ -161,9 +162,10 @@ function isHttps(req) {
 }
 
 /**
- * @param {{ password: string, secretFile: string, sessionHours: number }} opts
+ * @param {{ password: string, secretFile: string, sessionHours: number, revokedFile?: string }} opts
+ *   revokedFile：撤銷清單存檔位置（沒給＝只存在記憶體）
  */
-function createAuth({ password, secretFile, sessionHours }) {
+function createAuth({ password, secretFile, sessionHours, revokedFile }) {
   // 不論金鑰從哪裡來，都和密碼一起衍生：換密碼一定會讓所有裝置登出
   const secret = process.env.ADMIN_SESSION_SECRET || loadOrCreateSecret(secretFile);
   const sessionKey = crypto.createHmac('sha256', secret).update(`mb-admin:${password}`).digest();
@@ -176,8 +178,24 @@ function createAuth({ password, secretFile, sessionHours }) {
     return `${exp}.${sign(exp)}`;
   }
 
-  // 已登出的 token：簽章 → 到期時間
+  // 已登出的 token：簽章 → 到期時間。Cookie 是無狀態的、金鑰重新啟動後不變，
+  // 只放記憶體的話重新啟動後被複製走的 Cookie 又能用，所以要存檔
   const revoked = new Map();
+  if (revokedFile) {
+    const saved = readJson(revokedFile, {});
+    const now = Date.now();
+    for (const [mac, exp] of Object.entries(saved && typeof saved === 'object' ? saved : {})) {
+      if (typeof exp === 'number' && exp >= now && revoked.size < MAX_REVOKED) revoked.set(mac, exp);
+    }
+  }
+  function saveRevoked() {
+    if (!revokedFile) return;
+    try {
+      writeJsonAtomic(revokedFile, Object.fromEntries(revoked), { pretty: false });
+    } catch (err) {
+      logger.warn('Admin', `無法寫入登出清單 ${path.basename(revokedFile)}（${err.message}），Bot 重新啟動後已登出的 Cookie 會在到期前恢復有效`);
+    }
+  }
 
   function verifyToken(token) {
     if (!token) return false;
@@ -275,6 +293,7 @@ function createAuth({ password, secretFile, sessionHours }) {
       const dot = token.indexOf('.');
       if (revoked.size >= MAX_REVOKED) revoked.delete(revoked.keys().next().value);
       revoked.set(token.slice(dot + 1), Number(token.slice(0, dot)));
+      saveRevoked(); // 登出不常發生，直接同步寫入
       didRevoke = true;
     }
     return {

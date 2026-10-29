@@ -11,6 +11,11 @@ const { readJson, createDebouncedWriter } = require('../utils/jsonStore');
 // ADMIN_AUDIT_FILE：改放到別的位置（給測試用，避免寫進真正的 data/）
 const AUDIT_PATH = process.env.ADMIN_AUDIT_FILE || path.join(__dirname, '..', 'data', 'adminAudit.json');
 const MAX_ENTRIES = 1000;
+// 不需要登入就能觸發的紀錄（登入失敗）最多佔這麼多筆，超過時刪掉最舊的那種紀錄：
+// 換 IP 灌錯誤密碼也擠不掉真正的管理操作（每一次失敗仍會寫進 log，達到上限時也會通知維運）
+const MAX_UNAUTH_ENTRIES = 200;
+// 同一來源在這段時間內連續失敗：合併成一筆，記次數
+const UNAUTH_MERGE_MS = 10 * 60 * 1000;
 
 let entries = (() => {
   const saved = readJson(AUDIT_PATH, []);
@@ -22,11 +27,22 @@ const writer = createDebouncedWriter(AUDIT_PATH, () => entries, { debounceMs: 20
 
 /**
  * @param {string} action 給人看的描述，例如「新增自訂回應「欸」」
- * @param {{ source?: string, level?: 'info'|'warn' }} [opts]
+ * @param {{ source?: string, level?: 'info'|'warn', unauth?: boolean }} [opts] unauth：未登入就能觸發的紀錄（見 MAX_UNAUTH_ENTRIES）
  */
-function record(action, { source = null, level = 'info' } = {}) {
-  entries.push({ id: ++seq, ts: Date.now(), action, source, level });
-  if (entries.length > MAX_ENTRIES) entries = entries.slice(-MAX_ENTRIES);
+function record(action, { source = null, level = 'info', unauth = false } = {}) {
+  const now = Date.now();
+  const same = unauth
+    ? entries.findLast((e) => e.unauth && e.action === action && e.source === source && now - e.ts < UNAUTH_MERGE_MS)
+    : null;
+  if (same) {
+    same.count = (same.count ?? 1) + 1;
+  } else {
+    entries.push({ id: ++seq, ts: now, action, source, level, ...(unauth ? { unauth: true } : {}) });
+    if (unauth && entries.filter((e) => e.unauth).length > MAX_UNAUTH_ENTRIES) {
+      entries.splice(entries.findIndex((e) => e.unauth), 1);
+    }
+    if (entries.length > MAX_ENTRIES) entries = entries.slice(-MAX_ENTRIES);
+  }
   writer.schedule();
   logger[level === 'warn' ? 'warn' : 'info']('Admin', `📝 ${action}${source ? `（${source}）` : ''}`);
 }

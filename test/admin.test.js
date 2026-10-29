@@ -16,6 +16,7 @@ Object.assign(process.env, {
   ADMIN_HOST: '127.0.0.1',
   ADMIN_SESSION_SECRET: 's'.repeat(40), // 不產生 data/admin-session-secret
   ADMIN_AUDIT_FILE: path.join(TMP, 'audit.json'), // 操作紀錄寫到暫存資料夾
+  ADMIN_REVOKED_FILE: path.join(TMP, 'revoked.json'), // 登出清單也是
   GROQ_API_KEY: process.env.GROQ_API_KEY || 'test', // sttHandler 載入時就會建立 Groq client，沒有金鑰會直接丟例外
   OWW_HTTP_URL: '',
   YT_POT_PROVIDER_URL: 'http://127.0.0.1:1',
@@ -23,7 +24,8 @@ Object.assign(process.env, {
 });
 
 const { startAdminServer } = require('../admin/server');
-const { _ipv6Prefix64, _clientKey } = require('../admin/auth');
+const { _ipv6Prefix64, _clientKey, createAuth } = require('../admin/auth');
+const audit = require('../admin/audit');
 
 const client = {
   isReady: () => false,
@@ -149,4 +151,29 @@ test('admin：限流來源——IPv6 以 /64 為單位；私有網段連線才�
   assert.equal(_clientKey(req('::ffff:10.42.0.1', '198.51.100.9, 203.0.113.5')), '203.0.113.5');
   assert.equal(_clientKey(req('198.51.100.20', '203.0.113.5')), '198.51.100.20');
   assert.equal(_clientKey(req('2001:db8:aa:bb:1:2:3:4')), '2001:db8:aa:bb::/64');
+});
+
+test('admin：登出清單存檔，重新啟動後已登出的 Cookie 仍然無效', () => {
+  const opts = { password: 'unit-test-password', secretFile: path.join(TMP, 'secret'), sessionHours: 1, revokedFile: path.join(TMP, 'revoked-restart.json') };
+  const req = (cookie) => ({ socket: { remoteAddress: '127.0.0.1' }, headers: cookie ? { cookie } : {} });
+  const before = createAuth(opts);
+  const issue = () => before.login(req(), { password: 'unit-test-password' }).headers['Set-Cookie'][0].split(';')[0];
+  const out = issue();
+  let kept;
+  do kept = issue(); while (kept === out); // 同一毫秒發的 Cookie 會一模一樣
+  assert.equal(before.logout(req(out)).revoked, true);
+
+  const after = createAuth(opts); // 模擬重新啟動：記憶體清空、金鑰不變
+  assert.equal(after.isAuthenticated(req(out)), false);
+  assert.equal(after.isAuthenticated(req(kept)), true);
+});
+
+test('admin：登入失敗在操作紀錄裡另有上限，擠不掉管理操作；同一來源連續失敗合併成一筆', () => {
+  audit.record('測試用管理操作');
+  for (let i = 0; i < 300; i++) audit.record('登入失敗（密碼錯誤）', { source: `198.51.100.${i}`, level: 'warn', unauth: true });
+  audit.record('登入失敗（密碼錯誤）', { source: '198.51.100.299', level: 'warn', unauth: true });
+  const all = audit.list({ limit: 2000 });
+  assert.ok(all.some((e) => e.action === '測試用管理操作'));
+  assert.ok(all.filter((e) => e.unauth).length <= 200);
+  assert.equal(all.find((e) => e.source === '198.51.100.299').count, 2);
 });

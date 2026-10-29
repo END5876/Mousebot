@@ -10,6 +10,7 @@ const {
   createAudioPlayer,
   createAudioResource,
   AudioPlayerStatus,
+  NoSubscriberBehavior,
   StreamType,
 } = require('@discordjs/voice');
 const logger = require('../../utils/logger');
@@ -169,7 +170,9 @@ function playHourlySound(hour) {
       if (wasPlaying) musicPlayer.pause();
 
       // 2. 建立報時播放器
-      const player = createAudioPlayer();
+      //    報時中若有其他層（TTS / 新的 /play）改訂閱連線，預設的 pause 行為會讓報時 player
+      //    卡在 AutoPaused、永遠等不到 Idle，音樂就一直停著；改成沒人訂閱就直接結束
+      const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Stop } });
       const resource = createAudioResource(filePath, {
         inputType: StreamType.Arbitrary,
       });
@@ -182,9 +185,17 @@ function playHourlySound(hour) {
       //    先請 audioManager 還原連線訂閱（音樂 / 靜音防踢層），
       //    之前只在「有音樂在播」時還原，沒音樂時靜音防踢層會永遠被報時播放器取代。
       let restored = false;
+      // 保險：不論什麼原因沒走到 Idle，時間到就強制結束並還原（音檔只有幾秒）
+      const safetyTimer = setTimeout(() => {
+        if (restored) return;
+        logger.warn('HourlyReport', `伺服器 ${guildId} 報時逾時，強制結束`);
+        try { player.stop(true); } catch {}
+        restoreMusic();
+      }, 30_000);
       const restoreMusic = () => {
         if (restored) return;
         restored = true;
+        clearTimeout(safetyTimer);
         restoreActiveLayer(guildId);
         const checkNp = nowPlaying.get(guildId);
         // 確保原本的音樂播放器仍存在，且期間沒有被使用者切歌或停止

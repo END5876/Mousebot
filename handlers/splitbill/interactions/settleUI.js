@@ -98,6 +98,46 @@ function toTreeBlock(sections, flatLines) {
   }).join('\n');
 }
 
+// Embed 的 description 最多 4096 字：成員多、轉帳備註多的大行程整份淨額報表會超過，
+// builder 直接丟錯整個畫面打不開，所以超過時以成員為單位分頁
+const BALANCE_PAGE_MAX = 4000;
+const BALANCE_SEPARATOR = '━━━━━━━━━━━━━━';
+
+function cutText(text, max) {
+  if (text.length <= max) return text;
+  let out = '';
+  for (const ch of text) {
+    if (out.length + ch.length > max - 1) break;
+    out += ch;
+  }
+  return `${out}…`;
+}
+
+function paginateBlocks(blocks, max) {
+  const pages = [];
+  let cur = [];
+  let len = 0;
+  for (const raw of blocks) {
+    // 單一成員的明細本身就超過一頁時只能截斷
+    const block = cutText(raw, max);
+    if (cur.length && len + 2 + block.length > max) {
+      pages.push(cur);
+      cur = [];
+      len = 0;
+    }
+    // 分隔線不放在頁首
+    if (!cur.length && block === BALANCE_SEPARATOR) continue;
+    len = cur.length ? len + 2 + block.length : block.length;
+    cur.push(block);
+  }
+  if (cur.length) pages.push(cur);
+  return pages.map(p => {
+    // 也不放在頁尾
+    while (p.length > 1 && p[p.length - 1] === BALANCE_SEPARATOR) p.pop();
+    return p.join('\n\n');
+  });
+}
+
 module.exports = {
   async handleButton(interaction, cache) {
     const { customId, guildId, user } = interaction;
@@ -123,7 +163,7 @@ module.exports = {
     }
 
     // 1. 每人收支淨額分佈（收支帳模式 v3：分組排序 + 附換算金額 + 多幣別自動換行 + 轉帳逐筆列出對象）
-    if (customId === 'set_btn_balance') {
+    if (customId === 'set_btn_balance' || customId.startsWith('set_btn_balance_p_')) {
       const net = calcNetBalances(trip);
       const netByCurrency = calcNetBalancesByCurrency(trip);
       const transfersByMember = listTransfersByMember(trip);
@@ -154,28 +194,47 @@ module.exports = {
         return block ? `${titleLine}\n${block}` : titleLine;
       };
 
-      const sections = [];
+      // 以「每位成員一塊」為單位組內容，太長時才能整塊分頁，不會把某個人的明細切成兩半
+      const groups = [];
       if (owing.length) {
-        sections.push(`**🔴 需要付款**\n\n${owing.map(renderMember).join('\n\n')}`);
+        const [first, ...rest] = owing.map(renderMember);
+        groups.push([`**🔴 需要付款**\n\n${first}`, ...rest]);
       }
       if (receiving.length) {
-        sections.push(`**🟢 需要收款**\n\n${receiving.map(renderMember).join('\n\n')}`);
+        const [first, ...rest] = receiving.map(renderMember);
+        groups.push([`**🟢 需要收款**\n\n${first}`, ...rest]);
       }
       if (settled.length) {
-        sections.push(`**⚪ 已結清**\n${settled.map(m => memberMention(trip, m.id)).join('、')} 帳目兩清，無需收付`);
+        groups.push([`**⚪ 已結清**\n${settled.map(m => memberMention(trip, m.id)).join('、')} 帳目兩清，無需收付`]);
       }
 
-      const tip = '\n\n💡 以上金額已依記帳當下匯率換算成 TWD，方便對帳。想知道誰該轉給誰？可以到「建議轉帳清單」查看最省事的匯款方案。';
-      const description = sections.length
-        ? sections.join('\n\n━━━━━━━━━━━━━━\n\n') + tip
-        : '尚無成員數據。';
+      // 金額其實是行程的基準幣別，不一定是 TWD
+      const tip = `💡 以上金額已依記帳當下匯率換算成 ${trip.baseCurrency}，方便對帳。想知道誰該轉給誰？可以到「建議轉帳清單」查看最省事的匯款方案。`;
+      const blocks = [];
+      groups.forEach((g, idx) => {
+        if (idx > 0) blocks.push(BALANCE_SEPARATOR);
+        blocks.push(...g);
+      });
+      if (blocks.length) blocks.push(tip);
+
+      const pages = blocks.length ? paginateBlocks(blocks, BALANCE_PAGE_MAX) : ['尚無成員數據。'];
+      const pageMatch = /^set_btn_balance_p_(\d+)$/.exec(customId);
+      const page = Math.min(pageMatch ? Number(pageMatch[1]) : 0, pages.length - 1);
 
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
         .setTitle(`🟢 「${trip.name}」成員收支淨額`)
-        .setDescription(description);
+        .setDescription(pages[page]);
+      if (pages.length > 1) embed.setFooter({ text: `第 ${page + 1} / ${pages.length} 頁` });
 
-      const row = new ActionRowBuilder().addComponents(
+      const row = new ActionRowBuilder();
+      if (pages.length > 1) {
+        row.addComponents(
+          new ButtonBuilder().setCustomId(`set_btn_balance_p_${page - 1}`).setLabel('◀️ 上一頁').setStyle(ButtonStyle.Primary).setDisabled(page === 0),
+          new ButtonBuilder().setCustomId(`set_btn_balance_p_${page + 1}`).setLabel('▶️ 下一頁').setStyle(ButtonStyle.Primary).setDisabled(page >= pages.length - 1)
+        );
+      }
+      row.addComponents(
         new ButtonBuilder().setCustomId('set_nav').setLabel('⬅️ 返回結算選單').setStyle(ButtonStyle.Secondary)
       );
 

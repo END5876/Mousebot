@@ -40,7 +40,10 @@ async function generateGuguArticle(topic, userId = null) {
             config: GENERATION_CONFIG,
         });
         recordUsage('gugu', response, { userId });
-        return response.text ?? '';
+        const text = response.text ?? '';
+        // 空字串送給 Discord 會被拒絕，當成生成失敗處理
+        if (!text.trim()) throw new Error(`模型沒有產生任何內容 (finishReason: ${response.candidates?.[0]?.finishReason ?? 'unknown'})`);
+        return text;
 
     } catch (error) {
         if (!isQuotaError(error)) logger.error('Gugu', `咕咕嘎嘎生成錯誤: ${error.message}`);

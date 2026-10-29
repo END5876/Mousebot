@@ -31,6 +31,8 @@ const randomPlaySettings = new Map();
 
 // ── 搜尋標記：autocomplete 選了「線上搜尋」時，用這個前綴標記 input ──
 const SEARCH_MARKER = '__SEARCH__::';
+// ── 本地檔案標記：檔名超過 autocomplete value 的 100 字上限時，改用「前綴 + 檔名雜湊」當 value ──
+const LOCAL_KEY_MARKER = '__LOCAL__::';
 
 // ── 目前正在合法等待使用者選擇的搜尋結果訊息（message.id 集合）──
 // 用來讓 commands.js 的全域「殭屍搜尋互動」防護判斷：
@@ -65,6 +67,7 @@ module.exports = {
   connections,
   randomPlaySettings,
   SEARCH_MARKER,
+  LOCAL_KEY_MARKER,
   activeSearchMessages,
   resetLoopAllCycle,
   getLoopAllCycleSeen,

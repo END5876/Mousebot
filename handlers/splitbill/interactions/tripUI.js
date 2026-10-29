@@ -9,6 +9,8 @@ const { fetchRealTimeRate, parseMoneyInput } = require('../utils/calculator');
 const { showMainMenu } = require('../commands/splitbill');
 const { canDeleteTrip, canViewTrip, isCurrencyCode, CURRENCY_FORMAT_HINT } = require('../utils/tripHelper');
 
+const SWITCH_OPTIONS_MAX = 25;
+
 const BASELINE_RATES = {
   TWD: 1, JPY: 0.2, USD: 32, KRW: 0.024, EUR: 34.8, THB: 0.89, HKD: 4.1, GBP: 40.5
 };
@@ -52,11 +54,22 @@ async function renderTripNav(interaction, alertMsg = null) {
   const components = [btnRow];
 
   if (trips.length > 0) {
+    // 下拉選單最多 25 個選項，超過時 addOptions 會丟錯讓整個設定頁打不開（Bot 擁有者看得到伺服器所有行程）：
+    // 只列出目前作用行程 + 最近更新的行程
+    let options = trips;
+    if (trips.length > SWITCH_OPTIONS_MAX) {
+      options = [...trips]
+        .sort((a, b) => ((trip && b.id === trip.id) - (trip && a.id === trip.id)) || ((b.updatedAt || 0) - (a.updatedAt || 0)))
+        .slice(0, SWITCH_OPTIONS_MAX);
+    }
     const selectRow = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId('trip_select_switch')
-        .setPlaceholder('🔄 快速切換其他行程（只影響你自己）...')
-        .addOptions(trips.map(t => ({ label: t.name, value: t.id, description: `基準幣別: ${t.baseCurrency}` })))
+        .setPlaceholder(trips.length > SWITCH_OPTIONS_MAX
+          ? `🔄 快速切換其他行程（只列出最近 ${SWITCH_OPTIONS_MAX} 個，只影響你自己）...`
+          : '🔄 快速切換其他行程（只影響你自己）...')
+        // 選項標籤上限 100 字，網頁建立的行程名稱可能更長
+        .addOptions(options.map(t => ({ label: String(t.name).slice(0, 100), value: t.id, description: `基準幣別: ${t.baseCurrency}` })))
     );
     components.push(selectRow);
   }

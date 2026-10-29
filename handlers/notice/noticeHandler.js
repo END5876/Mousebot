@@ -109,7 +109,14 @@ async function handleCheck(interaction) {
     let totalFound = 0;
 
     for (const { name, provider } of targets) {
-      const games = await provider.getFreeGames();
+      // 查詢失敗要明確回報（不能顯示成「沒有限免」），也不影響另一個平台的結果
+      let games;
+      try {
+        games = await provider.getFreeGames();
+      } catch {
+        await interaction.followUp(`❌ ${name} 查詢失敗，請稍後再試。`);
+        continue;
+      }
       totalFound += games.length;
 
       if (games.length === 0) {
@@ -148,6 +155,10 @@ async function handleChannel(interaction) {
   const channel      = interaction.options.getChannel('channel');
   const { name, service } = PLATFORMS[platformOpt];
 
+  // 頻道清單是所有伺服器共用的，指令只能看到 / 清除自己伺服器的頻道（全域檢視在 owner 專用的管理面板）
+  const isOwnGuild = (id) => interaction.client.channels.cache.get(id)?.guildId === interaction.guildId;
+  const ownChannelIds = () => service.listChannels().filter(isOwnGuild);
+
   if (action === 'add') {
     if (!channel)
       return interaction.reply({ content: '❌ 請選擇要新增的頻道！', flags: MessageFlags.Ephemeral });
@@ -157,7 +168,7 @@ async function handleChannel(interaction) {
       return interaction.reply({ content: `⚠️ ${channel} 已經在通知清單中了！`, flags: MessageFlags.Ephemeral });
 
     return interaction.reply({
-      content: `✅ 已新增 ${channel} 為 ${name} 限免通知頻道！\n目前共 **${service.listChannels().length}** 個頻道。`,
+      content: `✅ 已新增 ${channel} 為 ${name} 限免通知頻道！\n本伺服器共 **${ownChannelIds().length}** 個頻道。`,
       flags: MessageFlags.Ephemeral,
     });
   }
@@ -171,15 +182,15 @@ async function handleChannel(interaction) {
       return interaction.reply({ content: `⚠️ ${channel} 不在通知清單中！`, flags: MessageFlags.Ephemeral });
 
     return interaction.reply({
-      content: `✅ 已將 ${channel} 從通知清單移除！\n目前剩 **${service.listChannels().length}** 個頻道。`,
+      content: `✅ 已將 ${channel} 從通知清單移除！\n本伺服器剩 **${ownChannelIds().length}** 個頻道。`,
       flags: MessageFlags.Ephemeral,
     });
   }
 
   if (action === 'list') {
-    const ids = service.listChannels();
+    const ids = ownChannelIds();
     if (ids.length === 0)
-      return interaction.reply({ content: `📋 目前沒有設定任何 ${name} 通知頻道。`, flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: `📋 本伺服器目前沒有設定任何 ${name} 通知頻道。`, flags: MessageFlags.Ephemeral });
 
     const lines = ids.map((id, i) => `${i + 1}. <#${id}> (\`${id}\`)`).join('\n');
     return interaction.reply({
@@ -189,9 +200,9 @@ async function handleChannel(interaction) {
   }
 
   if (action === 'clear') {
-    const count = service.clearChannels();
+    const count = service.clearChannels(isOwnGuild);
     return interaction.reply({
-      content: `🗑️ 已清除全部 **${count}** 個 ${name} 通知頻道設定。`,
+      content: `🗑️ 已清除本伺服器的 **${count}** 個 ${name} 通知頻道設定。`,
       flags: MessageFlags.Ephemeral,
     });
   }

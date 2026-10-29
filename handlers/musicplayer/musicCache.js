@@ -63,7 +63,10 @@ function getCacheFilename(url, title) {
     .replace(/[\\/:*?"<>|]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 80);
+    .slice(0, 80)
+    // 🐛 [截斷 emoji] 第 80 個字剛好切在 emoji 中間會留下半個代理字元，encodeURIComponent 會丟 URIError，
+    //    這首歌永遠查不到、也上傳不了共用音樂庫；只去掉這半個字，其他情況的檔名維持不變（兩邊才會互相命中）
+    .replace(/[\uD800-\uDBFF]$/, '');
 
   const idSuffix = getCacheId(url)
     || Buffer.from(url).toString('base64').replace(/[^A-Za-z0-9]/g, '').slice(0, 12);
@@ -170,6 +173,33 @@ function evictCacheIfNeeded() {
 }
 
 // ════════════════════════════════════════════════════════
+//  清除殘留暫存檔
+//  🐛 [暫存檔殘留] 下載／轉檔／鏡像下載到一半被重啟（每次部署都會）留下的 .tmp、.tmp.part、
+//     .enc_*.tmp.mp3、.dl_*.tmp 不會被快取清理刪掉（isTempName 一律略過），會一直佔用磁碟。
+//     只刪超過 STALE_TMP_MS 沒更新的，避免誤刪進行中的工作（同 music-library-service 的 cleanupStaleTemps）；
+//     沒設 MUSIC_LIB_URL 時只看根目錄，不碰使用者自己的子資料夾（同 evictCacheIfNeeded）。
+// ════════════════════════════════════════════════════════
+const STALE_TMP_MS = 60 * 60 * 1000;
+
+function cleanupStaleTemps(dir = CACHE_DIR, shared = libraryClient.isConfigured()) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return 0; }
+  let n = 0;
+  for (const d of entries) {
+    const fp = path.join(dir, d.name);
+    if (d.isDirectory()) {
+      if (shared) n += cleanupStaleTemps(fp, shared);
+      continue;
+    }
+    if (!d.isFile() || !isTempName(d.name)) continue;
+    try {
+      if (Date.now() - fs.statSync(fp).mtimeMs > STALE_TMP_MS) { fs.unlinkSync(fp); n++; }
+    } catch {}
+  }
+  return n;
+}
+
+// ════════════════════════════════════════════════════════
 //  下載並儲存到快取
 //  @param {string}   url
 //  @param {string}   title
@@ -257,6 +287,7 @@ module.exports = {
   getCacheFilename,
   getCachedPath,
   evictCacheIfNeeded,
+  cleanupStaleTemps,
   downloadAndCache,
   pushToSharedLibrary,
 };

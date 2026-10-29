@@ -108,7 +108,9 @@ export default function mountLogs(root, ctx) {
     const current = modSel.value;
     modSel.replaceChildren(h('option', { value: '' }, '所有模組'), ...mods.map((m) => h('option', { value: m }, m)));
     modSel.value = mods.includes(current) ? current : '';
-    if (modSel.value !== moduleFilter) { moduleFilter = modSel.value; renderAll(); }
+    // 回傳是否已重畫整個畫面（呼叫端就不要再 appendRows，否則同一批會出現兩次）
+    if (modSel.value !== moduleFilter) { moduleFilter = modSel.value; renderAll(); return true; }
+    return false;
   }
 
   function updateFooter() {
@@ -150,8 +152,7 @@ export default function mountLogs(root, ctx) {
       entries.push(...batch);
       if (entries.length > MAX_ROWS) entries.splice(0, entries.length - MAX_ROWS);
       lastSeq = fresh[fresh.length - 1].seq;
-      updateModules();
-      appendRows(batch);
+      if (!updateModules()) appendRows(batch);
     }
     updateFooter();
   }

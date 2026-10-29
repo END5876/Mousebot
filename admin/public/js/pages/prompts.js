@@ -109,6 +109,8 @@ export default function mountPrompts(root, ctx) {
       }
       const preview = h('pre', { class: 'version-preview' }, '選擇左邊的版本來預覽');
       let chosen = null;
+      // 連點不同版本時，只採用最後一次點的結果（較慢的舊請求不能蓋掉預覽與 chosen）
+      let reqId = 0;
       const loadBtn = h('button', {
         type: 'button', class: 'btn btn-primary', disabled: true,
         onclick: () => {
@@ -126,14 +128,17 @@ export default function mountPrompts(root, ctx) {
           items.forEach((b) => b.setAttribute('aria-current', String(b === btn)));
           preview.textContent = '載入中…';
           loadBtn.disabled = true;
+          const my = ++reqId;
           try {
-            chosen = await api.get(`/api/prompts/history/${kind}/${seg(key)}/${v.id}`);
+            const data = await api.get(`/api/prompts/history/${kind}/${seg(key)}/${v.id}`);
+            if (my !== reqId) return;
+            chosen = data;
             preview.textContent = kind === 'shared'
               ? chosen.text || '（空白）'
               : `顯示名稱：${chosen.name}\n清除記憶時的回覆：${chosen.clearMemoryMessage}\n${chosen.shortDescription ? `簡短說明：${chosen.shortDescription}\n` : ''}\n${chosen.prompt}`;
             loadBtn.disabled = false;
           } catch (err) {
-            preview.textContent = err.message;
+            if (my === reqId) preview.textContent = err.message;
           }
         });
         return btn;

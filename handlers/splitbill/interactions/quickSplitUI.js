@@ -6,6 +6,7 @@ const {
 } = require('discord.js');
 const { equalSplit, round2, parseMoneyInput, validateCustomSplit, validatePayers } = require('../utils/calculator');
 const { simplifyDebts } = require('../utils/settlement');
+const { nameLabel } = require('../utils/tripHelper');
 
 // ────────────────────────────────────────────────────────────────
 // ⚡ 快速分帳：給「臨時只有一筆帳單要分」的情境使用，不需要事先建立行程、
@@ -40,6 +41,24 @@ function displayNameOf(interaction, userId, fallbackMap) {
   return userId;
 }
 
+// Embed 單一欄位最多 1024 字：分攤對象最多 25 人，一人付全部時建議轉帳有 24 行（每行約 65 字），
+// 全塞進同一個欄位會讓 addFields 丟錯，所以超過時拆成多個欄位，接續的欄位名稱留空白
+const EMBED_FIELD_MAX = 1024;
+
+function linesToFields(name, lines) {
+  const fields = [];
+  let cur = '';
+  for (const line of lines) {
+    if (cur && cur.length + 1 + line.length > EMBED_FIELD_MAX) {
+      fields.push({ name: fields.length ? '​' : name, value: cur });
+      cur = '';
+    }
+    cur = cur ? `${cur}\n${line}` : line;
+  }
+  if (cur) fields.push({ name: fields.length ? '​' : name, value: cur });
+  return fields;
+}
+
 function buildResultPayload(state) {
   const { item, amount, currency, payers, shares } = state;
 
@@ -48,20 +67,20 @@ function buildResultPayload(state) {
   for (const s of shares) net[s.userId] = round2((net[s.userId] || 0) - s.share);
   const transfers = simplifyDebts(net);
 
-  const payerLines = payers.map(p => `　• <@${p.userId}>：代墊 ${round2(p.amount)} ${currency}`).join('\n');
-  const shareLines = shares.map(s => `　• <@${s.userId}>：應分攤 ${round2(s.share)} ${currency}`).join('\n');
-  const transferText = transfers.length
-    ? transfers.map(t => `　➜ <@${t.from}> 轉給 <@${t.to}>：**${t.amount} ${currency}**`).join('\n')
-    : '🎉 剛好互相抵銷，無需任何轉帳！';
+  const payerLines = payers.map(p => `　• <@${p.userId}>：代墊 ${round2(p.amount)} ${currency}`);
+  const shareLines = shares.map(s => `　• <@${s.userId}>：應分攤 ${round2(s.share)} ${currency}`);
+  const transferLines = transfers.length
+    ? transfers.map(t => `　➜ <@${t.from}> 轉給 <@${t.to}>：**${t.amount} ${currency}**`)
+    : ['🎉 剛好互相抵銷，無需任何轉帳！'];
 
   const embed = new EmbedBuilder()
     .setColor(0x2ecc71)
     .setTitle('⚡ 快速分帳結果')
     .setDescription(`**${item}** — 總金額 ${amount} ${currency}`)
     .addFields(
-      { name: '💰 代墊', value: payerLines },
-      { name: '🎯 分攤', value: shareLines },
-      { name: '💸 建議轉帳', value: transferText }
+      ...linesToFields('💰 代墊', payerLines),
+      ...linesToFields('🎯 分攤', shareLines),
+      ...linesToFields('💸 建議轉帳', transferLines)
     )
     .setFooter({ text: '此為臨時計算結果，不會被儲存，也不會建立任何行程。' });
 
@@ -244,7 +263,7 @@ module.exports = {
       state.participants.forEach((p, idx) => {
         const input = new TextInputBuilder()
           .setCustomId(`share_${idx}`)
-          .setLabel(`${p.name} 應付多少（免費請填 0）？`)
+          .setLabel(nameLabel(p.name, ' 應付多少（免費請填 0）？'))
           .setStyle(TextInputStyle.Short)
           .setPlaceholder('例如：0、300、700')
           .setRequired(true);
@@ -363,7 +382,7 @@ module.exports = {
       state.tempPayers.forEach((p, idx) => {
         const input = new TextInputBuilder()
           .setCustomId(`amt_${idx}`)
-          .setLabel(`${p.name} 付了多少？`)
+          .setLabel(nameLabel(p.name, ' 付了多少？'))
           .setStyle(TextInputStyle.Short)
           .setPlaceholder('例如：300')
           .setRequired(true);
