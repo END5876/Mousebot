@@ -1,5 +1,10 @@
 'use strict';
 
+// info log 寫在 stdout，會跟 node --test 子行程回報結果的序列化資料混在同一條管線上，
+// 讀取時切在特定位置就會讓執行器解析失敗（Unable to deserialize cloned data，偶發）；
+// 測試只留 warn 以上（寫到 stderr）。要看 log 時手動設 LOG_LEVEL=info。必須在載入任何 handler 之前設定
+process.env.LOG_LEVEL ??= 'warn';
+
 // webSync：曲目格式轉換與網頁指令的執行邏輯（不連線：用假的 Discord client、播放器與引擎）
 const test = require('node:test');
 const assert = require('node:assert/strict');

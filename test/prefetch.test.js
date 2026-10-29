@@ -1,5 +1,10 @@
 'use strict';
 
+// info log 寫在 stdout，會跟 node --test 子行程回報結果的序列化資料混在同一條管線上，
+// 讀取時切在特定位置就會讓執行器解析失敗（Unable to deserialize cloned data，偶發）；
+// 測試只留 warn 以上（寫到 stderr）。要看 log 時手動設 LOG_LEVEL=info。必須在載入任何 handler 之前設定
+process.env.LOG_LEVEL ??= 'warn';
+
 // 預先下載：佇列中的線上歌曲在目前這首播放時先下載（不連線：快取模組與引擎都用假的）
 const test = require('node:test');
 const assert = require('node:assert/strict');
