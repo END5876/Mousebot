@@ -52,6 +52,7 @@ clearMemoryMessage: 已經清除記憶了喔~
 - **熱重載**：以檔案 mtime 比對（約 2 秒檢查一次），修改後**不需重啟**；解析失敗時沿用上一版，不會讓壞檔案弄掛 Bot。
 - **線上編輯**：Bot 擁有者可用 `/ai prompt edit <mode>` 以 Modal 編輯（含 `_general`、`_voice`；輸入不存在的代號即新增模式）。Discord 輸入框上限 4000 字，超過請直接改檔案。
 - **切換模式**：`/ai mode` 的模式清單來自 `data/prompts/modes/` 內的檔案（支援自動完成）；若使用者選的模式檔被刪除，會自動略過覆蓋、退回預設判斷。找不到的模式會 fallback 到 `loss`。
+- 首次使用可複製 [`examples/prompts/`](examples/prompts/) 到 `data/prompts/` 當起點。
 - 特殊身分：`LOVER_MODE_USER_IDS` 預設使用 `lover` 模式、`DEVELOPER_MODE_USER_IDS` 預設使用 `developer` 模式（需有對應模式檔）。
 - 使用者的模式設定持久化儲存於 `data/userModes.json`。
 
@@ -88,7 +89,7 @@ clearMemoryMessage: 已經清除記憶了喔~
 ### 連線方式
 
 - **本機執行**：`.env` 設定 `ADMIN_PASSWORD` 後啟動 Bot，開啟 `http://localhost:3940/` 登入。
-- **部署在雲端**：預設只監聽 `127.0.0.1`，外部連不到。要從其他裝置使用時設定 `ADMIN_HOST=0.0.0.0`，並在部署平台把 `ADMIN_PORT`（預設 3940）綁定一個 **HTTPS** 網域。不要以純 HTTP 對外開放，否則密碼會以明文傳送。
+- **部署在伺服器／容器**：預設只監聽 `127.0.0.1`，外部連不到。要從其他裝置使用時設定 `ADMIN_HOST=0.0.0.0`，並讓同一個 Docker 網路上的反向代理（例如 Caddy）把一個 **HTTPS** 網域轉到 `ADMIN_PORT`（預設 3940）。不要以純 HTTP 對外開放，否則密碼會以明文傳送。
 
 ### 安全性
 
@@ -210,6 +211,7 @@ Mousebot/
 ├── utils/                   # logger、設定、JSON 原子寫入、指令同步、健康檢查、告警、心跳、節流器、關閉流程
 ├── oww-server/              # Python OpenWakeWord 喚醒詞服務（Flask）與內建的 hey_taffy.onnx 模型
 ├── docker/                  # 容器內的輔助程式（supervisord FATAL 監聽器）
+├── examples/prompts/        # AI 人格 prompt 範本（複製到 data/prompts/ 使用）
 ├── test/                    # node:test 單元測試（npm test）
 ├── data/                    # 執行期資料（.gitignore 排除，見下方）
 ├── temp/                    # STT 暫存 .wav（.gitignore 排除）
@@ -321,7 +323,6 @@ Mousebot/
 | `/say <text>` | 讓機器人代為發言（限 `SAY_AUTHORIZED_ID` 使用者） |
 | `/response add / remove / list` | 管理自訂關鍵字自動回應規則 |
 | `/autojoin` | 管理 Bot 自動加入語音頻道功能 |
-| `/nh code / search / random` | 🔞 nhentai 查詢（僅限私人伺服器內部使用） |
 
 ---
 
@@ -401,13 +402,13 @@ Discord 面板 ──→ splitbillClient.js ──(內部網路 HTTP)──┐
 
 ## 注意事項
 
-- 本專案為**私人使用**的 Discord 機器人，不對外開放。
+- 本專案是**自架**用的 Discord 機器人：沒有公開的 Bot 可以邀請，需要自己建立 Discord Application、取得 Token 與各項 API 金鑰後部署（見「安裝與啟動」）。原始碼以 ISC 授權公開，不提供使用支援。
 - `data/` 與 `temp/` 資料夾已列入 `.gitignore`，屬於執行期產生的資料，不會被提交。
 - Bilibili / YouTube 認證資訊請透過環境變數提供，**請勿直接提交任何 Token 或 `cookies.txt` 至版本庫**。
 - 預設的喚醒詞模型 `oww-server/models/hey_taffy.onnx` 已隨版本庫提供；要換成自己的模型時放進同一個資料夾，並設定 `OWW_MODEL_PATH`。
 - 整點報時功能需自行準備 24 個對應小時的 `.wav` 音效檔，放置於 `data/timeAnnouncer/` 資料夾。
 - GPT-SoVITS 為外部服務，需自行部署並透過 `SOVITS_HOST` / `SOVITS_PORT` 連線；未部署時 TTS 自動 fallback 為 Edge-TTS。
-- AI 人格 prompt 放在 `data/prompts/`（不隨版本庫提供），首次部署需自行建立 `modes/*.md`，否則會提示找不到任何模式檔。
+- AI 人格 prompt 放在 `data/prompts/`（不隨版本庫提供）。首次部署可先複製 [`examples/prompts/`](examples/prompts/) 當起點，再改成自己的人格，否則會提示找不到任何模式檔。
 - 分帳資料存放在獨立的 splitbill-service；Bot 未設定 `SPLITBILL_SERVICE_URL`／`SPLITBILL_SERVICE_KEY` 時，分帳面板與指令會無法使用（快速分帳 `⚡` 不受影響，因為它不存取行程資料）。
 
 ---
