@@ -25,6 +25,7 @@ const {
 } = require('./voice/sttHandler');
 
 const { getGeminiResponseVoice } = require('./ai/aiHandler');
+const { contextFrom: toolContextFrom } = require('./ai/tools');
 const logger = require('../utils/logger');
 const { isQuotaError, quotaMessage } = require('./ai/aiQuota');
 const { playTTS, stopTTS } = require('./voice/ttsHandler');
@@ -250,7 +251,7 @@ function startWakeWord(guild, textChannel) {
     textChannel,
     async (userId, member, text, channel) => {
       try {
-        const aiReply = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId);
+        const aiReply = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId, toolContextFrom('voice', { guild, member, channel, userId }));
         await channel.send(`🤖 **機器鳥**：${aiReply}`);
 
         const result = await playTTS(guildId, aiReply);
@@ -447,7 +448,7 @@ async function handleRecordButton(interaction) {
       }
 
       ensureManualSession(connection, interaction.guild, interaction.channel, async (userId, member, text, channel) => {
-        const aiReply = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId);
+        const aiReply = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId, toolContextFrom('voice', { guild: interaction.guild, member, channel, userId }));
         await channel.send(`🤖 **機器鳥**：${aiReply}`);
         const ttsResult = await playTTS(guildId, aiReply);
         if (!ttsResult.success) {
@@ -652,7 +653,7 @@ function setupVoiceCommands(client) {
 
         // 2) 確保手動 Session
         ensureManualSession(connection, interaction.guild, interaction.channel, async (uid, member, text, channel) => {
-          const aiReply = await getGeminiResponseVoice(uid, text, null, null, null, null, guildId);
+          const aiReply = await getGeminiResponseVoice(uid, text, null, null, null, null, guildId, toolContextFrom('voice', { guild: interaction.guild, member, channel, userId: uid }));
           await channel.send(`🤖 **機器鳥**：${aiReply}`);
           const ttsResult = await playTTS(guildId, aiReply);
           if (!ttsResult.success) {

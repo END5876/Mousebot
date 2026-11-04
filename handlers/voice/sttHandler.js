@@ -7,6 +7,7 @@ const fs   = require('fs');
 const path = require('path');
 const Groq = require('groq-sdk');
 const { getGeminiResponseVoice } = require('../../handlers/ai/aiHandler');
+const { contextFrom: toolContextFrom } = require('../ai/tools');
 const { isQuotaError, quotaMessage } = require('../ai/aiQuota');
 
 // 將 ttsHandler 移至頂層 require，避免每次喚醒都在熱路徑上執行動態載入
@@ -312,7 +313,7 @@ async function handleWakeup(guildId, userId, member) {
     userState.lastActive    = Date.now();
 
     try {
-      const aiReply = await getGeminiResponseVoice(userId, sttResult.text, null, null, null, null, guildId);
+      const aiReply = await getGeminiResponseVoice(userId, sttResult.text, null, null, null, null, guildId, toolContextFrom('voice', { guild: currentState.guild, member: currentState.guild.members.cache.get(userId), channel: textChannel, userId }));
       if (aiReply) {
         // AI 回覆後再次確認 state 仍有效
         if (!guildStates.get(guildId)?.active) return;

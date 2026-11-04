@@ -5,6 +5,7 @@ const logger = require('../../utils/logger');
 const { selectMode, getModeName } = require('./modeSelector');
 const promptStore = require('./promptStore');
 const { recordUsage } = require('./tokenTracker');
+const { runToolStage } = require('./tools');
 const {
     RESEARCH_PROMPT, RESEARCH_CONFIG, RESEARCH_NONE, FACTS_HEADER,
     isSearchEnabled, getGroundingInfo, stripSourcesLine,
@@ -145,17 +146,25 @@ async function researchIfNeeded({ history, parts, guildId, userId, mode }) {
 /**
  * 把歷史紀錄與本次訊息組成一次 generateContent 呼叫。
  * guildId 在搜尋接地名單內時先跑搜尋階段，有搜到資料就附在 system instruction 後面給人格參考。
+ * 有 toolCtx（使用者主動找 Bot：@提及、/ai ask、語音）時同時跑工具階段（見 tools/index.js），
+ * 執行結果同樣附在 system instruction 後面，由人格轉述。兩個階段互不相依，並行執行。
  *
+ * @param {object|null} [opts.toolCtx]  tools.contextFrom() 的結果；null 代表不帶工具（隨機插話等）
+ * @param {string}      [opts.toolText] 本次訊息的純文字，工具的關鍵字預篩用
  * @returns {Promise<object>} 人格的回覆
  */
-async function sendWithHistory({ mode, isVoice = false, history, parts, config, guildId = null, userId = null }) {
+async function sendWithHistory({ mode, isVoice = false, history, parts, config, guildId = null, userId = null, toolCtx = null, toolText = '' }) {
     let systemInstruction = buildSystemInstruction(mode, isVoice);
 
-    const facts = isSearchEnabled(guildId)
-        ? await researchIfNeeded({ history, parts, guildId, userId, mode })
-        : null;
+    const [facts, toolReport] = await Promise.all([
+        isSearchEnabled(guildId) ? researchIfNeeded({ history, parts, guildId, userId, mode }) : null,
+        toolCtx ? runToolStage({ history, parts, text: toolText, ctx: toolCtx, mode }) : null,
+    ]);
     if (facts) {
         systemInstruction += `\n\n${FACTS_HEADER}\n${facts}`;
+    }
+    if (toolReport) {
+        systemInstruction += `\n\n${toolReport}`;
     }
 
     return generate({
@@ -371,7 +380,7 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
 // ════════════════════════════════════════════════════════
 //  核心 AI 呼叫
 // ════════════════════════════════════════════════════════
-async function getGeminiResponse(userId, prompt, imageParts = [], channel = null, messageId = null, botId = null, message = null, mode = null) {
+async function getGeminiResponse(userId, prompt, imageParts = [], channel = null, messageId = null, botId = null, message = null, mode = null, toolCtx = null) {
     try {
         consumeQuota(userId);
         if (!mode) mode = getUserMode(userId, prompt);
@@ -386,7 +395,10 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
             ]);
 
         const guildId = channel?.guildId ?? message?.guildId ?? null;
-        const response = await sendWithHistory({ mode, history, parts: messageParts, config: GENERATION_CONFIG, guildId, userId });
+        const response = await sendWithHistory({
+            mode, history, parts: messageParts, config: GENERATION_CONFIG, guildId, userId,
+            toolCtx, toolText: prompt,
+        });
         recordUsage('chat', response, { userId, mode });
         const text = response.text ?? '';
         // 被擋下（PROHIBITED_CONTENT/RECITATION 等）時沒有任何文字，送空訊息會被 Discord 拒絕，改丟專用錯誤讓呼叫端提示使用者
@@ -403,7 +415,7 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
     }
 }
 
-async function getGeminiResponseVoice(userId, prompt, channel = null, messageId = null, botId = null, mode = null, guildId = null) {
+async function getGeminiResponseVoice(userId, prompt, channel = null, messageId = null, botId = null, mode = null, guildId = null, toolCtx = null) {
     try {
         consumeQuota(userId);
         if (!mode) mode = getUserMode(userId, prompt);
@@ -415,6 +427,7 @@ async function getGeminiResponseVoice(userId, prompt, channel = null, messageId 
             config: { ...GENERATION_CONFIG, maxOutputTokens: 150 },
             guildId: guildId ?? channel?.guildId ?? null,
             userId,
+            toolCtx, toolText: prompt,
         });
         const response = (result.text ?? '').trim();
         recordUsage('voice', result, { userId, mode });

@@ -18,6 +18,7 @@ const {
     isEmptyResponseError,
     EMPTY_RESPONSE_MESSAGE,
 } = require('./aiCore');
+const { contextFrom: toolContextFrom } = require('./tools');
 
 const {
     clearUserMemory,
@@ -226,7 +227,10 @@ async function handleAsk(interaction) {
 
         const imageParts = [...emojiParts, ...urlImageParts, ...attachmentParts];
 
-        const { text: answer, chunks } = await getGeminiResponse(userId, question, imageParts, interaction.channel, interaction.id, botId, null, mode);
+        const toolCtx = toolContextFrom('text', {
+            guild: interaction.guild, member: interaction.member, channel: interaction.channel, userId,
+        });
+        const { text: answer, chunks } = await getGeminiResponse(userId, question, imageParts, interaction.channel, interaction.id, botId, null, mode, toolCtx);
 
         const replyMsg = await interaction.editReply({ content: chunks[0] });
         recordBotMessageContext(replyMsg.id, mode, userId, userName);
@@ -662,7 +666,10 @@ function setupAICommands(client) {
                     }
 
                     const imageParts = [...emojiParts, ...urlImageParts, ...embedParts, ...attachmentParts];
-                    return getGeminiResponse(userId, question, imageParts, channel, messageId, botId, message, mode);
+                    const toolCtx = toolContextFrom('text', {
+                        guild: message.guild, member: message.member, channel: message.channel, userId,
+                    });
+                    return getGeminiResponse(userId, question, imageParts, channel, messageId, botId, message, mode, toolCtx);
                 });
 
                 for (const chunk of chunks) {
