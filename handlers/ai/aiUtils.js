@@ -25,7 +25,6 @@ const { PermissionFlagsBits } = require('discord.js');
 const MAX_IMAGE_SIZE_MB = 30;
 const TTS_MAX_LENGTH = 1000;
 const IMAGE_CACHE_TTL_MS = 10 * 60 * 1000;
-const MAX_MODE_CACHE_SIZE = 1000;
 const IMAGE_CACHE_MAX_ENTRIES = 40;          // 每筆最多約 1MB 級 base64，限制總量避免吃光記憶體
 const IMAGE_FETCH_TIMEOUT_MS = 10_000;
 const IMAGE_MAX_REDIRECTS = 3;
@@ -43,9 +42,7 @@ const aiTTSEnabled = (() => {
     const saved = readJson(AI_TTS_PATH, {});
     return new Map(Object.entries(saved && typeof saved === 'object' ? saved : {}).filter(([, v]) => typeof v === 'boolean'));
 })();
-const memoryClearedAt = new Map();
 const imageCache = new Map();
-const botMessageCache = new Map();
 
 // ════════════════════════════════════════════════════════
 //  記憶 / TTS 開關
@@ -63,30 +60,20 @@ function setAITTSEnabled(guildId, value) {
     }
 }
 
-function clearUserMemory(userId) {
-    memoryClearedAt.set(userId, Date.now());
-    logger.debug('Memory', `已清除使用者 ${userId} 的對話記憶`);
-}
-
-function getMemoryClearTime(userId) {
-    return memoryClearedAt.get(userId) ?? 0;
-}
+// 清除記憶的時間點（含頻道／成員層級與 optOut）已移到 aiMemoryState.js，存在 data/aiMemoryState.json，
+// 重啟後仍有效；這裡 re-export 維持原本的呼叫方式
+const {
+    clearUserMemory, getMemoryClearTime,
+    clearChannelMemory, getChannelClearTime,
+    clearUserInChannel, getUserInChannelClearTime,
+    setOptOut, isOptedOut,
+} = require('./aiMemoryState');
 
 // ════════════════════════════════════════════════════════
-//  Bot 訊息上下文快取
+//  Bot 訊息上下文（AI 回覆紀錄）
 // ════════════════════════════════════════════════════════
-function recordBotMessageContext(messageId, mode, userId, userName) {
-    if (!messageId || !mode) return;
-    if (botMessageCache.size >= MAX_MODE_CACHE_SIZE) {
-        const firstKey = botMessageCache.keys().next().value;
-        botMessageCache.delete(firstKey);
-    }
-    botMessageCache.set(messageId, { mode, userId, userName });
-}
-
-function getBotMessageContext(messageId) {
-    return botMessageCache.get(messageId);
-}
+// 已移到 aiMessageLog.js，存在 data/aiMessageLog.json，重啟後人格隔離仍有效
+const { recordBotMessageContext, getBotMessageContext } = require('./aiMessageLog');
 
 // ════════════════════════════════════════════════════════
 //  Discord CDN 圖片網址修復機制 (新增)
@@ -670,6 +657,9 @@ function replaceMentions(message, botId) {
 
 module.exports = {
     clearUserMemory, getMemoryClearTime,
+    clearChannelMemory, getChannelClearTime,
+    clearUserInChannel, getUserInChannelClearTime,
+    setOptOut, isOptedOut,
     isAITTSEnabled, setAITTSEnabled,
     recordBotMessageContext, getBotMessageContext,
     processAttachments,

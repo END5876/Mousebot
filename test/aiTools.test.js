@@ -54,9 +54,10 @@ test('runToolStage：預篩沒命中、沒有 member、AI_TOOLS=0 時不呼叫�
 
 test('runToolStage：模型判斷不需要工具時，回傳「沒有執行動作」的提醒', async () => {
   nextResponse = { text: 'NONE' };
-  const { text: out, skipTTS } = await tools.runToolStage({ history: [], parts: userParts('昨天那首歌好好聽'), text: '昨天那首歌好好聽', ctx: ctxOf() });
+  const { text: out, skipTTS, executed } = await tools.runToolStage({ history: [], parts: userParts('昨天那首歌好好聽'), text: '昨天那首歌好好聽', ctx: ctxOf() });
   assert.match(out, /這次沒有替使用者/);
   assert.equal(skipTTS, false);
+  assert.ok(!executed, '沒有執行工具：長期記憶照常萃取');
   assert.equal(generateCalls.length, 1);
   assert.equal(generateCalls[0].systemInstruction, tools._ROUTER_PROMPT);
 });
@@ -78,9 +79,10 @@ test('runToolStage：執行模型要求的工具，結果整理成給人格的�
 
 test('runToolStage：用到音樂工具時不朗讀（失敗也一樣）', async () => {
   nextResponse = { functionCalls: [{ name: 'music_control', args: { action: 'skip' } }] };
-  const { text: out, skipTTS } = await tools.runToolStage({ history: [], parts: userParts('跳過這首'), text: '跳過這首', ctx: ctxOf() });
+  const { text: out, skipTTS, executed } = await tools.runToolStage({ history: [], parts: userParts('跳過這首'), text: '跳過這首', ctx: ctxOf() });
   assert.match(out, /控制播放：沒有執行，原因：Bot 現在不在語音頻道/);
   assert.equal(skipTTS, true);
+  assert.equal(executed, true, '確實呼叫了工具（失敗也算）：這則訊息不萃取');
 });
 
 test('runToolStage：預期內的失敗回報原因，不支援的工具名稱會被忽略', async () => {

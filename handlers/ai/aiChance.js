@@ -1,12 +1,13 @@
-const path = require('path');
 const logger = require('../../utils/logger');
 const { readJson, writeJsonAtomic } = require('../../utils/jsonStore');
+const { dataPath } = require('../../utils/dataDir');
 
 // ════════════════════════════════════════════════════════
 //  路徑設定
 // ════════════════════════════════════════════════════════
-const CHANCE_PATH   = path.resolve(__dirname, '../../data/replyChance.json');
-const DISABLED_PATH = path.resolve(__dirname, '../../data/replyChanceDisabled.json');
+// 資料目錄可用 MOUSEBOT_DATA_DIR 覆寫（測試不讀寫正式的 data/）
+const CHANCE_PATH   = dataPath('replyChance.json');
+const DISABLED_PATH = dataPath('replyChanceDisabled.json');
 
 // ════════════════════════════════════════════════════════
 //  預設值與記憶體快取

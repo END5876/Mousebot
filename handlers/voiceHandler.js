@@ -259,7 +259,7 @@ function startWakeWord(guild, textChannel) {
     textChannel,
     async (userId, member, text, channel) => {
       try {
-        const { text: aiReply, skipTTS } = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId, voiceToolCtx(guildId, { guild, member, channel, userId }));
+        const { text: aiReply, skipTTS } = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId, voiceToolCtx(guildId, { guild, member, channel, userId }), { textChannel: channel });
         await channel.send(`🤖 **機器鳥**：${aiReply}`);
 
         // 點歌等音樂操作不朗讀，免得蓋過剛點的歌
@@ -459,7 +459,7 @@ async function handleRecordButton(interaction) {
       }
 
       ensureManualSession(connection, interaction.guild, interaction.channel, async (userId, member, text, channel) => {
-        const { text: aiReply, skipTTS } = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId, voiceToolCtx(guildId, { guild: interaction.guild, member, channel, userId }));
+        const { text: aiReply, skipTTS } = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId, voiceToolCtx(guildId, { guild: interaction.guild, member, channel, userId }), { textChannel: channel });
         await channel.send(`🤖 **機器鳥**：${aiReply}`);
         if (skipTTS) return; // 點歌等音樂操作不朗讀
         const ttsResult = await playTTS(guildId, aiReply);
@@ -665,7 +665,7 @@ function setupVoiceCommands(client) {
 
         // 2) 確保手動 Session
         ensureManualSession(connection, interaction.guild, interaction.channel, async (uid, member, text, channel) => {
-          const { text: aiReply, skipTTS } = await getGeminiResponseVoice(uid, text, null, null, null, null, guildId, voiceToolCtx(guildId, { guild: interaction.guild, member, channel, userId: uid }));
+          const { text: aiReply, skipTTS } = await getGeminiResponseVoice(uid, text, null, null, null, null, guildId, voiceToolCtx(guildId, { guild: interaction.guild, member, channel, userId: uid }), { textChannel: channel });
           await channel.send(`🤖 **機器鳥**：${aiReply}`);
           if (skipTTS) return; // 點歌等音樂操作不朗讀
           const ttsResult = await playTTS(guildId, aiReply);

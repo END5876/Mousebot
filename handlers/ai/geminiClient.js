@@ -6,6 +6,7 @@
 // MODEL_NAME 與 safetySettings。現在統一由這裡提供：
 //   - 模型名稱：環境變數 GEMINI_MODEL（未設定時用 DEFAULT_MODEL）
 //   - 帳單辨識可另外用 GEMINI_VISION_MODEL 指定（未設定時沿用 GEMINI_MODEL）
+//   - 長期記憶的背景萃取可另外用 GEMINI_MEMORY_MODEL 指定（未設定時沿用 GEMINI_MODEL）
 //   - 共用的 safetySettings
 //   - Gemini 3 系列固定 thinkingLevel: minimal（見 THINKING_CONFIG）
 //   - generate()：包好 systemInstruction / 逾時 / AbortSignal 的 generateContent
@@ -15,6 +16,7 @@ const { GoogleGenAI, HarmCategory, HarmBlockThreshold, ThinkingLevel } = require
 const DEFAULT_MODEL = 'gemini-3.1-flash-lite';
 const MODEL_NAME        = process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
 const VISION_MODEL_NAME = process.env.GEMINI_VISION_MODEL?.trim() || MODEL_NAME;
+const MEMORY_MODEL_NAME = process.env.GEMINI_MEMORY_MODEL?.trim() || MODEL_NAME;
 
 const SAFETY_SETTINGS = [
     HarmCategory.HARM_CATEGORY_HARASSMENT,
@@ -64,4 +66,4 @@ async function generate({ contents, systemInstruction, config = {}, model = MODE
     });
 }
 
-module.exports = { generate, MODEL_NAME, VISION_MODEL_NAME };
+module.exports = { generate, MODEL_NAME, VISION_MODEL_NAME, MEMORY_MODEL_NAME };

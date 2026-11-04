@@ -90,6 +90,14 @@ function describeLimits() {
     return parts.join('、');
 }
 
+/**
+ * 今天的全體用量占全體預算的比例（沒設全體預算時一律 0）。
+ * 背景工作（長期記憶萃取）在 0.8 以上就不跑，把剩下的額度留給真人的對話
+ */
+function budgetRatio() {
+    return DAILY_BUDGET > 0 ? getTodayTotal() / DAILY_BUDGET : 0;
+}
+
 /** 目前的限制數值（0 = 不限制；管理面板顯示用） */
 function getLimits() {
     return {
@@ -100,4 +108,4 @@ function getLimits() {
     };
 }
 
-module.exports = { consumeQuota, quotaMessage, isQuotaError, AiQuotaError, describeLimits, getLimits };
+module.exports = { consumeQuota, quotaMessage, isQuotaError, AiQuotaError, describeLimits, getLimits, budgetRatio };

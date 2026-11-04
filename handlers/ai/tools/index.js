@@ -26,7 +26,7 @@ const { ToolError } = require('./toolError');
 const MAX_CALLS = 3;
 const ROUTER_TIMEOUT_MS = 15_000;
 // 判斷階段只帶最近幾輪（使用者一則＋Bot 一則為一輪）：只需要理解「剛剛那首」這類指代，
-// 不需要人格那邊完整的 12 輪，對話歷史是判斷呼叫裡最大的變動 token 來源
+// 不需要人格那邊完整的 12 則訊息，對話歷史是判斷呼叫裡最大的變動 token 來源
 const ROUTER_HISTORY_TURNS = 3;
 
 const ALL_TOOLS = [
@@ -77,6 +77,18 @@ function recentTurns(history, turns) {
     return firstUser === -1 ? [] : recent.slice(firstUser);
 }
 
+/**
+ * 接上本次訊息。mergeUser=true（單一人格的群組歷史）時，歷史最後一則若是 user，
+ * 就把本次 parts 併進去，避免連續兩個 user content；多人格維持原本的寫法
+ */
+function withCurrent(history, parts, mergeUser) {
+    const last = history[history.length - 1];
+    if (mergeUser && last?.role === 'user') {
+        return [...history.slice(0, -1), { role: 'user', parts: [...last.parts, ...parts] }];
+    }
+    return [...history, { role: 'user', parts }];
+}
+
 /** 判斷階段只需要文字，圖片不送（省 token，也避免把圖片內容當成指令） */
 function textOnly(contents) {
     return contents
@@ -120,10 +132,13 @@ const NO_ACTION_RULE = '【注意】這次沒有替使用者播放音樂、記�
  * @param {string} opts.text      本次訊息的純文字（預篩用）
  * @param {object} opts.ctx       { guild, member, textChannel, userId, source: 'text'|'voice' }
  * @param {string} [opts.mode]    人格模式（只用於用量統計）
- * @returns {Promise<{ text: string, skipTTS: boolean }|null>}
- *          text：附在 system instruction 後面的文字；skipTTS：這次回覆不要朗讀（用到了 quiet 工具，例如點歌）
+ * @param {boolean} [opts.mergeUser] 本次訊息併進歷史最後的 user content（單一人格）。
+ *                                   群組歷史的 part 數／字數由呼叫端先精簡（aiCore 的 compactHistory）
+ * @returns {Promise<{ text: string, skipTTS: boolean, executed?: boolean }|null>}
+ *          text：附在 system instruction 後面的文字；skipTTS：這次回覆不要朗讀（用到了 quiet 工具，例如點歌）；
+ *          executed：這次確實執行了工具（成功或失敗都算；長期記憶不萃取這種訊息）
  */
-async function runToolStage({ history, parts, text, ctx, mode = null }) {
+async function runToolStage({ history, parts, text, ctx, mode = null, mergeUser = false }) {
     if (!isEnabled() || !ctx?.guild || !ctx.member || !needsTools(text)) return null;
 
     const tools = availableTools(ctx.source);
@@ -131,7 +146,7 @@ async function runToolStage({ history, parts, text, ctx, mode = null }) {
     try {
         response = await generate({
             systemInstruction: ROUTER_PROMPT,
-            contents: textOnly([...recentTurns(history, ROUTER_HISTORY_TURNS), { role: 'user', parts }]),
+            contents: textOnly(withCurrent(recentTurns(history, ROUTER_HISTORY_TURNS), parts, mergeUser)),
             config: {
                 tools: [{ functionDeclarations: tools.map(t => t.declaration) }],
                 toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO } },
@@ -157,6 +172,7 @@ async function runToolStage({ history, parts, text, ctx, mode = null }) {
     return {
         text: `${RESULT_HEADER}\n${lines.join('\n')}\n${RESULT_RULE}`,
         skipTTS: results.some(r => r.quiet),
+        executed: true,
     };
 }
 
@@ -175,5 +191,6 @@ module.exports = {
     _ALL_TOOLS: ALL_TOOLS,
     _textOnly: textOnly,
     _recentTurns: recentTurns,
+    _withCurrent: withCurrent,
     _execute: execute,
 };

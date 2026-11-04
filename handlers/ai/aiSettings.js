@@ -1,3 +1,9 @@
+// 注意：這個檔案只放常數，不要 require promptStore 等其他 AI 模組（會造成循環 require）
+const toPositiveInt = (raw, fallback) => {
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+};
+
 module.exports = {
     GENERATION_CONFIG: {
         maxOutputTokens: 1000,
@@ -11,4 +17,28 @@ module.exports = {
     DEVELOPER_MODE_USER_IDS: process.env.DEVELOPER_MODE_USER_IDS
         ? process.env.DEVELOPER_MODE_USER_IDS.split(',').map(id => id.trim())
         : [],
+
+    // 找不到模式（或模式檔被刪除）時的預設人格；modeSelector、aiCore、管理面板共用
+    DEFAULT_MODE: 'loss',
+
+    // ── 單一人格模式（Mode B）的群組歷史 ──
+    GROUP_FETCH_LIMIT: 50,                                                    // Discord 單次上限 100
+    GROUP_MSG_LIMIT: toPositiveInt(process.env.AI_GROUP_MSG_LIMIT, 24),       // 保留的訊息則數，可用環境變數調小
+    GROUP_TIME_LIMIT_MS: 30 * 60 * 1000,                                      // 只看 30 分鐘內
+    GROUP_IMAGE_MSGS: 3,                                                      // 只下載最後幾則訊息的圖片
+    GROUP_TEXT_MAX: 400,                                                      // 每則訊息截斷字數
+
+    // ── 長期記憶上限 ──
+    MEMORY_CAPS: Object.freeze({
+        userFacts: 30,           // Mode A 每人事實
+        groupFacts: 40,          // Mode B 群組事實
+        memberFacts: 15,         // Mode B 每位成員事實
+        factChars: 120,          // 每條事實字數
+        userBlockChars: 1500,    // Mode A 注入區塊字數
+        scopeBlockChars: 2500,   // Mode B 注入區塊字數
+        tombstoneDays: 30,       // tombstone 保留天數
+        tombstoneMax: 200,       // tombstone 最多條數
+    }),
+    // 背景萃取每日呼叫上限
+    MEMORY_EXTRACT_DAILY_MAX: toPositiveInt(process.env.MEMORY_EXTRACT_DAILY_MAX, 200),
 };

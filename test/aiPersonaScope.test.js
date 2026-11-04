@@ -1,0 +1,96 @@
+'use strict';
+
+// 人格分岔：single 範圍時所有人都用範圍指定的人格；system instruction 在 single 時接上 _group 規則。
+// prompts 與範圍設定都放在暫存資料夾（MOUSEBOT_DATA_DIR），不讀正式的 data/。
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'mousebot-persona-'));
+const PROMPTS = path.join(TMP, 'prompts');
+fs.mkdirSync(path.join(PROMPTS, 'modes'), { recursive: true });
+fs.writeFileSync(path.join(PROMPTS, '_general.md'), 'GENERAL');
+fs.writeFileSync(path.join(PROMPTS, '_voice.md'), 'VOICE');
+fs.writeFileSync(path.join(PROMPTS, '_group.md'), 'GROUP');
+fs.writeFileSync(path.join(PROMPTS, 'modes', 'loss.md'), '---\nname: 預設\n---\nLOSS');
+fs.writeFileSync(path.join(PROMPTS, 'modes', 'chat.md'), '---\nname: 聊天\n---\nCHAT');
+fs.writeFileSync(path.join(PROMPTS, 'modes', 'lover.md'), '---\nname: 戀人\nsingleScope: off\n---\nLOVER');
+
+Object.assign(process.env, {
+  MOUSEBOT_DATA_DIR: TMP,
+  LOG_LEVEL: 'error',
+  LOVER_MODE_USER_IDS: '900000000000000001',
+  GROQ_API_KEY: process.env.GROQ_API_KEY || 'test',
+});
+
+const { getUserMode, buildSystemInstruction } = require('../handlers/ai/aiCore');
+const aiScope = require('../handlers/ai/aiScope');
+
+const G = '100000000000000001';
+const C = '200000000000000001';
+const LOVER_USER = '900000000000000001';
+const PLAIN_USER = '900000000000000099'; // 不在任何名單、也沒有個人設定的使用者
+
+test.after(() => {
+  fs.rmSync(TMP, { recursive: true, force: true });
+  // aiCore / aiHandler 會載入常駐計時器（例如 AI 圖片快取的定期清理），程序不會自己結束；
+  // 等測試框架寫完結果與結束碼後再主動結束（同 admin.test.js）
+  setTimeout(() => process.exit(), 500).unref();
+});
+
+test('多人格：照原本的 selectMode（LOVER 名單仍有效）', () => {
+  const scope = aiScope.getScope(G, C);
+  assert.equal(scope.kind, 'multi');
+  assert.equal(getUserMode(LOVER_USER, scope), 'lover');
+  assert.equal(getUserMode(PLAIN_USER, scope), 'loss');
+  assert.equal(getUserMode(PLAIN_USER), 'loss'); // 沒傳 scope 等同多人格
+});
+
+test('單一人格：所有人都用範圍的人格，忽略 LOVER 名單', () => {
+  aiScope.setChannelScope(C, G, { kind: 'single', persona: 'chat' }, 'u1');
+  const scope = aiScope.getScope(G, C);
+  assert.equal(getUserMode(LOVER_USER, scope), 'chat');
+  assert.equal(getUserMode(PLAIN_USER, scope), 'chat');
+});
+
+test('system instruction：順序 persona → _general → _voice → _group；多人格不接 _group', () => {
+  const multi = aiScope.getScope(G, '200000000000000009');
+  const single = aiScope.getScope(G, C);
+  assert.equal(buildSystemInstruction({ mode: 'loss', scope: multi }), 'LOSS\n\nGENERAL');
+  assert.equal(buildSystemInstruction({ mode: 'chat', scope: single }), 'CHAT\n\nGENERAL\n\nGROUP');
+  assert.equal(buildSystemInstruction({ mode: 'chat', isVoice: true, scope: single }), 'CHAT\n\nGENERAL\n\nVOICE\n\nGROUP');
+  assert.equal(
+    buildSystemInstruction({ mode: 'chat', scope: single, memoryBlock: 'MEM', roster: 'ROSTER' }),
+    'CHAT\n\nGENERAL\n\nGROUP\n\nMEM\n\nROSTER',
+  );
+});
+
+test('_group.md 不存在時直接略過', async () => {
+  fs.rmSync(path.join(PROMPTS, '_group.md'));
+  // promptStore 每 2 秒才檢查一次檔案變動
+  await new Promise((r) => setTimeout(r, 2100));
+  const single = aiScope.getScope(G, C);
+  assert.equal(buildSystemInstruction({ mode: 'chat', scope: single }), 'CHAT\n\nGENERAL');
+});
+
+test('/ai 指令包含 scope 子指令群組（show / set / reset）', () => {
+  // aiHandler 會載入整個 AI 模組；只檢查指令定義，不連線 Discord
+  const { setupAICommands } = require('../handlers/ai/aiHandler');
+  let registered = null;
+  const fakeClient = { commands: new Map(), on() {} };
+  fakeClient.commands.set = (k, v) => { registered = v; };
+  setupAICommands(fakeClient);
+  const json = registered.data.toJSON();
+  const scope = json.options.find((o) => o.name === 'scope');
+  assert.ok(scope, '缺少 scope 群組');
+  assert.deepEqual(scope.options.map((o) => o.name).sort(), ['reset', 'set', 'show']);
+  const set = scope.options.find((o) => o.name === 'set');
+  assert.deepEqual(set.options.map((o) => o.name), ['kind', 'persona', 'channel', 'memory_extract']);
+  const memory = json.options.find((o) => o.name === 'memory');
+  assert.ok(memory, '缺少 memory 群組');
+  assert.deepEqual(memory.options.map((o) => o.name).sort(), ['forget', 'list', 'optout']);
+  const forget = memory.options.find((o) => o.name === 'forget');
+  assert.deepEqual(forget.options.map((o) => [o.name, o.required]), [['id', true]]);
+});

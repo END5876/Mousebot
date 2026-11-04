@@ -3,11 +3,11 @@
 
 const promptStore = require('../../handlers/ai/promptStore');
 const { listUserModes } = require('../../handlers/ai/modeSelector');
-const { LOVER_MODE_USER_IDS, DEVELOPER_MODE_USER_IDS } = require('../../handlers/ai/aiSettings');
+const aiScope = require('../../handlers/ai/aiScope');
+const { LOVER_MODE_USER_IDS, DEVELOPER_MODE_USER_IDS, DEFAULT_MODE } = require('../../handlers/ai/aiSettings');
 const { HttpError, str, oneOf } = require('../http');
 
-// 找不到模式時的退路（aiCore.js 的 FALLBACK_MODE、modeSelector 的預設），刪掉它所有人都會變成沒有人格
-const DEFAULT_MODE = 'loss';
+// DEFAULT_MODE（aiSettings）是找不到模式時的退路（aiCore.js 的 FALLBACK_MODE、modeSelector 的預設），刪掉它所有人都會變成沒有人格
 const MAX_PROMPT = 30000;
 const HISTORY_KINDS = ['modes', 'shared'];
 
@@ -23,7 +23,8 @@ function historyTarget(params) {
   return { kind, key };
 }
 
-// 每個模式目前有多少人在用：/ai mode 指定的人，加上環境變數指定的特殊身分
+// 每個模式目前有多少人在用：/ai mode 指定的人，加上環境變數指定的特殊身分，
+// 再加上被 /ai scope 指定為單一人格的伺服器／頻道（每個範圍算一次）
 function modeUsage() {
   const counts = {};
   const add = (mode) => { counts[mode] = (counts[mode] ?? 0) + 1; };
@@ -31,6 +32,7 @@ function modeUsage() {
   Object.values(overrides).forEach(add);
   LOVER_MODE_USER_IDS.filter((id) => !overrides[id]).forEach(() => add('lover'));
   DEVELOPER_MODE_USER_IDS.filter((id) => !overrides[id]).forEach(() => add('developer'));
+  aiScope.listScopePersonas().forEach(add);
   return counts;
 }
 
@@ -63,11 +65,14 @@ module.exports = function registerPrompts(router) {
       name: mode.name,
       shortDescription: mode.shortDescription ?? '',
       clearMemoryMessage: mode.clearMemoryMessage,
+      singleScope: mode.singleScope ?? '',
+      memory: mode.memory ?? '',
       prompt: mode.prompt,
     };
   });
 
-  // body：{ name, shortDescription, clearMemoryMessage, prompt, create? }；create 為 true 時代號已存在就拒絕
+  // body：{ name, shortDescription, clearMemoryMessage, singleScope?, memory?, prompt, create? }；create 為 true 時代號已存在就拒絕
+  // singleScope / memory 沒帶（舊版前端）就保留檔案裡原本的值，空字串＝移除
   router.put('/api/prompts/modes/:key', ({ params, body, audit }) => {
     const key = modeKey(params);
     const existed = !!promptStore.getMode(key);
@@ -78,6 +83,8 @@ module.exports = function registerPrompts(router) {
       name,
       shortDescription: str(body.shortDescription, '簡短說明', { max: 200, allowEmpty: true }),
       clearMemoryMessage: str(body.clearMemoryMessage, '清除記憶訊息', { max: 500, allowEmpty: true }),
+      singleScope: body.singleScope === undefined ? undefined : oneOf(body.singleScope, ['', ...promptStore.SINGLE_SCOPE_VALUES], '群組人格限制'),
+      memory: body.memory === undefined ? undefined : oneOf(body.memory, ['', ...promptStore.MEMORY_VALUES], '長期記憶'),
       prompt: str(body.prompt, 'Prompt 本文', { max: MAX_PROMPT }),
     });
     audit(`${existed ? '修改' : '建立'} AI 人格「${promptStore.getMode(key)?.name ?? key}」（${key}）`);
@@ -88,6 +95,9 @@ module.exports = function registerPrompts(router) {
     const key = modeKey(params);
     if (key === DEFAULT_MODE) throw new HttpError(400, `「${DEFAULT_MODE}」是預設模式，找不到其他模式時都會用它，不能刪除`);
     const name = promptStore.getMode(key)?.name ?? key;
+    if (aiScope.listScopePersonas().includes(key)) {
+      throw new HttpError(400, `「${name}」正被單一人格範圍使用中，請先用 /ai scope 或 AI 設定頁改掉再刪除`);
+    }
     if (!promptStore.deleteMode(key)) throw new HttpError(404, '找不到這個模式，可能已經被刪除');
     audit(`刪除 AI 人格「${name}」（${key}）`);
   });

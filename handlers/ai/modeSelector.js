@@ -1,13 +1,14 @@
-const path = require('path');
-const { LOVER_MODE_USER_IDS, DEVELOPER_MODE_USER_IDS } = require('./aiSettings');
+const { LOVER_MODE_USER_IDS, DEVELOPER_MODE_USER_IDS, DEFAULT_MODE } = require('./aiSettings');
 const promptStore = require('./promptStore');
 const logger = require('../../utils/logger');
 const { readJson, writeJsonAtomic } = require('../../utils/jsonStore');
+const { dataPath } = require('../../utils/dataDir');
 
 // ════════════════════════════════════════════════════════
 //  常數
 // ════════════════════════════════════════════════════════
-const MODES_FILE_PATH = path.resolve(__dirname, '../../data/userModes.json');
+// 資料目錄可用 MOUSEBOT_DATA_DIR 覆寫（測試不讀寫正式的 data/）
+const MODES_FILE_PATH = dataPath('userModes.json');
 
 // ════════════════════════════════════════════════════════
 //  JSON 持久化
@@ -77,7 +78,7 @@ function selectMode(userId, content) {
     if (LOVER_MODE_USER_IDS.includes(userId)) return 'lover';
     if (DEVELOPER_MODE_USER_IDS.includes(userId)) return 'developer';
 
-    return 'loss';
+    return DEFAULT_MODE;
 }
 
 /**

@@ -1,8 +1,8 @@
-// AI 設定：模型與額度（唯讀）、使用者人格模式、各伺服器的隨機插話機率與頻道開關
+// AI 設定：模型與額度（唯讀）、使用者人格模式、長期記憶、各伺服器的範圍（多人格／單一人格）、隨機插話機率與頻道開關
 
 import { h, icon } from '../dom.js';
 import { api, qs, seg } from '../api.js';
-import { fmtInt } from '../format.js';
+import { fmtDateTime, fmtInt } from '../format.js';
 import {
   avatar, card, confirmDialog, emptyState, errorState, loadingState, selectEl, switchControl, toast, toastError, userCell, withBusy,
 } from '../ui.js';
@@ -34,38 +34,204 @@ export default function mountAiSettings(root, ctx) {
       h('div', { class: 'grid grid-2' }, modelCard(), specialCard()),
       userModesCard(),
       memoryCard(),
+      memoriesCard(),
       chanceCard(),
     );
   }
 
-  // ── 清除對話記憶（等同對方自己下 /ai clear）─────────────────
-  async function clearMemory(user, button) {
+  // ── 清除對話記憶（短期＋個人長期記憶，可選連群組成員記憶）─────────────────
+  async function clearMemory(user, button, { scopes = false } = {}) {
     const ok = await confirmDialog({
       title: '清除對話記憶',
-      message: `要清除 ${user.name ?? user.id} 和 AI 的對話記憶嗎？之後 AI 不會再參考他先前的對話（效果等同他自己下 /ai clear）。`,
+      message: `要清除 ${user.name ?? user.id} 和 AI 的對話記憶嗎？之後 AI 不會再參考他先前的對話，並刪除他所有的個人長期記憶`
+        + `${scopes ? '，以及他在各單一人格群組記憶裡的成員記憶' : ''}。`,
       confirmText: '清除',
     });
     if (!ok) return;
-    const done = await withBusy(button, () => api.post(`/api/ai/memory/${seg(user.id)}`));
-    if (done) toast(`已清除 ${user.name ?? user.id} 的對話記憶`);
+    let res = null;
+    const done = await withBusy(button, async () => { res = await api.post(`/api/ai/memory/${seg(user.id)}`, { scopes }); });
+    if (!done) return;
+    const extra = [`個人長期記憶 ${res?.facts ?? 0} 條`, scopes ? `成員記憶 ${res?.memberFacts ?? 0} 條` : null].filter(Boolean).join('、');
+    toast(`已清除 ${user.name ?? user.id} 的對話記憶（${extra}）`);
   }
 
   function memoryCard() {
     let chosen = null;
+    const scopesSwitch = switchControl({ checked: false, label: '連群組成員記憶一起刪除', onChange: () => {} });
     const clearBtn = h('button', {
       type: 'button', class: 'btn', disabled: true,
-      onclick: () => chosen && clearMemory(chosen, clearBtn),
+      onclick: () => chosen && clearMemory(chosen, clearBtn, { scopes: scopesSwitch.input.checked }),
     }, icon('eraser', 'ic-sm'), '清除記憶');
     const picker = memberPicker((user) => { chosen = user; clearBtn.disabled = !user; });
     return card({
       title: '清除對話記憶',
       iconName: 'eraser',
-      body: h('div', { class: 'add-row add-row-2' },
-        h('div', { class: 'field' }, h('span', { class: 'field-label' }, '搜尋成員'), picker),
-        clearBtn,
-      ),
-      note: 'AI 只會參考同一個頻道最近 10 分鐘內的對話；清除後，在那之前的訊息都不會再被當成上下文。',
+      body: [
+        h('div', { class: 'add-row add-row-2' },
+          h('div', { class: 'field' }, h('span', { class: 'field-label' }, '搜尋成員'), picker),
+          clearBtn,
+        ),
+        h('div', { class: 'field' }, scopesSwitch),
+      ],
+      note: '多人格時 AI 參考同一個頻道最近 10 分鐘內的對話（單一人格是整個頻道最近 30 分鐘）；清除後，在那之前的訊息都不會再被當成上下文，Bot 重新啟動後仍然有效。同時會刪除他所有伺服器的個人長期記憶。',
     });
+  }
+
+  // ── 長期記憶（摺疊；展開時才載入）──────────────────────
+  function memoriesCard() {
+    const userBody = h('div', null);
+    const scopeBody = h('div', null);
+    let loaded = false;
+
+    const fmtExpire = (ts) => (ts ? `到 ${fmtDateTime(ts)}` : null);
+    const factRow = (f, { del, meta = [] }) => {
+      const btn = h('button', {
+        type: 'button', class: 'btn btn-sm btn-ghost btn-danger', 'aria-label': '刪除這條記憶',
+        onclick: async () => {
+          const ok = await confirmDialog({ title: '刪除記憶', message: `要刪除「${f.text}」嗎？之後 AI 也不會再學回同樣的內容。`, confirmText: '刪除', danger: true });
+          if (!ok) return;
+          const done = await withBusy(btn, () => api.del(del));
+          if (done) { row.remove(); toast('已刪除'); }
+        },
+      }, icon('trash', 'ic-sm'));
+      const row = h('div', { class: 'row' },
+        h('div', { class: 'row-main' },
+          h('div', null, h('span', { class: 'mono hint' }, f.id), ' ', f.text),
+          h('div', { class: 'hint' }, [f.category, ...meta, fmtExpire(f.expiresAt)].filter(Boolean).join(' · ')),
+        ),
+        btn,
+      );
+      return row;
+    };
+
+    async function loadAll() {
+      loaded = true;
+      userBody.replaceChildren(loadingState());
+      scopeBody.replaceChildren(loadingState());
+      try {
+        const [u, sc] = await Promise.all([api.get(qs('/api/ai/memories', { type: 'user' })), api.get(qs('/api/ai/memories', { type: 'scope' }))]);
+        if (ctx.disposed) return;
+        userBody.replaceChildren(...(u.users.length
+          ? u.users.map((e) => h('details', { class: 'disclosure' },
+            h('summary', null, icon('chevron'), `${e.user?.name ?? e.user?.id}（${e.facts.length} 條）`),
+            h('div', { class: 'rows' }, e.facts.map((f) => factRow(f, {
+              del: `/api/ai/memories/user/${seg(e.user.id)}/${seg(f.id)}`,
+              meta: [f.originName, f.persona],
+            }))),
+          ))
+          : [emptyState('還沒有任何個人長期記憶', 'user')]));
+        scopeBody.replaceChildren(...(sc.scopes.length
+          ? sc.scopes.map((e) => h('details', { class: 'disclosure' },
+            h('summary', null, icon('chevron'), `${e.name}（${e.scopeKey}）`),
+            h('div', { class: 'rows' },
+              e.groupFacts.map((f) => factRow(f, {
+                del: `/api/ai/memories/scope/${seg(e.scopeKey)}/${seg(f.id)}`,
+                meta: ['群組', f.reportedBy ? `由 ${f.reportedBy.name ?? f.reportedBy.id} 提供` : null],
+              })),
+              e.members.flatMap((m) => m.facts.map((f) => factRow(f, {
+                del: `/api/ai/memories/scope/${seg(e.scopeKey)}/${seg(f.id)}`,
+                meta: [`成員：${m.user?.name ?? m.name ?? m.user?.id}`],
+              }))),
+            ),
+          ))
+          : [emptyState('還沒有任何群組公用記憶', 'message')]));
+      } catch (err) {
+        loaded = false;
+        if (!ctx.disposed) userBody.replaceChildren(errorState(err, loadAll));
+        scopeBody.replaceChildren();
+      }
+    }
+
+    const reloadBtn = h('button', { type: 'button', class: 'btn btn-sm', onclick: () => loadAll() }, icon('refresh', 'ic-sm'), '重新載入');
+    const wrap = h('details', { class: 'disclosure' },
+      h('summary', null, icon('chevron'), '展開記憶清單'),
+      h('div', { class: 'form' },
+        h('div', { class: 'field' }, h('span', { class: 'field-label' }, '個人記憶（多人格）'), userBody),
+        h('div', { class: 'field' }, h('span', { class: 'field-label' }, '群組公用記憶（單一人格）'), scopeBody),
+        h('div', null, reloadBtn),
+      ),
+    );
+    wrap.addEventListener('toggle', () => { if (wrap.open && !loaded) loadAll(); });
+    return card({
+      title: '長期記憶',
+      iconName: 'list',
+      body: wrap,
+      note: '個人記憶只在同一個伺服器（或私訊）裡使用；群組公用記憶屬於單一人格的伺服器或頻道。刪除的內容 30 天內不會被重新學回來。成員也可以用 /ai memory 自己查看、刪除或關閉。',
+    });
+  }
+
+  // ── 範圍：多人格／單一人格（每個伺服器一個下拉選單＋整理公用記憶開關）──────
+  function scopeControls(g) {
+    const current = g.scope?.kind === 'single' && g.scope.persona ? `single:${g.scope.persona}` : 'multi';
+    const options = [
+      { value: 'multi', label: '多人格（每人各自的人格）' },
+      ...data.modes.map((m) => ({ value: `single:${m.key}`, label: `單一人格：${m.name && m.name !== m.key ? `${m.name}（${m.key}）` : m.key}` })),
+    ];
+    let saved = current;
+    const sel = selectEl({
+      options,
+      value: current,
+      ariaLabel: `${g.name} 的 AI 範圍`,
+      onchange: async () => {
+        const value = sel.value;
+        sel.disabled = true;
+        try {
+          const [kind, persona = null] = value.split(':');
+          await api.put(`/api/ai/scope/${seg(g.id)}`, kind === 'single' ? { kind, persona } : { kind });
+          saved = value;
+          g.scope = { ...(g.scope ?? {}), kind, persona };
+          toast(`${g.name} 已設為${kind === 'single' ? `單一人格「${modeLabel(persona)}」` : '多人格'}`);
+        } catch (err) {
+          sel.value = saved;
+          toastError(err);
+        } finally {
+          sel.disabled = false;
+        }
+      },
+    });
+    const extract = switchControl({
+      checked: g.scope?.memoryExtract !== false,
+      label: '整理成公用記憶',
+      onChange: async (on) => {
+        await api.put(`/api/ai/scope/${seg(g.id)}`, { memoryExtract: on });
+        g.scope = { ...(g.scope ?? {}), memoryExtract: on };
+        toast(`${g.name}：${on ? '開啟' : '關閉'}整理公用記憶`);
+      },
+    });
+
+    const overrides = Object.entries(g.channelScopes ?? {});
+    const overrideRows = overrides.map(([id, e]) => {
+      const desc = [
+        e.kind === 'single' ? `單一人格「${e.personaName ?? e.persona}」` : e.kind === 'multi' ? '多人格' : '沿用伺服器設定',
+        typeof e.memoryExtract === 'boolean' ? `整理公用記憶${e.memoryExtract ? '開' : '關'}` : null,
+      ].filter(Boolean).join('、');
+      const btn = h('button', {
+        type: 'button', class: 'btn btn-sm btn-ghost btn-danger', 'aria-label': `移除 #${e.name ?? id} 的覆寫`,
+        onclick: async () => {
+          const done = await withBusy(btn, () => api.del(`/api/ai/scope/channel/${seg(id)}`));
+          if (done) { row.remove(); toast('已移除頻道覆寫'); }
+        },
+      }, icon('trash', 'ic-sm'), '移除');
+      const row = h('div', { class: 'row' },
+        h('span', { class: 'channel-name' }, icon('hash', 'ic-sm'), h('span', null, e.name ?? id)),
+        h('span', { class: 'hint' }, desc),
+        btn,
+      );
+      return row;
+    });
+
+    return [
+      h('div', { class: 'add-row add-row-2' },
+        h('div', { class: 'field' }, h('span', { class: 'field-label' }, 'AI 範圍'), sel),
+        h('div', { class: 'field' }, extract),
+      ),
+      overrides.length
+        ? h('details', { class: 'disclosure' },
+          h('summary', null, icon('chevron'), `頻道覆寫（${overrides.length}）`),
+          h('div', { class: 'rows' }, overrideRows),
+        )
+        : null,
+    ];
   }
 
   // ── 模型與額度（環境變數，唯讀）───────────────────────────
@@ -336,6 +502,7 @@ export default function mountAiSettings(root, ctx) {
           valueEl,
           resetBtn,
         ),
+        ...scopeControls(g),
         g.channels.length
           ? h('details', { class: 'disclosure' },
             h('summary', null, icon('chevron'), `頻道開關（${g.channels.length - disabledCount} 開 / ${disabledCount} 關）`),
@@ -346,12 +513,13 @@ export default function mountAiSettings(root, ctx) {
     });
 
     return card({
-      title: '隨機插話',
-      sub: `預設 ${Math.round(def * 100)}%`,
+      title: '伺服器：範圍與隨機插話',
+      sub: `預設插話 ${Math.round(def * 100)}%`,
       iconName: 'message',
       tight: true,
       body: blocks.length ? blocks : emptyState('Bot 還沒加入任何伺服器'),
-      note: 'Bot 對一般訊息隨機插話的機率；頻道開關關閉後，該頻道不會隨機插話（被 @ 提及時仍會回覆）。也可以用 /ai chance 設定。',
+      note: 'AI 範圍：多人格時每個人用自己的人格；單一人格時整個伺服器（沒有自己覆寫的頻道）共用同一個人格與群組記憶。頻道覆寫請在 Discord 用 /ai scope set channel:true 設定。'
+        + '插話機率是 Bot 對一般訊息隨機插話的機率；頻道開關關閉後，該頻道不會隨機插話（被 @ 提及時仍會回覆）。也可以用 /ai chance 設定。',
     });
   }
 
