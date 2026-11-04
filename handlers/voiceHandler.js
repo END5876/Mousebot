@@ -230,6 +230,14 @@ function findTranscriptChannel(guild) {
   return guild.channels.cache.find(ch => ch.name === '語音轉錄' && ch.isTextBased()) || null;
 }
 
+/**
+ * 語音對話的 AI 工具（點歌、分帳…）只在 STT 語音辨識（喚醒詞，/voice stt start）開啟時啟用；
+ * 只用錄音按鈕（/voice record-button）而沒開 STT 時不帶工具，語音只聊天不動作。
+ */
+function voiceToolCtx(guildId, opts) {
+  return sttActiveGuilds.has(guildId) ? toolContextFrom('voice', opts) : null;
+}
+
 function isWakeWordActive(guildId) {
   return sttActiveGuilds.has(guildId);
 }
@@ -251,7 +259,7 @@ function startWakeWord(guild, textChannel) {
     textChannel,
     async (userId, member, text, channel) => {
       try {
-        const { text: aiReply, skipTTS } = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId, toolContextFrom('voice', { guild, member, channel, userId }));
+        const { text: aiReply, skipTTS } = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId, voiceToolCtx(guildId, { guild, member, channel, userId }));
         await channel.send(`🤖 **機器鳥**：${aiReply}`);
 
         // 點歌等音樂操作不朗讀，免得蓋過剛點的歌
@@ -451,7 +459,7 @@ async function handleRecordButton(interaction) {
       }
 
       ensureManualSession(connection, interaction.guild, interaction.channel, async (userId, member, text, channel) => {
-        const { text: aiReply, skipTTS } = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId, toolContextFrom('voice', { guild: interaction.guild, member, channel, userId }));
+        const { text: aiReply, skipTTS } = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId, voiceToolCtx(guildId, { guild: interaction.guild, member, channel, userId }));
         await channel.send(`🤖 **機器鳥**：${aiReply}`);
         if (skipTTS) return; // 點歌等音樂操作不朗讀
         const ttsResult = await playTTS(guildId, aiReply);
@@ -657,7 +665,7 @@ function setupVoiceCommands(client) {
 
         // 2) 確保手動 Session
         ensureManualSession(connection, interaction.guild, interaction.channel, async (uid, member, text, channel) => {
-          const { text: aiReply, skipTTS } = await getGeminiResponseVoice(uid, text, null, null, null, null, guildId, toolContextFrom('voice', { guild: interaction.guild, member, channel, userId: uid }));
+          const { text: aiReply, skipTTS } = await getGeminiResponseVoice(uid, text, null, null, null, null, guildId, voiceToolCtx(guildId, { guild: interaction.guild, member, channel, userId: uid }));
           await channel.send(`🤖 **機器鳥**：${aiReply}`);
           if (skipTTS) return; // 點歌等音樂操作不朗讀
           const ttsResult = await playTTS(guildId, aiReply);
