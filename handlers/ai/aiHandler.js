@@ -287,7 +287,7 @@ async function handleAsk(interaction) {
             if (part.type === 'missing_signature') {
                 return {
                     type: 'text',
-                    text: '[系統提示：使用者傳送的 Discord 圖片網址缺少了安全簽名參數(?ex=...&is=...)，導致權限不足無法讀取。請直接吐槽使用者複製連結時把後面的參數弄丟了，叫他重新上傳圖片或給完整的連結。]'
+                    text: '[系統提示：使用者傳送的 Discord 圖片網址缺少了安全簽名參數(?ex=...&is=...)，導致權限不足無法讀取。請告訴使用者連結後面的參數不見了，請他重新上傳圖片或貼完整的連結。]'
                 };
             }
             return part;
@@ -890,7 +890,7 @@ function setupAICommands(client) {
                             } else {
                                 urlImageParts.push({
                                     type: 'text',
-                                    text: '[系統提示：使用者傳送的 Discord 圖片網址缺少了安全簽名參數(?ex=...&is=...)，導致權限不足無法讀取。請直接吐槽使用者複製連結時把後面的參數弄丟了，叫他重新上傳圖片或給完整的連結。]'
+                                    text: '[系統提示：使用者傳送的 Discord 圖片網址缺少了安全簽名參數(?ex=...&is=...)，導致權限不足無法讀取。請告訴使用者連結後面的參數不見了，請他重新上傳圖片或貼完整的連結。]'
                                 });
                             }
                         } else {

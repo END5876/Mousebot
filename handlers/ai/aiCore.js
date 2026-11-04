@@ -753,8 +753,8 @@ async function getShortResponse(userId, promptText, imageParts = [], channel = n
         if (!mode) mode = getUserMode(userId, scope);
         const { history, speakers } = await loadHistory({ scope, channel, userId, messageId, botId, mode });
         const shortPrompt = imageParts.length > 0 && !promptText
-            ? `請用大約10~200個字回應或吐槽這張圖片`
-            : `請用大約10~200字回應或吐槽訊息：「${promptText}」`;
+            ? `請用大約10~200個字回應這張圖片`
+            : `請用大約10~200字回應訊息：「${promptText}」`;
 
         // 短回覆標籤邏輯
         const messageParts = message
