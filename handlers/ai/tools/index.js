@@ -25,6 +25,9 @@ const { ToolError } = require('./toolError');
 
 const MAX_CALLS = 3;
 const ROUTER_TIMEOUT_MS = 15_000;
+// 判斷階段只帶最近幾輪（使用者一則＋Bot 一則為一輪）：只需要理解「剛剛那首」這類指代，
+// 不需要人格那邊完整的 12 輪，對話歷史是判斷呼叫裡最大的變動 token 來源
+const ROUTER_HISTORY_TURNS = 3;
 
 const ALL_TOOLS = [
     ...require('./music').tools,
@@ -65,6 +68,13 @@ const ROUTER_PROMPT = [
 
 function availableTools(source) {
     return ALL_TOOLS.filter(t => !t.skipSources?.includes(source));
+}
+
+/** 取最近 turns 輪；切完開頭若是 Bot 的話就丟掉，對話一律從使用者開始 */
+function recentTurns(history, turns) {
+    const recent = history.slice(-turns * 2);
+    const firstUser = recent.findIndex(c => c.role === 'user');
+    return firstUser === -1 ? [] : recent.slice(firstUser);
 }
 
 /** 判斷階段只需要文字，圖片不送（省 token，也避免把圖片內容當成指令） */
@@ -121,7 +131,7 @@ async function runToolStage({ history, parts, text, ctx, mode = null }) {
     try {
         response = await generate({
             systemInstruction: ROUTER_PROMPT,
-            contents: textOnly([...history, { role: 'user', parts }]),
+            contents: textOnly([...recentTurns(history, ROUTER_HISTORY_TURNS), { role: 'user', parts }]),
             config: {
                 tools: [{ functionDeclarations: tools.map(t => t.declaration) }],
                 toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO } },
@@ -164,5 +174,6 @@ module.exports = {
     _ROUTER_PROMPT: ROUTER_PROMPT,
     _ALL_TOOLS: ALL_TOOLS,
     _textOnly: textOnly,
+    _recentTurns: recentTurns,
     _execute: execute,
 };

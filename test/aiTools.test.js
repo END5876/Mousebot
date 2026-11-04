@@ -191,3 +191,22 @@ test('線上排序：標題或上傳者包含所有關鍵字的優先，繁簡�
   assert.equal(_rankOnline(results, '周杰倫 晴天')[0].author, '周杰伦 Jay Chou');
   assert.deepEqual(_rankOnline(results, '晴天').map(r => r.title), ['晴天 Sunny Day', '晴天', 'Oliver 晴天'], 'Oliver 不算 live');
 });
+
+test('判斷階段只帶最近 3 輪對話，而且從使用者開始', async () => {
+  // 歷史已經合併過連續同角色（mergeConsecutiveRoles），所以是 user / model 交替
+  const history = [];
+  for (let i = 1; i <= 8; i++) {
+    history.push({ role: 'user', parts: [{ text: `u${i}` }] });
+    history.push({ role: 'model', parts: [{ text: `m${i}` }] });
+  }
+  nextResponse = {};
+  await tools.runToolStage({ history, parts: userParts('放那首'), text: '放那首', ctx: ctxOf() });
+  const sent = generateCalls[0].contents.map(c => c.parts[0].text);
+  assert.deepEqual(sent.slice(0, -1), ['u6', 'm6', 'u7', 'm7', 'u8', 'm8']);
+  assert.match(sent.at(-1), /放那首/);
+
+  // 切到的開頭是 Bot 的話就丟掉
+  assert.deepEqual(tools._recentTurns([{ role: 'model' }, { role: 'user' }, { role: 'model' }], 1).map(c => c.role), ['user', 'model']);
+  assert.deepEqual(tools._recentTurns([{ role: 'model' }], 3), []);
+  assert.deepEqual(tools._recentTurns([], 3), []);
+});
