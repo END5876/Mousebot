@@ -332,6 +332,8 @@ function _searchOnePlatform(searchPrefix, keyword, limit, fast = false, signal) 
             title    : info.title    || '未知標題',
             author   : info.uploader || info.channel || info.creator || '未知作者',
             duration : formatDuration(info.duration),
+            // 秒數（AI 點歌用來過濾太長的影片）；flat 模式有些結果沒有長度，此時為 null
+            durationSec: Number.isFinite(info.duration) ? info.duration : null,
             url,
             thumbnail: thumb,
           });

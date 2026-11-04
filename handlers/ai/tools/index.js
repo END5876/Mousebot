@@ -76,24 +76,26 @@ function textOnly(contents) {
 
 async function execute(call, ctx) {
     const tool = TOOL_MAP.get(call.name);
-    if (!tool) return { label: call.name, ok: false, text: '不支援的動作' };
+    if (!tool) return { label: call.name, ok: false, text: '不支援的動作', quiet: false };
+    const quiet = !!tool.quiet;
     try {
         const text = await tool.run(ctx, call.args || {});
         logger.info('AITool', `🛠️ ${call.name} (${ctx.guild.id} / ${ctx.userId})：${String(text).split('\n')[0]}`);
-        return { label: tool.label, ok: true, text };
+        return { label: tool.label, ok: true, text, quiet };
     } catch (err) {
         if (err instanceof ToolError) {
             logger.info('AITool', `🛠️ ${call.name} 未執行（${ctx.userId}）：${err.message}`);
-            return { label: tool.label, ok: false, text: err.message };
+            return { label: tool.label, ok: false, text: err.message, quiet };
         }
         logger.error('AITool', `工具 ${call.name} 執行錯誤：`, err);
-        return { label: tool.label, ok: false, text: '執行時發生錯誤' };
+        return { label: tool.label, ok: false, text: '執行時發生錯誤', quiet };
     }
 }
 
 const RESULT_HEADER = '【剛剛替使用者執行的動作（系統實際結果，以此為準）】';
 const RESULT_RULE = '請用你原本的人格語氣，自然地告訴使用者結果；失敗的要說明原因。'
-    + '不要捏造上面沒有的動作或資料；需要附遊戲、歌曲連結時直接貼網址。不要提到「工具」「系統」這些字眼。';
+    + '不要捏造上面沒有的動作或資料。網址只能原樣貼上面結果裡出現過的，結果裡沒有網址就完全不要貼任何連結（絕對不要自己編 YouTube 網址）。'
+    + '不要提到「工具」「系統」這些字眼。';
 // 預篩命中但最後沒有執行任何動作時附上，避免人格嘴上說「好喔幫你放了」實際上什麼都沒做
 const NO_ACTION_RULE = '【注意】這次沒有替使用者播放音樂、記帳、查遊戲或進出語音頻道。'
     + '只有在使用者明顯是要你做這些事時才需要理會這段：不要假裝已經做了，可以請他把要求說清楚（例如要放哪首歌）。'
@@ -108,7 +110,8 @@ const NO_ACTION_RULE = '【注意】這次沒有替使用者播放音樂、記�
  * @param {string} opts.text      本次訊息的純文字（預篩用）
  * @param {object} opts.ctx       { guild, member, textChannel, userId, source: 'text'|'voice' }
  * @param {string} [opts.mode]    人格模式（只用於用量統計）
- * @returns {Promise<string|null>}
+ * @returns {Promise<{ text: string, skipTTS: boolean }|null>}
+ *          text：附在 system instruction 後面的文字；skipTTS：這次回覆不要朗讀（用到了 quiet 工具，例如點歌）
  */
 async function runToolStage({ history, parts, text, ctx, mode = null }) {
     if (!isEnabled() || !ctx?.guild || !ctx.member || !needsTools(text)) return null;
@@ -128,20 +131,23 @@ async function runToolStage({ history, parts, text, ctx, mode = null }) {
         });
     } catch (err) {
         logger.warn('AITool', `判斷階段失敗，略過：${err.message}`);
-        return NO_ACTION_RULE;
+        return { text: NO_ACTION_RULE, skipTTS: false };
     }
     recordUsage('tools', response, { userId: ctx.userId, mode });
 
     const allowed = new Set(tools.map(t => t.declaration.name));
     const calls = (response.functionCalls ?? []).filter(c => allowed.has(c.name)).slice(0, MAX_CALLS);
-    if (!calls.length) return NO_ACTION_RULE;
+    if (!calls.length) return { text: NO_ACTION_RULE, skipTTS: false };
 
     // 依序執行：同一則訊息裡的動作可能有先後關係（例如先進語音再放歌）
     const results = [];
     for (const call of calls) results.push(await execute(call, ctx));
 
     const lines = results.map(r => `- ${r.label}：${r.ok ? '成功。' : '沒有執行，原因：'}${r.text}`);
-    return `${RESULT_HEADER}\n${lines.join('\n')}\n${RESULT_RULE}`;
+    return {
+        text: `${RESULT_HEADER}\n${lines.join('\n')}\n${RESULT_RULE}`,
+        skipTTS: results.some(r => r.quiet),
+    };
 }
 
 /** 從 Discord 訊息或互動組出工具需要的 context（訊息與互動都有 guild / member / channel） */

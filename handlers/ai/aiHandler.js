@@ -230,7 +230,7 @@ async function handleAsk(interaction) {
         const toolCtx = toolContextFrom('text', {
             guild: interaction.guild, member: interaction.member, channel: interaction.channel, userId,
         });
-        const { text: answer, chunks } = await getGeminiResponse(userId, question, imageParts, interaction.channel, interaction.id, botId, null, mode, toolCtx);
+        const { text: answer, chunks, skipTTS } = await getGeminiResponse(userId, question, imageParts, interaction.channel, interaction.id, botId, null, mode, toolCtx);
 
         const replyMsg = await interaction.editReply({ content: chunks[0] });
         recordBotMessageContext(replyMsg.id, mode, userId, userName);
@@ -240,7 +240,7 @@ async function handleAsk(interaction) {
             recordBotMessageContext(followUpMsg.id, mode, userId, userName);
         }
 
-        await speakWithTTS(interaction, answer, guildId);
+        if (!skipTTS) await speakWithTTS(interaction, answer, guildId);
     } catch (error) {
         if (isQuotaError(error)) {
             await interaction.editReply({ content: quotaMessage(error) }).catch(() => {});
@@ -636,7 +636,7 @@ function setupAICommands(client) {
                 const mode = getUserMode(userId, rawQuestion || '圖片');
 
                 // 「正在輸入中」涵蓋圖片下載/壓縮階段，使用者不用乾等
-                const { text: answer, chunks } = await withTyping(message.channel, async () => {
+                const { text: answer, chunks, skipTTS } = await withTyping(message.channel, async () => {
                     // emoji → 網址圖片、embed、附件三者彼此獨立，並行處理
                     const [{ question, emojiParts, urlImagePartsRaw }, embedParts, attachmentParts] = await Promise.all([
                         processCustomEmojis(rawQuestion).then(async ({ cleanedText, emojiParts }) => ({
@@ -676,7 +676,7 @@ function setupAICommands(client) {
                     const sentMsg = await message.channel.send(chunk);
                     recordBotMessageContext(sentMsg.id, mode, userId, userName);
                 }
-                await speakWithTTS(message, answer, guildId);
+                if (!skipTTS) await speakWithTTS(message, answer, guildId);
             } catch (error) {
                 if (isQuotaError(error)) await replyQuotaNotice(message, error);
                 else if (isEmptyResponseError(error)) await replyEmptyNotice(message);

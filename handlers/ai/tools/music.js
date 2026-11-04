@@ -8,9 +8,10 @@
 const { Type } = require('@google/genai');
 const { fail } = require('./toolError');
 const { requireUserWithBot, requireBotAndUserTogether } = require('./voiceGuard');
+const { zhFold } = require('../../../utils/zhFold');
 
 const QUEUE_PREVIEW = 10;
-const SEARCH_LIMIT  = 3;
+const SEARCH_LIMIT  = 5; // 每個平台；fast 模式很便宜，多抓幾筆給過濾／排序挑
 
 const uq = () => ({
     state:    require('../../musicplayer/unifiedQueue/state'),
@@ -47,17 +48,80 @@ async function connect(ctx) {
     return connection;
 }
 
-const normalize = (s) => String(s || '').toLowerCase().replace(/\s+/g, '');
+// ════════════════════════════════════════════════════════
+//  比對（純函式，測試直接呼叫）
+//  兩邊都先經過 zhFold：轉小寫＋繁體轉簡體，「周杰倫」「周杰伦」視為相同
+// ════════════════════════════════════════════════════════
+// 關鍵字以空白與各種連字號分隔（-、全形－、破折號 —、–）
+const SEPARATORS = /[\s\-－—–]+/g;
+const tokensOf = (query) => zhFold(query).split(SEPARATORS).filter(Boolean);
+const compact  = (s) => zhFold(s).replace(SEPARATORS, '');
 
-/** 本地音樂庫：完全相同的名稱優先，其次是包含關鍵字的（清單本身已依播放次數排序） */
+/**
+ * 本地音樂庫比對。files 已依播放次數由多到少排序（localMusicHandler.getMusicFiles）。
+ *   1. 名稱完全相同（忽略大小寫、繁簡、空白與連字號）
+ *   2. 每個關鍵字都出現在名稱或檔名（含資料夾，例如「周杰倫/晴天.mp3」）裡；名稱越短越優先
+ *   3. 名稱一樣長時，播放次數多的優先（沿用清單原本的順序）
+ * @returns {object|null} 命中的檔案
+ */
+function rankLocal(files, query) {
+    const tokens = tokensOf(query);
+    if (!tokens.length) return null;
+    const wanted = tokens.join('');
+
+    const exact = files.find(f => compact(f.name) === wanted);
+    if (exact) return exact;
+
+    const hits = [];
+    files.forEach((f, order) => {
+        const haystack = `${zhFold(f.name)} ${zhFold(f.filename)}`;
+        if (tokens.every(t => haystack.includes(t))) hits.push({ f, order, len: compact(f.name).length });
+    });
+    hits.sort((a, b) => a.len - b.len || a.order - b.order);
+    return hits[0]?.f ?? null;
+}
+
+const MAX_ONLINE_SEC = 15 * 60;
+// 標題有這些字的版本往後排（除非使用者的關鍵字本身就有）。英文字用單字邊界，免得「Oliver」被當成 live
+const VARIANT_GROUPS = [
+    [/(^|[^a-z])live([^a-z]|$)/],
+    [/(^|[^a-z])cover([^a-z]|$)/],
+    [/翻唱/],
+    [/(^|[^0-9])1\s*(hour|hr)s?([^a-z]|$)/, /[1一]\s*(小时|个小时)/],
+];
+
+/**
+ * 線上搜尋結果排序。
+ *   - 超過 15 分鐘的直接排除（沒有長度資訊的保留）
+ *   - 標題有 live／cover／翻唱／1 hour 的往後排，除非關鍵字本身就有同一類的字
+ *   - 標題或上傳者包含所有關鍵字的優先
+ *   - 其餘維持搜尋引擎原本的順序（YouTube 在前、Bilibili 在後）
+ * @returns {Array} 排序後的候選（可能是空陣列）
+ */
+function rankOnline(results, query) {
+    const tokens = tokensOf(query);
+    const q = zhFold(query);
+    const activeGroups = VARIANT_GROUPS.filter(group => !group.some(re => re.test(q)));
+
+    return results
+        .map((r, order) => {
+            const title = zhFold(r.title);
+            const haystack = `${title} ${zhFold(r.author)}`;
+            return {
+                r, order,
+                variant: activeGroups.some(group => group.some(re => re.test(title))) ? 1 : 0,
+                allTokens: tokens.length > 0 && tokens.every(t => haystack.includes(t)) ? 1 : 0,
+            };
+        })
+        .filter(({ r }) => !(Number.isFinite(r.durationSec) && r.durationSec > MAX_ONLINE_SEC))
+        .sort((a, b) => a.variant - b.variant || b.allTokens - a.allTokens || a.order - b.order)
+        .map(({ r }) => r);
+}
+
 function findLocal(query) {
     const engine = uq().state._engines.local;
     if (!engine) return null;
-    const q = normalize(query);
-    if (!q) return null;
-    const files = engine.getMusicFiles();
-    const hit = files.find(f => normalize(f.name) === q)
-        ?? files.find(f => normalize(f.name).includes(q) || normalize(f.filename).includes(q));
+    const hit = rankLocal(engine.getMusicFiles(), query);
     if (!hit) return null;
     const item = engine.getTrackInfo(hit.filename);
     return item ? { ...item, type: 'local' } : null;
@@ -85,15 +149,19 @@ async function resolveTrack(query) {
     if (!online || typeof online.searchMulti !== 'function') fail(`本地音樂庫找不到「${query}」，線上搜尋也還沒準備好`);
     let results;
     try {
-        results = await online.searchMulti(query, SEARCH_LIMIT);
+        // fast：只拿搜尋清單（不逐一完整解析），選定之後再對那一首 getInfo
+        results = await online.searchMulti(query, SEARCH_LIMIT, true);
     } catch (err) {
         fail(`線上搜尋失敗：${err.message}`);
     }
     if (!results?.length) fail(`找不到跟「${query}」有關的歌`);
+    const ranked = rankOnline(results, query);
+    if (!ranked.length) fail(`「${query}」的搜尋結果都超過 15 分鐘，請直接貼網址`);
+    const picked = ranked[0];
     try {
-        return { ...(await online.getInfo(results[0].url)), type: 'bilibili' };
+        return { ...(await online.getInfo(picked.url)), type: 'bilibili' };
     } catch (err) {
-        fail(`無法取得「${results[0].title}」的資訊：${err.message}`);
+        fail(`無法取得「${picked.title}」的資訊：${err.message}`);
     }
 }
 
@@ -104,23 +172,38 @@ const describeItem = (item) => item.type === 'bilibili' && item.author && item.a
 // ════════════════════════════════════════════════════════
 //  工具實作
 // ════════════════════════════════════════════════════════
-async function play(ctx, { query }) {
+async function play(ctx, { query, next = false }) {
     query = String(query || '').trim();
     if (!query) fail('沒有說要放哪首歌');
     await connect(ctx);
     const item = await resolveTrack(query);
 
-    const { playback, state } = uq();
+    const { playback, state, session } = uq();
     const guildId = ctx.guild.id;
     const result = await playback.enqueue(guildId, item, channelOf(ctx));
     // 沒在播時 enqueue 會直接開始播，播放失敗也一樣回 queued:false，要確認真的在播
     if (!result.queued && !state.nowPlaying.has(guildId)) fail(`無法播放${describeItem(item)}`);
+
+    // 插播：與網頁播放器的 enqueue next 相同，把剛加到最後的這首移到佇列最前面
+    let insertedNext = false;
+    if (result.queued && next) {
+        const queue = state.queues.get(guildId) || [];
+        const k = queue.lastIndexOf(item);
+        if (k > 0) {
+            queue.splice(k, 1);
+            queue.unshift(item);
+            session.schedule();
+            playback.prefetchUpcoming(guildId);
+        }
+        insertedNext = k >= 0;
+    }
     await refreshPanel(guildId, ctx);
 
-    const source = item.type === 'local' ? '本地音樂庫' : '線上搜尋';
-    return result.queued
-        ? `已把${describeItem(item)}加入佇列第 ${result.position} 首（來源：${source}）`
-        : `開始播放${describeItem(item)}（來源：${source}）`;
+    // 線上歌曲附上實際網址：沒給的話人格被要求附連結時會自己編一個假的 YouTube 網址
+    const source = item.type === 'local' ? '本地音樂庫' : `線上搜尋，網址 ${item.url}`;
+    if (!result.queued) return `開始播放${describeItem(item)}（來源：${source}）`;
+    if (insertedNext) return `已把${describeItem(item)}排在下一首播放（來源：${source}）`;
+    return `已把${describeItem(item)}加入佇列第 ${result.position} 首（來源：${source}）`;
 }
 
 async function random(ctx, { continuous = false }) {
@@ -225,7 +308,8 @@ const tools = [
             parameters: {
                 type: Type.OBJECT,
                 properties: {
-                    query: { type: Type.STRING, description: '歌名、歌手加歌名，或 YouTube/Bilibili 網址。保留使用者原本的寫法，不要翻譯' },
+                    query: { type: Type.STRING, description: '歌名、歌手加歌名（用空白分開），或 YouTube/Bilibili 網址。保留使用者原本的寫法，不要翻譯、不要加「MV」「歌詞」等字' },
+                    next: { type: Type.BOOLEAN, description: '使用者說「下一首放」「插播」「先放這首」時為 true（排到佇列最前面）；一般點歌省略' },
                 },
                 required: ['query'],
             },
@@ -277,4 +361,5 @@ const tools = [
     },
 ];
 
-module.exports = { tools, _findLocal: findLocal };
+// quiet：用到音樂工具時，這次的 AI 回覆不用 TTS 朗讀（朗讀會蓋過／打斷剛點的歌）
+module.exports = { tools: tools.map(t => ({ ...t, quiet: true })), _rankLocal: rankLocal, _rankOnline: rankOnline };

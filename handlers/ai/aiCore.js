@@ -164,14 +164,16 @@ async function sendWithHistory({ mode, isVoice = false, history, parts, config, 
         systemInstruction += `\n\n${FACTS_HEADER}\n${facts}`;
     }
     if (toolReport) {
-        systemInstruction += `\n\n${toolReport}`;
+        systemInstruction += `\n\n${toolReport.text}`;
     }
 
-    return generate({
+    const response = await generate({
         systemInstruction,
         contents: [...history, { role: 'user', parts }],
         config,
     });
+    // skipTTS：這次用到了音樂等 quiet 工具，回覆只發文字不朗讀（朗讀會打斷剛點的歌）
+    return { response, skipTTS: !!toolReport?.skipTTS };
 }
 
 // ════════════════════════════════════════════════════════
@@ -395,7 +397,7 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
             ]);
 
         const guildId = channel?.guildId ?? message?.guildId ?? null;
-        const response = await sendWithHistory({
+        const { response, skipTTS } = await sendWithHistory({
             mode, history, parts: messageParts, config: GENERATION_CONFIG, guildId, userId,
             toolCtx, toolText: prompt,
         });
@@ -406,8 +408,8 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
             const finishReason = response.candidates?.[0]?.finishReason ?? response.promptFeedback?.blockReason ?? 'unknown';
             throw new AiEmptyResponseError(finishReason);
         }
-        // text：純回答（給 TTS 朗讀）；chunks：切好的 Discord 訊息
-        return { text, chunks: splitMessage(text) };
+        // text：純回答（給 TTS 朗讀）；chunks：切好的 Discord 訊息；skipTTS：這次不要朗讀（點歌等）
+        return { text, chunks: splitMessage(text), skipTTS };
     } catch (error) {
         if (isEmptyResponseError(error)) logger.warn('AI', error.message);
         else if (!isQuotaError(error)) logger.error('AI', `Gemini Error (${MODEL_NAME}): ${error.message}`);
@@ -421,7 +423,7 @@ async function getGeminiResponseVoice(userId, prompt, channel = null, messageId 
         if (!mode) mode = getUserMode(userId, prompt);
         const history = channel ? await fetchUserChannelHistory(channel, userId, messageId, botId, mode) : [];
 
-        const result = await sendWithHistory({
+        const { response: result, skipTTS } = await sendWithHistory({
             mode, isVoice: true, history,
             parts: [{ text: prompt }],
             config: { ...GENERATION_CONFIG, maxOutputTokens: 150 },
@@ -432,7 +434,8 @@ async function getGeminiResponseVoice(userId, prompt, channel = null, messageId 
         const response = (result.text ?? '').trim();
         recordUsage('voice', result, { userId, mode });
         logger.debug('Voice AI', `${userId}: "${prompt}" → "${response}"`);
-        return response;
+        // text：回覆文字；skipTTS：這次用到了音樂工具，呼叫端不要朗讀
+        return { text: response, skipTTS };
     } catch (error) {
         if (!isQuotaError(error)) logger.error('Voice AI', `Gemini Error: ${error.message}`);
         throw error;
@@ -456,7 +459,7 @@ async function getShortResponse(userId, promptText, imageParts = [], channel = n
                 { text: `【發言者：使用者】\n${shortPrompt}` }
             ]);
 
-        const response = await sendWithHistory({
+        const { response } = await sendWithHistory({
             mode, history, parts: messageParts, userId,
             config: { ...GENERATION_CONFIG, maxOutputTokens: 300 },
             guildId: channel?.guildId ?? message?.guildId ?? null,

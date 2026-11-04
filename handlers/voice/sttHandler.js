@@ -313,11 +313,12 @@ async function handleWakeup(guildId, userId, member) {
     userState.lastActive    = Date.now();
 
     try {
-      const aiReply = await getGeminiResponseVoice(userId, sttResult.text, null, null, null, null, guildId, toolContextFrom('voice', { guild: currentState.guild, member: currentState.guild.members.cache.get(userId), channel: textChannel, userId }));
+      const { text: aiReply, skipTTS } = await getGeminiResponseVoice(userId, sttResult.text, null, null, null, null, guildId, toolContextFrom('voice', { guild: currentState.guild, member: currentState.guild.members.cache.get(userId), channel: textChannel, userId }));
       if (aiReply) {
         // AI 回覆後再次確認 state 仍有效
         if (!guildStates.get(guildId)?.active) return;
         await textChannel?.send(aiReply).catch(() => {});
+        if (skipTTS) return; // 點歌等音樂操作不朗讀，免得蓋過剛點的歌
         // playTTS 已在頂層 require，此處直接使用
         const ttsResult = await playTTS(guildId, aiReply);
         if (ttsResult.success) {
