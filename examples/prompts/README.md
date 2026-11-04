@@ -12,15 +12,11 @@ rm data/prompts/README.md
 - `_general.md`：所有文字回覆共用的規則
 - `_voice.md`：語音回覆時額外附加的規則
 - `_group.md`：單一人格模式（`/ai scope set kind:single`，大家共用同一個人格的群聊）額外附加的規則；沒有這個檔案時直接略過
-- `_memory.md`（選用）：長期記憶背景整理用的中性 prompt，內容就是程式內建版；沒有這個檔案（或內容空白）時直接用內建版。
-  可用 `{personaName}`、`{date}`、`{subjectRule}` 代入目前人格、今天日期與「多人格／單一人格」的 subject 規則。輸出格式由程式固定（JSON schema），改這個檔只會影響「記什麼、不記什麼」。
-  不打算修改的話可以不複製，之後程式更新內建版時才會跟著更新
 - `modes/loss.md`：找不到使用者所選模式時使用的預設模式（請保留這個代號）
 - `modes/example.md`：自訂模式的寫法範例，檔名即模式代號
 
-模式檔的 front matter 另外有兩個選填欄位：
+模式檔的 front matter 另外有一個選填欄位：
 
 - `singleScope: off`：只有擁有者能把這個人格設成單一人格模式的群組人格（戀人類人格建議設 off）
-- `memory: normal | strict | off`：長期記憶的整理方式，預設 normal；strict 只收客觀資料，off 只讀不寫
 
 詳細格式見主 README 的「AI 對話模式」。

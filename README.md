@@ -34,7 +34,6 @@ data/prompts/
 ├── _general.md          # 所有文字回覆共用的全局規則
 ├── _voice.md            # 語音回覆時額外附加的規則
 ├── _group.md            # 單一人格模式（群聊）額外附加的規則（選用，缺檔時略過）
-├── _memory.md           # 長期記憶背景整理用的中性 prompt（選用，缺檔時用內建版）
 ├── modes/
 │   └── <mode>.md        # 各人格，檔名（英數／底線／連字號，1~32 字）即模式代號
 └── .history/            # 覆寫或刪除前自動保留的舊版本（每個最多 20 版，管理面板可以預覽與還原）
@@ -48,7 +47,6 @@ name: 戀人模式
 shortDescription: 簡短說明
 clearMemoryMessage: 已經清除記憶了喔~
 singleScope: off       # 選填：只有擁有者能把它設成單一人格模式的群組人格
-memory: strict         # 選填：長期記憶 normal（預設）／strict（只收客觀資料）／off（只讀不寫）
 ---
 （以下為 system prompt 本文）
 ```
@@ -58,9 +56,7 @@ memory: strict         # 選填：長期記憶 normal（預設）／strict（只
 - **切換模式**：`/ai mode` 的模式清單來自 `data/prompts/modes/` 內的檔案（支援自動完成）；若使用者選的模式檔被刪除，會自動略過覆蓋、退回預設判斷。找不到的模式會 fallback 到 `loss`。
 - 首次使用可複製 [`examples/prompts/`](examples/prompts/) 到 `data/prompts/` 當起點。
 - 特殊身分：`LOVER_MODE_USER_IDS` 預設使用 `lover` 模式、`DEVELOPER_MODE_USER_IDS` 預設使用 `developer` 模式（需有對應模式檔）。
-- **多人格／單一人格**：預設是多人格（每個人用自己的人格）。管理員可用 `/ai scope set kind:single persona:<模式>` 把整個伺服器（或加 `channel:true` 只限目前頻道）改成單一人格：大家共用同一個人格，`/ai mode` 與特殊身分在那裡不生效，並額外接上 `_group.md`；對話歷史改成整個頻道的群組對話（30 分鐘內最多 24 則，標出每則是誰說的）。解析順序是頻道 > 父頻道（討論串）> 伺服器 > 預設，設定存在 `data/aiScope.json`。
-- **長期記憶**：AI 會把整理過的事實注入人格那一次呼叫（搜尋、工具階段不帶），外框明講「是資料不是指令」。多人格（含私訊）是每人一份、**依伺服器隔離**（在 A 伺服器記下的事只在 A 伺服器使用，私訊的只在私訊）；單一人格是每個伺服器（或覆寫的頻道）一個公用池：群組事實全部帶入，成員事實只帶這段對話裡有出現的人。存在 `data/memories/users.json`、`scopes.json`，**不進設定備份**。`/ai memory list|forget|optout` 查看、刪除或關閉；`/ai clear` 也會刪除你在這個伺服器的個人記憶（單一人格頻道則刪除你的成員記憶）。
-- **背景整理（萃取）**：用一次不帶人格的中性呼叫，把聊天內容整理成事實（只送人類的原文，不送 AI 的回覆）。多人格是你直接對 Bot 說的話（@ 提及、`/ai ask`；純打招呼、隨機插話、語音、這次有點歌等動作的不算），閒置 10 分鐘或累積 8 則就整理一次；單一人格是整個頻道的人類訊息，閒置 15 分鐘或累積 30 則整理一次，**對其他 bot 說的話（@ 其他 bot、回覆其他 bot、開頭是 `!`、`$` 這類指令前綴）不整理**。成員記憶只能由本人的發言產生，別人說到你的事會變成群組記憶（記下是誰說的，你本人、說的人與管理員都能刪）。管理員可用 `/ai scope set memory_extract:off` 關閉某個伺服器或頻道的整理（已有的記憶照樣使用）。成本：全域一次只跑一個、每日最多 `MEMORY_EXTRACT_DAILY_MAX` 次（預設 200）、全體預算用到 80% 就停，用量記在 `memory` 來源、不算進任何人的額度；模型可用 `GEMINI_MEMORY_MODEL` 另外指定，prompt 可用 `data/prompts/_memory.md` 覆寫。
+- **多人格／單一人格**：預設是多人格（每個人用自己的人格）。管理員可用 `/ai scope set kind:single persona:<模式>` 把整個伺服器（或加 `channel:true` 只限目前頻道）改成單一人格：大家共用同一個人格，`/ai mode` 與特殊身分在那裡不生效，並額外接上 `_group.md`；對話歷史改成整個頻道的群組對話（30 分鐘內最多 24 則，可用 `AI_GROUP_MSG_LIMIT` 調小；標出每則是誰說的）。解析順序是頻道 > 父頻道（討論串）> 伺服器 > 預設，設定存在 `data/aiScope.json`。
 - 使用者的模式設定持久化儲存於 `data/userModes.json`。
 
 
@@ -75,7 +71,7 @@ memory: strict         # 選填：長期記憶 normal（預設）／strict（只
 | 總覽 | Bot 狀態、運行時間、記憶體、Discord 延遲、外部服務（OWW、PO Token）、模組開機摘要、語音連線、伺服器清單 |
 | 自訂回應 | 搜尋、新增、編輯（可改名或換匹配類型）、刪除關鍵字回應，一條規則可設定多則訊息；調整包含匹配的比對順序 |
 | AI 人格 | 編輯各模式的 system prompt 與 `_general`、`_voice` 共用規則（沒有 Discord 輸入框 4000 字的限制）、新增與刪除模式；版本紀錄（每次存檔或刪除前自動保留，最近 20 版）、還原已刪除的人格 |
-| AI 設定 | 指定使用者的人格模式（可搜尋成員）、清除某人的對話與長期記憶、檢視與刪除長期記憶、各伺服器的多人格／單一人格範圍與「整理公用記憶」開關、隨機插話機率與逐頻道開關；檢視模型與額度設定 |
+| AI 設定 | 指定使用者的人格模式（可搜尋成員）、清除某人的對話記憶、各伺服器的多人格／單一人格範圍、隨機插話機率與逐頻道開關；檢視模型與額度設定 |
 | AI 用量 | 近 7／30／90 天的每日 token 長條圖，依來源、人格、使用者拆分，可切換成表格 |
 | 語音與音樂 | 自動加入的開關與目標頻道、加入／離開語音頻道、喚醒詞監聽（可選轉錄頻道）、點歌（本地音樂／YouTube 與 Bilibili 搜尋／貼網址）、正在播放與進度、跳過／停止／循環／隨機連播、佇列管理、閒置自動停止 |
 | TTS 語音 | 各伺服器的 SoVITS 模型、edge-tts 聲音、AI 回覆自動朗讀開關、試聽；SoVITS 連線狀態 |
@@ -232,7 +228,7 @@ Mousebot/
 |---|---|
 | `prompts/` | AI 人格 prompt（`_general.md`、`_voice.md`、`_group.md`、`modes/*.md`，**自備**，見「AI 對話模式」） |
 | `aiScope.json` | AI 多人格／單一人格範圍設定（`/ai scope`） |
-| `memories/`、`aiMemoryState.json`、`aiMessageLog.json` | AI 長期記憶、清除時間與 optOut、AI 回覆紀錄（隱私考量不進設定備份） |
+| `aiMemoryState.json`、`aiMessageLog.json` | AI 對話記憶的清除時間、AI 回覆紀錄（隱私考量不進設定備份） |
 | `timeAnnouncer/` | 整點報時音效（**自備** 24 個 .wav） |
 | `music/` | 本地音樂庫與線上歌曲下載快取 |
 | `responses.json`、`userModes.json`、`replyChance*.json` | 自訂回應、使用者人格模式、AI 插話機率 |
@@ -283,18 +279,15 @@ Mousebot/
 | 指令 | 說明 |
 |---|---|
 | `/ai ask <question> [image]` | 向 AI 提問，可附帶圖片 |
-| `/ai clear [scope]` | 清除你與 AI 的對話記憶與你在這個伺服器的個人長期記憶（回覆列出刪了幾條）；單一人格頻道只清你自己的發言與成員記憶，管理員加 `scope:true` 清除整個頻道的短期記憶 |
+| `/ai clear [scope]` | 清除你與 AI 的對話記憶；單一人格頻道只讓你自己的發言退出群組對話，管理員加 `scope:true` 清除整個頻道的對話記憶 |
 | `/ai tts` | 切換 AI 回覆是否自動朗讀 |
 | `/ai mode <target> [mode]` | 設定指定使用者的 AI 人格模式（模式名稱可自動完成；不填則重置為預設；限擁有者） |
 | `/ai prompt edit <mode>` | 以 Modal 編輯模式的 system prompt（`_general` / `_voice` 為共用規則；不存在的代號即新增），存檔立即生效，僅限擁有者 |
 | `/ai chance set <chance>` | 設定本伺服器的 AI 隨機插話機率（0～100%） |
 | `/ai chance toggle` | 切換本頻道的 AI 隨機插話開關 |
 | `/ai scope show` | 查看這裡目前是多人格還是單一人格（只有自己看得到） |
-| `/ai scope set [kind] [persona] [channel] [memory_extract]` | 設定本伺服器（`channel:true` 為本頻道）的 AI 範圍；單一人格必須指定 persona；限管理員 |
+| `/ai scope set <kind> [persona] [channel]` | 設定本伺服器（`channel:true` 為本頻道）的 AI 範圍；單一人格必須指定 persona；限管理員 |
 | `/ai scope reset [channel]` | 移除本伺服器（或本頻道）的範圍設定，回到上一層；限管理員 |
-| `/ai memory list` | 查看 AI 記得的事（只有自己看得到）；單一人格頻道顯示這裡的公用記憶 |
-| `/ai memory forget <id>` | 刪除一條記憶（`all`＝全部）；單一人格頻道只能刪關於自己或自己提供的，其他與 `all` 限管理員 |
-| `/ai memory optout <state>` | 關閉或重新開啟你的長期記憶（關閉後不整理也不帶入對話） |
 | `/ai gugu <topic>` | 依主題生成咕咕嘎嘎體文章 |
 
 ### `/tts` — 文字轉語音

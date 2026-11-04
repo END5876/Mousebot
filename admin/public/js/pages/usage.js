@@ -15,7 +15,6 @@ const SOURCE_LABEL = {
   gugu: '咕咕嘎嘎',
   billScan: '帳單辨識',
   tools: '工具判斷',
-  memory: '記憶整理',
 };
 const RANGES = [{ value: 7, label: '近 7 天' }, { value: 30, label: '近 30 天' }, { value: 90, label: '近 90 天' }];
 const FIELDS = ['calls', 'prompt', 'output', 'thoughts', 'cached', 'toolUse', 'searches', 'total', 'billable'];

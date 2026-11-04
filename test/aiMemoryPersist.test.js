@@ -34,21 +34,16 @@ test('aiMemoryState：clear time 重啟後仍有效', () => {
   memState.clearUserMemory('u1', 1000);
   memState.clearChannelMemory('c1', 2000);
   memState.clearUserInChannel('c1', 'u2', 3000);
-  memState.setOptOut('u3', true);
-  memState.setOptOut('u4', true);
-  memState.setOptOut('u4', false);
 
   memState._reset(); // 模擬重啟
   assert.equal(memState.getMemoryClearTime('u1'), 1000);
   assert.equal(memState.getChannelClearTime('c1'), 2000);
   assert.equal(memState.getUserInChannelClearTime('c1', 'u2'), 3000);
   assert.equal(memState.getUserInChannelClearTime('c1', 'u1'), 0);
-  assert.equal(memState.isOptedOut('u3'), true);
-  assert.equal(memState.isOptedOut('u4'), false);
 
   const raw = JSON.parse(fs.readFileSync(path.join(TMP, 'aiMemoryState.json'), 'utf8'));
   assert.deepEqual(raw, {
-    userClears: { u1: 1000 }, channelClears: { c1: 2000 }, userInChannel: { 'c1:u2': 3000 }, optOut: { u3: true },
+    userClears: { u1: 1000 }, channelClears: { c1: 2000 }, userInChannel: { 'c1:u2': 3000 },
   });
 });
 
@@ -59,12 +54,12 @@ test('aiMemoryState：預設呼叫用現在時間', () => {
 });
 
 test('aiMemoryState：壞資料被忽略', () => {
-  fs.writeFileSync(path.join(TMP, 'aiMemoryState.json'), JSON.stringify({ userClears: { a: 'x', b: 5 }, optOut: { c: 1 } }));
+  fs.writeFileSync(path.join(TMP, 'aiMemoryState.json'), JSON.stringify({ userClears: { a: 'x', b: 5 }, channelClears: { c: -1 } }));
   fs.rmSync(path.join(TMP, 'aiMemoryState.json.bak'), { force: true });
   memState._reset();
   assert.equal(memState.getMemoryClearTime('a'), 0);
   assert.equal(memState.getMemoryClearTime('b'), 5);
-  assert.equal(memState.isOptedOut('c'), false);
+  assert.equal(memState.getChannelClearTime('c'), 0);
 });
 
 test('aiMessageLog：紀錄重啟後仍有效（人格隔離不退化）', () => {

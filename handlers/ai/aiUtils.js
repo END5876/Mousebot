@@ -60,13 +60,12 @@ function setAITTSEnabled(guildId, value) {
     }
 }
 
-// 清除記憶的時間點（含頻道／成員層級與 optOut）已移到 aiMemoryState.js，存在 data/aiMemoryState.json，
+// 清除記憶的時間點（含頻道／成員層級）已移到 aiMemoryState.js，存在 data/aiMemoryState.json，
 // 重啟後仍有效；這裡 re-export 維持原本的呼叫方式
 const {
     clearUserMemory, getMemoryClearTime,
     clearChannelMemory, getChannelClearTime,
     clearUserInChannel, getUserInChannelClearTime,
-    setOptOut, isOptedOut,
 } = require('./aiMemoryState');
 
 // ════════════════════════════════════════════════════════
@@ -659,7 +658,6 @@ module.exports = {
     clearUserMemory, getMemoryClearTime,
     clearChannelMemory, getChannelClearTime,
     clearUserInChannel, getUserInChannelClearTime,
-    setOptOut, isOptedOut,
     isAITTSEnabled, setAITTSEnabled,
     recordBotMessageContext, getBotMessageContext,
     processAttachments,

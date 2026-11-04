@@ -10,9 +10,8 @@ const promptStore = require('./promptStore');
 const { recordUsage } = require('./tokenTracker');
 const { runToolStage } = require('./tools');
 const { getScope, getScopeForChannel } = require('./aiScope');
-const { escapeLabelBrackets, isDirectedAtOtherBot } = require('./memorySanitize');
-const { getChannelClearTime, getUserInChannelClearTime, isOptedOut } = require('./aiMemoryState');
-const memoryStore = require('./memoryStore');
+const { escapeLabelBrackets, isDirectedAtOtherBot } = require('./chatSanitize');
+const { getChannelClearTime, getUserInChannelClearTime } = require('./aiMemoryState');
 const {
     RESEARCH_PROMPT, RESEARCH_CONFIG, RESEARCH_NONE, FACTS_HEADER,
     isSearchEnabled, getGroundingInfo, stripSourcesLine,
@@ -126,15 +125,15 @@ function getUserMode(userId, scope = null) {
 
 /**
  * 組 system instruction。順序固定（讓隱式快取的前綴盡量不變）：
- * persona → _general → _voice（語音）→ _group（單一人格）→ 記憶區塊 → 名冊；
+ * persona → _general → _voice（語音）→ _group（單一人格）→ 名冊；
  * 之後 sendWithHistory 再接搜尋資料與工具結果。_group.md 不存在時 getShared 回傳空字串，直接略過。
- * @param {{mode:string, isVoice?:boolean, scope?:object|null, memoryBlock?:string, roster?:string}} opts
+ * @param {{mode:string, isVoice?:boolean, scope?:object|null, roster?:string}} opts
  */
-function buildSystemInstruction({ mode, isVoice = false, scope = null, memoryBlock = '', roster = '' }) {
+function buildSystemInstruction({ mode, isVoice = false, scope = null, roster = '' }) {
     const parts = [getSystemPrompt(mode), promptStore.getShared('_general')];
     if (isVoice) parts.push(promptStore.getShared('_voice'));
     if (scope?.kind === 'single') parts.push(promptStore.getShared('_group'));
-    parts.push(memoryBlock, roster);
+    parts.push(roster);
     return parts.filter(Boolean).join('\n\n');
 }
 
@@ -193,12 +192,10 @@ async function researchIfNeeded({ history, parts, guildId, userId, mode, mergeUs
  * @param {object|null} [opts.toolCtx]  tools.contextFrom() 的結果；null 代表不帶工具（隨機插話等）
  * @param {string}      [opts.toolText] 本次訊息的純文字，工具的關鍵字預篩用
  * @param {string}      [opts.roster]   名冊（單一人格）；跟 _group 一樣只進人格這次呼叫
- * @param {string}      [opts.memoryBlock] 長期記憶區塊；同樣只進人格這次呼叫（搜尋與工具階段不帶）
- * @param {Function}    [opts.onToolsExecuted] 工具階段確實執行了工具時立刻呼叫（人格回覆之後失敗也已經標記好）
  * @returns {Promise<object>} 人格的回覆
  */
-async function sendWithHistory({ mode, isVoice = false, scope = null, history, parts, config, guildId = null, userId = null, toolCtx = null, toolText = '', roster = '', memoryBlock = '', onToolsExecuted = null }) {
-    let systemInstruction = buildSystemInstruction({ mode, isVoice, scope, memoryBlock, roster });
+async function sendWithHistory({ mode, isVoice = false, scope = null, history, parts, config, guildId = null, userId = null, toolCtx = null, toolText = '', roster = '' }) {
+    let systemInstruction = buildSystemInstruction({ mode, isVoice, scope, roster });
 
     // 單一人格的群組歷史很長：搜尋與工具判斷只需要理解指代，只帶精簡過的純文字歷史；
     // 本次訊息併進最後一個 user content，不出現連續兩個 user。多人格維持原本的寫法。
@@ -216,9 +213,6 @@ async function sendWithHistory({ mode, isVoice = false, scope = null, history, p
     if (toolReport) {
         systemInstruction += `\n\n${toolReport.text}`;
     }
-    if (toolReport?.executed && onToolsExecuted) {
-        try { onToolsExecuted(); } catch (err) { logger.warn('AI', `onToolsExecuted 失敗（忽略）：${err.message}`); }
-    }
 
     const response = await generate({
         systemInstruction,
@@ -226,8 +220,7 @@ async function sendWithHistory({ mode, isVoice = false, scope = null, history, p
         config,
     });
     // skipTTS：這次用到了音樂等 quiet 工具，回覆只發文字不朗讀（朗讀會打斷剛點的歌）
-    // toolsExecuted：這次確實執行了工具（「沒有執行動作」的提醒不算），呼叫端據此不登記長期記憶萃取
-    return { response, skipTTS: !!toolReport?.skipTTS, toolsExecuted: !!toolReport?.executed };
+    return { response, skipTTS: !!toolReport?.skipTTS };
 }
 
 // ════════════════════════════════════════════════════════
@@ -400,7 +393,7 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId,
 /**
  * 單一人格（Mode B）：整個頻道的群組對話。
  *   - 截止時間：max(頻道 clear, 範圍切換時間)，且在 30 分鐘內
- *   - 人類訊息全部保留（對其他 bot 說的話也留著當上下文，只是不萃取）；作者自己 /ai clear 過的，早於那個時間的排除
+ *   - 人類訊息全部保留（對其他 bot 說的話也留著當上下文）；作者自己 /ai clear 過的，早於那個時間的排除
  *   - 本 bot 的訊息只留 aiMessageLog 有紀錄、且屬於同一個 scopeKey 的（音樂通知、/response、語音逐字稿自然被排除）；
  *     回給已清除成員、而且早於他 clear time 的也排除
  *   - 其他 bot（含 webhook）一律排除
@@ -500,7 +493,7 @@ function buildRoster(speakers, current = null) {
     return `【目前這段對話中的成員】\n${names.join('\n')}`;
 }
 
-// 名冊上的成員（含本次發言者），最多 15 人；名冊文字與成員記憶都用這份
+// 名冊上的成員（含本次發言者），最多 15 人；名冊文字用這份
 function rosterMembers(scope, speakers, userId, message, userName) {
     if (scope?.kind !== 'single') return [];
     const label = message ? labelForMessage(message, scope) : (userName ? speakerLabel(scope, userName) : null);
@@ -512,30 +505,6 @@ function rosterMembers(scope, speakers, userId, message, userName) {
 // 入口用：單一人格才有名冊；本次發言者用跟本次訊息相同的標籤（沒有 message 時是呼叫端傳的 userName）
 function rosterFor(scope, speakers, userId, message, userName) {
     return buildRoster(rosterMembers(scope, speakers, userId, message, userName));
-}
-
-/**
- * 長期記憶區塊（只進人格那次呼叫）。
- *   - 多人格（含 DM）：這個使用者在「這個伺服器」（DM 是 "dm"）的事實，依伺服器隔離
- *   - 單一人格：這個池的群組事實＋名冊上成員的成員事實
- * optOut 的人不注入。讀取失敗只記警告，絕不影響回覆。
- * @param {{ scope?: object|null, userId?: string|null, guildId?: string|null, name?: string, members?: {userId:string,label?:string}[] }} opts
- */
-function buildMemoryBlock({ scope = null, userId = null, guildId = null, name = '', members = [] }) {
-    try {
-        const store = memoryStore.getMemoryStore();
-        if (scope?.kind === 'single') {
-            if (!scope.scopeKey) return '';
-            const present = (members ?? []).filter(m => m?.userId && !isOptedOut(m.userId));
-            return memoryStore.renderScopeBlock(store.listScopeFacts(scope.scopeKey), { members: present });
-        }
-        if (!userId || isOptedOut(userId)) return '';
-        const facts = store.listUserFacts(userId, { origin: memoryStore.originOf(guildId) });
-        return memoryStore.renderUserBlock(facts, { name });
-    } catch (err) {
-        logger.warn('Memory', `讀取長期記憶失敗，這次不帶記憶：${err.message}`);
-        return '';
-    }
 }
 
 /**
@@ -688,7 +657,6 @@ async function buildMessagePartsWithReference(message, question, imageParts, bot
  * @param {object} [opts]
  * @param {object} [opts.scope]    aiHandler 解析好的範圍（只解析一次，人格、歷史與訊息紀錄才會一致）
  * @param {string} [opts.userName] 沒有 message 時（/ai ask）的發言者名稱；目前只在單一人格模式使用
- * @param {Function} [opts.onToolsExecuted] 確實執行了工具時立刻呼叫（在人格回覆之前，回覆失敗也不會漏掉）
  */
 async function getGeminiResponse(userId, prompt, imageParts = [], channel = null, messageId = null, botId = null, message = null, mode = null, toolCtx = null, opts = {}) {
     try {
@@ -706,14 +674,10 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
             ]);
 
         const guildId = channel?.guildId ?? message?.guildId ?? null;
-        const members = rosterMembers(scope, speakers, userId, message, opts?.userName);
-        const { response, skipTTS, toolsExecuted } = await sendWithHistory({
+        const { response, skipTTS } = await sendWithHistory({
             mode, scope, history, parts: messageParts, config: GENERATION_CONFIG, guildId, userId,
-            toolCtx, toolText: prompt, onToolsExecuted: opts?.onToolsExecuted ?? null,
-            roster: buildRoster(members),
-            memoryBlock: buildMemoryBlock({
-                scope, userId, guildId, members, name: message?.author?.username ?? opts?.userName ?? '',
-            }),
+            toolCtx, toolText: prompt,
+            roster: rosterFor(scope, speakers, userId, message, opts?.userName),
         });
         recordUsage('chat', response, { userId, mode });
         const text = response.text ?? '';
@@ -722,9 +686,8 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
             const finishReason = response.candidates?.[0]?.finishReason ?? response.promptFeedback?.blockReason ?? 'unknown';
             throw new AiEmptyResponseError(finishReason);
         }
-        // text：純回答（給 TTS 朗讀）；chunks：切好的 Discord 訊息；skipTTS：這次不要朗讀（點歌等）；
-        // toolsExecuted：這次確實執行了工具（呼叫端不登記長期記憶萃取）
-        return { text, chunks: splitMessage(text), skipTTS, toolsExecuted };
+        // text：純回答（給 TTS 朗讀）；chunks：切好的 Discord 訊息；skipTTS：這次不要朗讀（點歌等）
+        return { text, chunks: splitMessage(text), skipTTS };
     } catch (error) {
         if (isEmptyResponseError(error)) logger.warn('AI', error.message);
         else if (!isQuotaError(error)) logger.error('AI', `Gemini Error (${MODEL_NAME}): ${error.message}`);
@@ -736,6 +699,7 @@ async function getGeminiResponse(userId, prompt, imageParts = [], channel = null
  * @param {object} [opts]
  * @param {object} [opts.scope] 已解析的範圍；沒傳時用 opts.textChannel / toolCtx.textChannel（語音對應的文字頻道）或伺服器設定解析
  * @param {object} [opts.textChannel] 語音回覆送去的文字頻道（toolCtx 可能是 null，例如沒開 STT 的錄音按鈕，所以另外傳）
+ * @param {object} [opts.member] 說話的伺服器成員；單一人格模式用來產生【發言者】標籤（多人格不使用）
  */
 async function getGeminiResponseVoice(userId, prompt, channel = null, messageId = null, botId = null, mode = null, guildId = null, toolCtx = null, opts = {}) {
     try {
@@ -749,16 +713,22 @@ async function getGeminiResponseVoice(userId, prompt, channel = null, messageId 
         // 語音呼叫時 channel 是 null，所以沒有歷史（維持現狀）
         const { history } = await loadHistory({ scope, channel, userId, messageId, botId, mode });
 
-        const voiceGuildId = guildId ?? channel?.guildId ?? null;
+        // 單一人格會附上 _group 規則，它預期每則訊息都有【發言者】標籤，所以語音也補上；多人格維持原本的純文字
+        let voiceText = prompt;
+        if (scope?.kind === 'single') {
+            const m = opts?.member;
+            const uname = m?.user?.username;
+            const name = opts?.userName ?? (m ? `${m.displayName ?? m.user?.globalName ?? uname}${uname ? ` (@${uname})` : ''}` : null);
+            voiceText = `【發言者：${speakerLabel(scope, name)}】\n${escapeLabelBrackets(prompt)}`;
+        }
+
         const { response: result, skipTTS } = await sendWithHistory({
             mode, isVoice: true, scope, history,
-            parts: [{ text: prompt }],
+            parts: [{ text: voiceText }],
             config: { ...GENERATION_CONFIG, maxOutputTokens: 150 },
-            guildId: voiceGuildId,
+            guildId: guildId ?? channel?.guildId ?? null,
             userId,
             toolCtx, toolText: prompt,
-            // 語音只注入、不萃取：多人格是說話者的個人事實，單一人格是群組事實＋說話者的成員事實
-            memoryBlock: buildMemoryBlock({ scope, userId, guildId: voiceGuildId, members: [{ userId }] }),
         });
         const response = (result.text ?? '').trim();
         recordUsage('voice', result, { userId, mode });
@@ -794,16 +764,11 @@ async function getShortResponse(userId, promptText, imageParts = [], channel = n
                 { text: `【發言者：${speakerLabel(scope, opts?.userName)}】\n${escapeLabelBrackets(shortPrompt)}` }
             ]);
 
-        const guildId = channel?.guildId ?? message?.guildId ?? null;
-        const members = rosterMembers(scope, speakers, userId, message, opts?.userName);
         const { response } = await sendWithHistory({
             mode, scope, history, parts: messageParts, userId,
-            roster: buildRoster(members),
-            memoryBlock: buildMemoryBlock({
-                scope, userId, guildId, members, name: message?.author?.username ?? opts?.userName ?? '',
-            }),
+            roster: rosterFor(scope, speakers, userId, message, opts?.userName),
             config: { ...GENERATION_CONFIG, maxOutputTokens: 300 },
-            guildId,
+            guildId: channel?.guildId ?? message?.guildId ?? null,
         });
         recordUsage('short', response, { userId, mode });
         const text = (response.text ?? '').trim();
@@ -836,7 +801,6 @@ module.exports = {
         buildRoster,
         rosterFor,
         rosterMembers,
-        buildMemoryBlock,
         labelForMessage,
         RESEARCH_HISTORY_LIMIT,
         TOOL_HISTORY_LIMIT,

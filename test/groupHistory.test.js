@@ -346,7 +346,8 @@ test('多人格歷史：單一人格期間的回覆（kind single）不算，截
 
 test('多人格歷史：AI_HISTORY_SKIP_OTHER_BOTS 預設關，開啟後濾掉對其他 bot 說的話', async () => {
   const u = USERS.ming;
-  const cmd = msg(u, '!play 某首歌', 3);
+  const cmd = msg(u, '@musicbot 播某首歌', 3);
+  cmd.mentions.users.set(USERS.other.id, USERS.other);
   const normal = msg(u, '一般的話', 2);
   const cur = msg(u, '現在', 0);
   const ch = fakeChannel([cur, normal, cmd]);

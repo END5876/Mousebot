@@ -12,7 +12,6 @@ const { dataPath } = require('../../utils/dataDir');
 //   data/prompts/_general.md        所有文字回覆共用的全局規則
 //   data/prompts/_voice.md          語音回覆時額外附加的規則
 //   data/prompts/_group.md          單一人格模式（多人群聊）額外附加的規則；缺檔時略過
-//   data/prompts/_memory.md         長期記憶背景萃取用的中性 prompt（選用）；缺檔或空白時用內建版（memoryExtractor）
 //   data/prompts/modes/<mode>.md    各模式，檔名即模式代號
 //   data/prompts/.history/          覆寫或刪除前自動保留的舊版本（每個代號最近 20 版）
 //
@@ -22,7 +21,6 @@ const { dataPath } = require('../../utils/dataDir');
 //   shortDescription: ...
 //   clearMemoryMessage: 已經清除記憶了喔~
 //   singleScope: off      （選填）off＝只有擁有者能把它設成單一人格模式的群組人格
-//   memory: strict        （選填）長期記憶：normal（預設）／strict（只收客觀資料）／off（只讀不寫）
 //   ---
 //   （以下為 system prompt 本文）
 //
@@ -40,14 +38,12 @@ const SHARED_FILES = {
     _general: path.join(PROMPTS_DIR, '_general.md'),
     _voice:   path.join(PROMPTS_DIR, '_voice.md'),
     _group:   path.join(PROMPTS_DIR, '_group.md'),
-    _memory:  path.join(PROMPTS_DIR, '_memory.md'),
 };
 
 const MODE_KEY_RE = /^[A-Za-z0-9_-]{1,32}$/;
-const META_KEYS   = ['name', 'shortDescription', 'clearMemoryMessage', 'singleScope', 'memory'];
+const META_KEYS   = ['name', 'shortDescription', 'clearMemoryMessage', 'singleScope'];
 // front matter 的列舉欄位：不在清單內的值當作沒寫（由使用端套預設值）
 const SINGLE_SCOPE_VALUES = ['on', 'off'];
-const MEMORY_VALUES       = ['normal', 'strict', 'off'];
 
 function enumOrUndefined(value, allowed) {
     const v = String(value ?? '').trim().toLowerCase();
@@ -83,7 +79,6 @@ function parseModeFile(key, raw) {
         shortDescription:   meta.shortDescription || undefined,
         clearMemoryMessage: meta.clearMemoryMessage || DEFAULT_CLEAR_MESSAGE,
         singleScope:        enumOrUndefined(meta.singleScope, SINGLE_SCOPE_VALUES),
-        memory:             enumOrUndefined(meta.memory, MEMORY_VALUES),
         prompt:             body.trim(),
     };
 }
@@ -174,7 +169,7 @@ function getMode(key) {
     return modes.get(key) ?? null;
 }
 
-/** 取得共用規則（_general / _voice / _group / _memory），不存在回傳空字串 */
+/** 取得共用規則（_general / _voice / _group），不存在回傳空字串 */
 function getShared(key) {
     refresh();
     return shared[key]?.text ?? '';
@@ -269,8 +264,8 @@ function atomicWrite(file, content) {
 /**
  * 新增或覆寫模式檔
  * @param {string} key
- * @param {{name?:string, shortDescription?:string, clearMemoryMessage?:string, singleScope?:string, memory?:string, prompt:string}} data
- *   singleScope / memory：undefined＝保留原值（/ai prompt edit 不會帶這兩個欄位），空字串＝移除
+ * @param {{name?:string, shortDescription?:string, clearMemoryMessage?:string, singleScope?:string, prompt:string}} data
+ *   singleScope：undefined＝保留原值（/ai prompt edit 不會帶這個欄位），空字串＝移除
  */
 function saveMode(key, data) {
     if (!MODE_KEY_RE.test(key)) throw new Error(`模式代號只能使用英數、底線、連字號（1~32 字）：${key}`);
@@ -290,12 +285,11 @@ function mergeModeData(key, prev, data) {
         shortDescription:   data.shortDescription ?? prev?.shortDescription,
         clearMemoryMessage: data.clearMemoryMessage?.trim() || prev?.clearMemoryMessage || DEFAULT_CLEAR_MESSAGE,
         singleScope:        data.singleScope === undefined ? prev?.singleScope : enumOrUndefined(data.singleScope, SINGLE_SCOPE_VALUES),
-        memory:             data.memory === undefined ? prev?.memory : enumOrUndefined(data.memory, MEMORY_VALUES),
         prompt:             data.prompt,
     };
 }
 
-/** 覆寫共用規則（_general / _voice / _group / _memory） */
+/** 覆寫共用規則（_general / _voice / _group） */
 function saveShared(key, text) {
     if (!SHARED_FILES[key]) throw new Error(`未知的共用規則：${key}`);
     const content = `${text.trim()}\n`;
@@ -328,7 +322,6 @@ module.exports = {
     SHARED_KEYS: Object.keys(SHARED_FILES),
     MODE_KEY_RE,
     SINGLE_SCOPE_VALUES,
-    MEMORY_VALUES,
     listModes,
     getMode,
     getShared,

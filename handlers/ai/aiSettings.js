@@ -27,18 +27,4 @@ module.exports = {
     GROUP_TIME_LIMIT_MS: 30 * 60 * 1000,                                      // 只看 30 分鐘內
     GROUP_IMAGE_MSGS: 3,                                                      // 只下載最後幾則訊息的圖片
     GROUP_TEXT_MAX: 400,                                                      // 每則訊息截斷字數
-
-    // ── 長期記憶上限 ──
-    MEMORY_CAPS: Object.freeze({
-        userFacts: 30,           // Mode A 每人事實
-        groupFacts: 40,          // Mode B 群組事實
-        memberFacts: 15,         // Mode B 每位成員事實
-        factChars: 120,          // 每條事實字數
-        userBlockChars: 1500,    // Mode A 注入區塊字數
-        scopeBlockChars: 2500,   // Mode B 注入區塊字數
-        tombstoneDays: 30,       // tombstone 保留天數
-        tombstoneMax: 200,       // tombstone 最多條數
-    }),
-    // 背景萃取每日呼叫上限
-    MEMORY_EXTRACT_DAILY_MAX: toPositiveInt(process.env.MEMORY_EXTRACT_DAILY_MAX, 200),
 };

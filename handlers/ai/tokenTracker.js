@@ -67,7 +67,7 @@ function addTo(group, key, counts) {
 
 /**
  * 記錄單次 Gemini 呼叫的 token 用量（同時印出 log 並累加進每日統計）
- * @param {string} source 呼叫來源：chat / short / voice / gugu / billScan / search / tools / memory（長期記憶萃取，userId 為 null，不算進任何人的額度）
+ * @param {string} source 呼叫來源：chat / short / voice / gugu / billScan / search / tools
  * @param {object} response Gemini 的 result.response
  * @param {{ userId?: string, mode?: string }} [meta]
  */

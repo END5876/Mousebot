@@ -4,7 +4,6 @@
 const aiChance = require('../../handlers/ai/aiChance');
 const aiScope = require('../../handlers/ai/aiScope');
 const aiUtils = require('../../handlers/ai/aiUtils');
-const memoryStore = require('../../handlers/ai/memoryStore');
 const modeSelector = require('../../handlers/ai/modeSelector');
 const promptStore = require('../../handlers/ai/promptStore');
 const tokenTracker = require('../../handlers/ai/tokenTracker');
@@ -18,8 +17,6 @@ const {
 const { HttpError, str, bool, oneOf, snowflake, requireReady } = require('../http');
 
 const MAX_USAGE_DAYS = 90;
-const FACT_ID_RE = /^[0-9a-f]{6}$/;
-const MEMORY_TYPES = ['user', 'scope'];
 
 function modeName(key) {
   return promptStore.getMode(key)?.name ?? null;
@@ -32,51 +29,23 @@ function scopeEntry(e) {
     kind: e.kind ?? null,
     persona: e.persona ?? null,
     personaName: e.persona ? modeName(e.persona) : null,
-    memoryExtract: typeof e.memoryExtract === 'boolean' ? e.memoryExtract : null,
     changedAt: e.changedAt || null,
   };
 }
 
-// PUT body：{ kind?: 'multi'|'single', persona?, memoryExtract? }
+// PUT body：{ kind: 'multi'|'single', persona? }
 function scopeCfg(body) {
-  const cfg = {};
-  if (body.kind !== undefined) cfg.kind = oneOf(body.kind, aiScope.KINDS, '範圍類型');
+  const cfg = { kind: oneOf(body.kind, aiScope.KINDS, '範圍類型') };
   if (cfg.kind === 'single') {
     cfg.persona = str(body.persona, '人格', { max: 32 });
     if (!promptStore.getMode(cfg.persona)) throw new HttpError(400, `找不到「${cfg.persona}」這個模式`);
   }
-  if (body.memoryExtract !== undefined) cfg.memoryExtract = bool(body.memoryExtract, '整理公用記憶');
-  if (cfg.kind === undefined && cfg.memoryExtract === undefined) throw new HttpError(400, '沒有要修改的設定');
   return cfg;
 }
 
 function describeCfg(cfg) {
-  const parts = [];
-  if (cfg.kind) parts.push(cfg.kind === 'single' ? `單一人格「${modeName(cfg.persona) ?? cfg.persona}」` : '多人格');
-  if (cfg.memoryExtract !== undefined) parts.push(`整理公用記憶${cfg.memoryExtract ? '開啟' : '關閉'}`);
-  return parts.join('、');
+  return cfg.kind === 'single' ? `單一人格「${modeName(cfg.persona) ?? cfg.persona}」` : '多人格';
 }
-
-function scopeKeyParam(value) {
-  if (typeof value !== 'string' || !memoryStore.SCOPE_KEY_RE.test(value)) throw new HttpError(400, '記憶池代號不正確');
-  return value;
-}
-
-function factIdParam(value) {
-  if (typeof value !== 'string' || !FACT_ID_RE.test(value)) throw new HttpError(400, '記憶代號不正確');
-  return value;
-}
-
-// 給前端的事實：不帶內部欄位以外的東西，originGuildId 換成伺服器名稱
-const factView = (f, extra = {}) => ({
-  id: f.id,
-  text: f.text,
-  category: f.category ?? 'other',
-  createdAt: f.createdAt ?? null,
-  updatedAt: f.updatedAt ?? null,
-  expiresAt: f.expiresAt ?? null,
-  ...extra,
-});
 
 // 每個統計桶補上「計費 token」（total 扣掉搜尋取回的內容，見 tokenTracker）
 function withBillable(group) {
@@ -108,7 +77,7 @@ module.exports = function registerAi(router, client) {
           channels: [...channels, ...extra].map((c) => ({ ...c, disabled: disabled.has(c.id) })),
           scope: scopeEntry(scopes.guilds[guild.id]),
           channelScopes: Object.fromEntries(Object.entries(scopes.channels)
-            .filter(([, e]) => e.guildId === guild.id && (e.kind || typeof e.memoryExtract === 'boolean'))
+            .filter(([, e]) => e.guildId === guild.id && e.kind)
             .map(([id, e]) => [id, { ...scopeEntry(e), name: describeChannel(client, id).name ?? null }])),
         };
       });
@@ -219,84 +188,11 @@ module.exports = function registerAi(router, client) {
     audit(`移除 ${await userName(userId)} 的 AI 人格指定`);
   });
 
-  // ── 清除記憶：短期（對話脈絡的截止時間，重啟後仍有效）＋這個人所有的個人長期記憶；
-  //    body.scopes 為 true 時，連他在各單一人格公用池裡的成員記憶也一起刪除 ─────
-  router.post('/api/ai/memory/:userId', async ({ params, body, audit }) => {
+  // ── 清除對話記憶（等同對方自己下 /ai clear；只影響最近 10 分鐘內的對話脈絡）─────
+  router.post('/api/ai/memory/:userId', async ({ params, audit }) => {
     const userId = snowflake(params.userId, '使用者');
-    const withScopes = body?.scopes === undefined ? false : bool(body.scopes, '成員記憶');
-    const store = memoryStore.getMemoryStore();
     aiUtils.clearUserMemory(userId);
-    const facts = store.forgetAllUser(userId);
-    const memberFacts = withScopes ? store.forgetMemberEverywhere(userId) : 0;
-    audit(`清除 ${await userName(userId)} 的 AI 對話記憶（個人長期記憶 ${facts} 條${withScopes ? `、群組成員記憶 ${memberFacts} 條` : ''}）`);
-    return { facts, memberFacts };
-  });
-
-  // ── 長期記憶檢視與刪除 ──────────────────────────────────
-  // type=user：個人記憶（Mode A）；type=scope：單一人格的公用池（Mode B）。有 id 時只回傳那一個
-  router.get('/api/ai/memories', async ({ query }) => {
-    const type = oneOf(query.get('type') ?? 'user', MEMORY_TYPES, '記憶類型');
-    const id = query.get('id');
-    const store = memoryStore.getMemoryStore();
-    const lookupUsers = async (ids) => (client.isReady() ? resolveUsers(client, ids) : {});
-    const originName = (origin) => (origin === 'dm' ? '私訊' : guildName(origin));
-
-    if (type === 'user') {
-      const entries = id
-        ? [{ userId: snowflake(id, '使用者'), facts: store.listUserFacts(id) }]
-        : store.listAllUsers();
-      const users = await lookupUsers(entries.map((e) => e.userId));
-      return {
-        users: entries.map((e) => ({
-          user: users[e.userId] ?? { id: e.userId, name: null, missing: true },
-          facts: e.facts.map((f) => factView(f, {
-            origin: f.originGuildId ?? 'dm', originName: originName(f.originGuildId ?? 'dm'), persona: f.persona ?? null,
-          })),
-        })),
-      };
-    }
-
-    const entries = id ? [{ scopeKey: scopeKeyParam(id), ...store.listScopeFacts(id) }] : store.listAllScopes();
-    const memberIds = entries.flatMap((e) => Object.keys(e.members));
-    const reporterIds = entries.flatMap((e) => e.groupFacts.map((f) => f.reportedBy).filter(Boolean));
-    const users = await lookupUsers([...memberIds, ...reporterIds]);
-    const scopeName = (key) => {
-      const [kind, raw] = [key[0], key.slice(2)];
-      if (kind === 'g') return guildName(raw);
-      const ch = describeChannel(client, raw);
-      return ch.name ? `${ch.guildName ?? '?'} › #${ch.name}` : raw;
-    };
-    return {
-      scopes: entries.map((e) => ({
-        scopeKey: e.scopeKey,
-        name: scopeName(e.scopeKey),
-        groupFacts: e.groupFacts.map((f) => factView(f, { reportedBy: f.reportedBy ? (users[f.reportedBy] ?? { id: f.reportedBy }) : null })),
-        members: Object.entries(e.members).map(([uid, m]) => ({
-          user: users[uid] ?? { id: uid, name: m.name || null, missing: true },
-          name: m.name,
-          facts: m.facts.map((f) => factView(f)),
-        })),
-      })),
-    };
-  });
-
-  // DELETE /api/ai/memories/user/<userId>/<factId>、/api/ai/memories/scope/<scopeKey>/<factId>
-  router.delete('/api/ai/memories/:type/:id/:factId', async ({ params, audit }) => {
-    const type = oneOf(params.type, MEMORY_TYPES, '記憶類型');
-    const factId = factIdParam(params.factId);
-    const store = memoryStore.getMemoryStore();
-    if (type === 'user') {
-      const userId = snowflake(params.id, '使用者');
-      const removed = store.forgetUserFact(userId, factId);
-      if (!removed) throw new HttpError(404, '找不到這條記憶，可能已經被刪除');
-      audit(`刪除 ${await userName(userId)} 的一條 AI 長期記憶（${factId}）`);
-      return { removed: true };
-    }
-    const scopeKey = scopeKeyParam(params.id);
-    const removed = store.forgetScopeFact(scopeKey, factId);
-    if (!removed) throw new HttpError(404, '找不到這條記憶，可能已經被刪除');
-    audit(`刪除公用記憶池 ${scopeKey} 的一條${removed.type === 'member' ? '成員' : '群組'}記憶（${factId}）`);
-    return { removed: true };
+    audit(`清除 ${await userName(userId)} 的 AI 對話記憶`);
   });
 
   router.get('/api/members/search', async ({ query }) => {

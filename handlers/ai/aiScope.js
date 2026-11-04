@@ -2,17 +2,16 @@
 // AI 的「範圍」設定：決定某個伺服器／頻道用多人格（Mode A，預設）還是單一人格（Mode B）。
 // 存在 data/aiScope.json，結構照 aiChance.js：設定很少變動，修改時用 writeJsonAtomic 整份寫回。
 //
-//   getScope(guildId, channelId, parentId) → { kind, persona, scopeKey, epoch, changedAt, source, memoryExtract }
+//   getScope(guildId, channelId, parentId) → { kind, persona, scopeKey, epoch, changedAt, source }
 //
 // 解析順序：頻道 > 父頻道（討論串才有）> 伺服器 > 預設 multi；沒有 guildId（DM）一律 multi。
-//   - 頻道或伺服器的設定可以只有 memoryExtract、沒有 kind：kind 往下一層繼承。
-//     reset 時也不整筆刪除，而是留下沒有 kind 的 tombstone（保留 epoch/changedAt），
+//   - 沒有 kind 的設定（tombstone）：kind 往下一層繼承。
+//     reset 時不整筆刪除，而是留下沒有 kind 的 tombstone（保留 epoch/changedAt），
 //     否則退回伺服器設定後拿到較舊的 changedAt，single 期間的訊息會流回 Mode A 的歷史。
-//   - 討論串沒有自己的設定時跟著父頻道，scopeKey 也和父頻道相同（共用記憶池）。
+//   - 討論串沒有自己的設定時跟著父頻道，scopeKey 也和父頻道相同（共用同一段群組對話）。
 //   - epoch 用全域遞增的序號：每次 kind/persona 真的改變就取下一號。
 //     有效的 epoch/changedAt 取「決定 kind 的那一層」以及比它更細的各層（tombstone）的最大值，
 //     所以任何會影響這個頻道的切換都會讓 epoch 變大，而無關的上層切換不影響。
-//   - 只改 memoryExtract 不動 epoch/changedAt（不改變記憶池的歸屬）。
 //
 // 注意：不要 require aiUtils（會連帶載入 ttsHandler 與 sharp）。
 // 第一次用到時才讀檔（lazy），require 本模組不會碰到任何檔案。
@@ -39,7 +38,6 @@ function cleanEntry(raw) {
     if (KINDS.includes(raw.kind)) e.kind = raw.kind;
     if (e.kind === 'single' && typeof raw.persona === 'string' && raw.persona) e.persona = raw.persona;
     if (e.kind === 'single' && !e.persona) delete e.kind;   // 壞資料：single 卻沒有人格，當作繼承
-    if (typeof raw.memoryExtract === 'boolean') e.memoryExtract = raw.memoryExtract;
     e.epoch = Number.isFinite(raw.epoch) && raw.epoch > 0 ? raw.epoch : 0;
     e.changedAt = Number.isFinite(raw.changedAt) && raw.changedAt > 0 ? raw.changedAt : 0;
     if (raw.changedBy) e.changedBy = String(raw.changedBy);
@@ -79,13 +77,22 @@ function save() {
 // ── 解析 ────────────────────────────────────────────────
 
 const DM_SCOPE = Object.freeze({
-    kind: 'multi', persona: null, scopeKey: null, epoch: 0, changedAt: 0, source: 'dm', memoryExtract: true,
+    kind: 'multi', persona: null, scopeKey: null, epoch: 0, changedAt: 0, source: 'dm',
 });
+
+// 已警告過的不存在人格：每個代號只警告一次，避免每則訊息都寫一行 log；人格檔恢復後清掉，之後再被刪會重新警告
+const warnedMissing = new Set();
 
 /** 人格檔還在就用它，否則（管理面板刪掉了）退回預設人格 */
 function resolvePersona(key) {
-    if (key && lookupMode(key)) return key;
-    if (key) logger.warn('AiScope', `範圍指定的人格 ${key} 不存在，改用 ${DEFAULT_MODE}`);
+    if (key && lookupMode(key)) {
+        warnedMissing.delete(key);
+        return key;
+    }
+    if (key && !warnedMissing.has(key)) {
+        warnedMissing.add(key);
+        logger.warn('AiScope', `範圍指定的人格 ${key} 不存在，改用 ${DEFAULT_MODE}（之後不再重複提示）`);
+    }
     return DEFAULT_MODE;
 }
 
@@ -113,20 +120,18 @@ function getScope(guildId, channelId = null, parentId = null) {
         changedAt = Math.max(changedAt, lv.e.changedAt);
         if (lv.e.kind) { decided = lv; break; }
     }
-    const extractLevel = levels.find(lv => typeof lv.e.memoryExtract === 'boolean');
-    const memoryExtract = extractLevel ? extractLevel.e.memoryExtract : true;
 
     if (!decided || decided.e.kind === 'multi') {
         return Object.freeze({
             kind: 'multi', persona: null, scopeKey: null, epoch, changedAt,
-            source: decided ? decided.src : 'default', memoryExtract,
+            source: decided ? decided.src : 'default',
         });
     }
     return Object.freeze({
         kind: 'single',
         persona: resolvePersona(decided.e.persona),
         scopeKey: decided.src === 'guild' ? `g:${guildId}` : `c:${decided.id}`,
-        epoch, changedAt, source: decided.src, memoryExtract,
+        epoch, changedAt, source: decided.src,
     });
 }
 
@@ -158,8 +163,7 @@ function validateCfg(cfg) {
     if (cfg === null) return { ok: true };
     if (!cfg || typeof cfg !== 'object') return { ok: false, error: '設定格式不正確' };
     if (cfg.kind !== undefined && !KINDS.includes(cfg.kind)) return { ok: false, error: 'kind 只能是 multi 或 single' };
-    if (cfg.memoryExtract !== undefined && typeof cfg.memoryExtract !== 'boolean') return { ok: false, error: 'memoryExtract 必須是布林值' };
-    if (cfg.kind === undefined && cfg.memoryExtract === undefined) return { ok: false, error: '沒有要修改的設定' };
+    if (cfg.kind === undefined) return { ok: false, error: '沒有要修改的設定' };
     if (cfg.kind === 'single') {
         if (!cfg.persona) return { ok: false, error: '單一人格模式必須指定人格' };
         if (!lookupMode(cfg.persona)) return { ok: false, error: `找不到「${cfg.persona}」這個人格` };
@@ -169,7 +173,7 @@ function validateCfg(cfg) {
 
 /**
  * 套用設定到某一筆（伺服器或頻道）
- * cfg：{ kind?, persona?, memoryExtract? }；null＝重置（留下 tombstone）
+ * cfg：{ kind, persona? }；null＝重置（留下 tombstone）
  */
 function applyTo(map, id, cfg, byUserId, extra = {}) {
     const v = validateCfg(cfg);
@@ -186,16 +190,12 @@ function applyTo(map, id, cfg, byUserId, extra = {}) {
         kindChanged = !!prev.kind;
         delete next.kind;
         delete next.persona;
-        delete next.memoryExtract;
     } else {
-        if (cfg.kind !== undefined) {
-            const persona = cfg.kind === 'single' ? cfg.persona : undefined;
-            kindChanged = prev?.kind !== cfg.kind || prev?.persona !== persona;
-            next.kind = cfg.kind;
-            if (persona) next.persona = persona;
-            else delete next.persona;
-        }
-        if (cfg.memoryExtract !== undefined) next.memoryExtract = cfg.memoryExtract;
+        const persona = cfg.kind === 'single' ? cfg.persona : undefined;
+        kindChanged = prev?.kind !== cfg.kind || prev?.persona !== persona;
+        next.kind = cfg.kind;
+        if (persona) next.persona = persona;
+        else delete next.persona;
     }
 
     if (kindChanged) {
@@ -209,18 +209,15 @@ function applyTo(map, id, cfg, byUserId, extra = {}) {
 
     map[id] = next;
     save();
-    // 有沒有實際改到東西：比對前後的 kind / persona / memoryExtract
-    // （只有 memoryExtract 覆寫的 reset 也算有改，不能只看 kindChanged）
-    const changed = prev?.kind !== next.kind
-        || prev?.persona !== next.persona
-        || prev?.memoryExtract !== next.memoryExtract;
+    // 有沒有實際改到東西：比對前後的 kind / persona
+    const changed = prev?.kind !== next.kind || prev?.persona !== next.persona;
     return { ok: true, changed };
 }
 
 /**
  * 設定或重置伺服器的範圍
  * @param {string} guildId
- * @param {{kind?:'multi'|'single', persona?:string, memoryExtract?:boolean}|null} cfg
+ * @param {{kind:'multi'|'single', persona?:string}|null} cfg
  * @param {string} [byUserId]
  */
 function setGuildScope(guildId, cfg, byUserId) {
@@ -235,7 +232,7 @@ function setGuildScope(guildId, cfg, byUserId) {
  * 設定或重置頻道（含討論串）的範圍覆寫
  * @param {string} channelId
  * @param {string} guildId
- * @param {{kind?:'multi'|'single', persona?:string, memoryExtract?:boolean}|null} cfg
+ * @param {{kind:'multi'|'single', persona?:string}|null} cfg
  * @param {string} [byUserId]
  */
 function setChannelScope(channelId, guildId, cfg, byUserId) {

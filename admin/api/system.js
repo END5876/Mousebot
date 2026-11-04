@@ -18,7 +18,7 @@ const RESTART_DELAY_MS = 500;
 const SUBCOMMAND_TYPES = [1, 2]; // SUB_COMMAND、SUB_COMMAND_GROUP
 
 // 設定備份包含的檔案。不含任何金鑰（admin-session-secret、cookies），也不含暫存或可重建的檔案。
-// AI 記憶相關（aiMemoryState.json、aiMessageLog.json、memories/）涉及使用者隱私，刻意不放進備份
+// AI 對話狀態（aiMemoryState.json 清除時間、aiMessageLog.json 回覆紀錄）涉及使用者隱私，刻意不放進備份
 const SETTINGS_FILES = [
   'responses.json', 'userModes.json', 'replyChance.json', 'replyChanceDisabled.json', 'autojoin.json',
   'steamchannel.json', 'epicchannel.json', 'timeAnnouncerSettings.json', 'voiceMonitorEnabled.json',
@@ -43,7 +43,7 @@ function buildBackup(includeStats) {
     if (value !== undefined) files[rel] = value;
   }
   // AI 人格：共用規則與各模式（不含 .history 版本紀錄）
-  for (const rel of ['prompts/_general.md', 'prompts/_voice.md', 'prompts/_group.md', 'prompts/_memory.md']) {
+  for (const rel of ['prompts/_general.md', 'prompts/_voice.md', 'prompts/_group.md']) {
     const value = readDataFile(rel);
     if (value !== undefined) files[rel] = value;
   }

@@ -313,7 +313,8 @@ async function handleWakeup(guildId, userId, member) {
     userState.lastActive    = Date.now();
 
     try {
-      const { text: aiReply, skipTTS } = await getGeminiResponseVoice(userId, sttResult.text, null, null, null, null, guildId, toolContextFrom('voice', { guild: currentState.guild, member: currentState.guild.members.cache.get(userId), channel: textChannel, userId }), { textChannel });
+      const speaker = currentState.guild.members.cache.get(userId);
+      const { text: aiReply, skipTTS } = await getGeminiResponseVoice(userId, sttResult.text, null, null, null, null, guildId, toolContextFrom('voice', { guild: currentState.guild, member: speaker, channel: textChannel, userId }), { textChannel, member: speaker });
       if (aiReply) {
         // AI 回覆後再次確認 state 仍有效
         if (!guildStates.get(guildId)?.active) return;

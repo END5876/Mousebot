@@ -17,7 +17,7 @@ Object.assign(process.env, {
   ADMIN_SESSION_SECRET: 's'.repeat(40), // 不產生 data/admin-session-secret
   ADMIN_AUDIT_FILE: path.join(TMP, 'audit.json'), // 操作紀錄寫到暫存資料夾
   ADMIN_REVOKED_FILE: path.join(TMP, 'revoked.json'), // 登出清單也是
-  MOUSEBOT_DATA_DIR: TMP, // AI 記憶狀態、AI 回覆紀錄等新資料檔都寫到暫存資料夾
+  MOUSEBOT_DATA_DIR: TMP, // AI 清除記憶時間、AI 回覆紀錄、AI 範圍等資料檔都寫到暫存資料夾
   GROQ_API_KEY: process.env.GROQ_API_KEY || 'test', // sttHandler 載入時就會建立 Groq client，沒有金鑰會直接丟例外
   OWW_HTTP_URL: '',
   YT_POT_PROVIDER_URL: 'http://127.0.0.1:1',
@@ -141,41 +141,6 @@ test('admin：路由錯誤回明確的狀態碼', async () => {
   assert.equal((await call('PUT', '/api/responses', { cookie, body: '[]' })).status, 400);
   assert.equal((await call('PUT', '/api/responses', { cookie, body: 'x=1', headers: { 'x-mousebot-admin': '1', 'content-type': 'text/plain' } })).status, 415);
   assert.equal((await call('GET', '/api/voice', { cookie })).status, 503); // Discord 尚未就緒
-});
-
-test('admin：長期記憶 API——檢視、刪除單條（寫進暫存資料夾）、參數驗證', async () => {
-  const { getMemoryStore } = require('../handlers/ai/memoryStore');
-  const store = getMemoryStore();
-  const U = '900000000000000001';
-  const K = 'g:100000000000000001';
-  store.applyUserOps(U, { add: [{ text: '不吃香菜', category: 'preference' }] }, { origin: '100000000000000001' });
-  store.applyScopeOps(K, { group: { add: [{ text: '每週五打球', category: 'group', reportedBy: U }] } });
-  const { cookie } = await login();
-
-  const users = await (await call('GET', '/api/ai/memories?type=user', { cookie })).json();
-  const entry = users.users.find((e) => e.user.id === U);
-  assert.equal(entry.facts[0].text, '不吃香菜');
-  assert.equal(entry.facts[0].origin, '100000000000000001');
-  const scopes = await (await call('GET', '/api/ai/memories?type=scope', { cookie })).json();
-  const pool = scopes.scopes.find((e) => e.scopeKey === K);
-  assert.equal(pool.groupFacts[0].text, '每週五打球');
-
-  assert.equal((await call('GET', '/api/ai/memories?type=nope', { cookie })).status, 400);
-  assert.equal((await call('DELETE', `/api/ai/memories/scope/x:1/${pool.groupFacts[0].id}`, { cookie })).status, 400);
-  assert.equal((await call('DELETE', `/api/ai/memories/user/${U}/zzzzzz`, { cookie })).status, 400);
-  assert.equal((await call('DELETE', `/api/ai/memories/user/${U}/abcdef`, { cookie })).status, 404);
-
-  assert.equal((await call('DELETE', `/api/ai/memories/user/${U}/${entry.facts[0].id}`, { cookie })).status, 200);
-  assert.equal(store.listUserFacts(U).length, 0);
-  assert.equal((await call('DELETE', `/api/ai/memories/scope/${encodeURIComponent(K)}/${pool.groupFacts[0].id}`, { cookie })).status, 200);
-  assert.equal(store.listScopeFacts(K).groupFacts.length, 0);
-
-  // 清除記憶：連成員記憶一起刪
-  store.applyUserOps(U, { add: [{ text: '會說日文', category: 'profile' }] }, { origin: 'dm' });
-  store.applyScopeOps(K, { members: { [U]: { name: 'ming', ops: { add: [{ text: '喜歡爬山', category: 'preference' }] } } } });
-  const cleared = await (await call('POST', `/api/ai/memory/${U}`, { cookie, body: { scopes: true } })).json();
-  assert.deepEqual(cleared, { facts: 1, memberFacts: 1 });
-  assert.ok(audit.list({ limit: 50 }).some((e) => e.action.includes('個人長期記憶 1 條')));
 });
 
 test('admin：限流來源——IPv6 以 /64 為單位；私有網段連線才採信 X-Forwarded-For', () => {

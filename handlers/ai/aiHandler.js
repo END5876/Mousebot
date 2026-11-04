@@ -21,7 +21,7 @@ const {
 const { contextFrom: toolContextFrom } = require('./tools');
 
 const {
-    clearUserMemory, clearUserInChannel, clearChannelMemory, setOptOut, isOptedOut,
+    clearUserMemory, clearUserInChannel, clearChannelMemory,
     isAITTSEnabled, setAITTSEnabled,
     recordBotMessageContext,
     processAttachments,
@@ -51,8 +51,6 @@ const {
     isPersonaAllowedInSingle,
 } = require('./aiScope');
 
-const { getMemoryStore, originOf } = require('./memoryStore');
-const memoryExtractor = require('./memoryExtractor');
 const { generateGuguArticle, getGuguErrorMessage } = require('./gugugagaGenerator');
 const bootSummary = require('../../utils/bootSummary');
 const { isOwner } = require('../../utils/config');
@@ -80,7 +78,7 @@ async function replyEmptyNotice(message) {
 }
 
 // ════════════════════════════════════════════════════════
-//  /ai 單一指令，底下掛 ask / clear / tts / mode / prompt(group) / chance(group) / scope(group) / memory(group) / gugu
+//  /ai 單一指令，底下掛 ask / clear / tts / mode / prompt(group) / chance(group) / scope(group) / gugu
 // ════════════════════════════════════════════════════════
 const aiCommand = {
     data: new SlashCommandBuilder()
@@ -181,8 +179,8 @@ const aiCommand = {
                         .setDescription('設定本伺服器（或本頻道）的 AI 範圍')
                         .addStringOption(opt =>
                             opt.setName('kind')
-                                .setDescription('多人格或單一人格（不填則只修改「整理公用記憶」開關）')
-                                .setRequired(false)
+                                .setDescription('多人格或單一人格')
+                                .setRequired(true)
                                 .addChoices(
                                     { name: '多人格（每人各自的人格）', value: 'multi' },
                                     { name: '單一人格（大家共用同一個人格）', value: 'single' },
@@ -198,15 +196,6 @@ const aiCommand = {
                                 .setDescription('只套用到目前這個頻道（預設 false＝整個伺服器）')
                                 .setRequired(false)
                         )
-                        .addStringOption(opt =>
-                            opt.setName('memory_extract')
-                                .setDescription('是否把這裡的對話整理成公用記憶')
-                                .setRequired(false)
-                                .addChoices(
-                                    { name: '開啟', value: 'on' },
-                                    { name: '關閉', value: 'off' },
-                                )
-                        )
                 )
                 .addSubcommand(sub =>
                     sub.setName('reset')
@@ -215,39 +204,6 @@ const aiCommand = {
                             opt.setName('channel')
                                 .setDescription('只重置目前這個頻道的覆寫（預設 false＝整個伺服器）')
                                 .setRequired(false)
-                        )
-                )
-        )
-
-        // ── /ai memory list / forget / optout（子指令群組） ──
-        .addSubcommandGroup(group =>
-            group.setName('memory')
-                .setDescription('AI 長期記憶：查看、刪除或關閉')
-                .addSubcommand(sub =>
-                    sub.setName('list')
-                        .setDescription('查看 AI 記得的事（只有你看得到）')
-                )
-                .addSubcommand(sub =>
-                    sub.setName('forget')
-                        .setDescription('刪除一條長期記憶')
-                        .addStringOption(opt =>
-                            opt.setName('id')
-                                .setDescription('記憶的代號（用 /ai memory list 查看），all＝全部')
-                                .setRequired(true)
-                                .setMaxLength(16)
-                        )
-                )
-                .addSubcommand(sub =>
-                    sub.setName('optout')
-                        .setDescription('關閉或重新開啟你的長期記憶（關閉後不整理也不帶入對話）')
-                        .addStringOption(opt =>
-                            opt.setName('state')
-                                .setDescription('on＝關閉長期記憶，off＝重新開啟')
-                                .setRequired(true)
-                                .addChoices(
-                                    { name: '關閉我的長期記憶', value: 'on' },
-                                    { name: '重新開啟我的長期記憶', value: 'off' },
-                                )
                         )
                 )
         )
@@ -281,12 +237,6 @@ const aiCommand = {
             if (sub === 'reset') return handleScopeReset(interaction);
             return;
         }
-        if (group === 'memory') {
-            if (sub === 'list')   return handleMemoryList(interaction);
-            if (sub === 'forget') return handleMemoryForget(interaction);
-            if (sub === 'optout') return handleMemoryOptOut(interaction);
-            return;
-        }
 
         switch (sub) {
             case 'ask':   return handleAsk(interaction);
@@ -313,7 +263,8 @@ async function handleAsk(interaction) {
     // 範圍只在這裡解析一次，人格、歷史與訊息紀錄都用同一份
     const scope      = getScopeForChannel(interaction.channel, guildId);
     const mode       = getUserMode(userId, scope);
-    const logExtra   = { kind: scope.kind, scopeKey: scope.scopeKey, askText: interaction.options.getString('question') };
+    // askText 只有群組歷史（單一人格）會用到；多人格不把問題原文寫進磁碟
+    const logExtra   = { kind: scope.kind, scopeKey: scope.scopeKey, askText: scope.kind === 'single' ? interaction.options.getString('question') : null };
     const labelName  = `${interaction.member?.displayName ?? interaction.user.globalName ?? userName} (@${userName})`;
 
     await interaction.deferReply();
@@ -347,7 +298,7 @@ async function handleAsk(interaction) {
         const toolCtx = toolContextFrom('text', {
             guild: interaction.guild, member: interaction.member, channel: interaction.channel, userId,
         });
-        const { text: answer, chunks, skipTTS, toolsExecuted } = await getGeminiResponse(userId, question, imageParts, interaction.channel, interaction.id, botId, null, mode, toolCtx, { scope, userName: labelName });
+        const { text: answer, chunks, skipTTS } = await getGeminiResponse(userId, question, imageParts, interaction.channel, interaction.id, botId, null, mode, toolCtx, { scope, userName: labelName });
 
         const replyMsg = await interaction.editReply({ content: chunks[0] });
         recordBotMessageContext(replyMsg.id, mode, userId, userName, logExtra);
@@ -355,11 +306,6 @@ async function handleAsk(interaction) {
         for (let i = 1; i < chunks.length; i++) {
             const followUpMsg = await interaction.followUp({ content: chunks[i], fetchReply: true });
             recordBotMessageContext(followUpMsg.id, mode, userId, userName, logExtra);
-        }
-
-        // 長期記憶：多人格（含私訊）登記本人的問題；單一人格的問題不在頻道訊息裡，不萃取；執行了工具的不登記
-        if (scope.kind !== 'single' && !toolsExecuted) {
-            memoryExtractor.note({ userId, guildId, text: question, msgId: interaction.id, persona: mode });
         }
 
         if (!skipTTS) await speakWithTTS(interaction, answer, guildId);
@@ -386,14 +332,10 @@ async function handleClear(interaction) {
     const baseMessage = promptStore.getMode(mode)?.clearMemoryMessage ?? '🧠 已清除你的對話記憶。';
 
     if (scope.kind !== 'single') {
-        // 多人格：清這個使用者的短期記憶（跨頻道，持久化），
-        // 加上他在「這個伺服器」（私訊就是私訊）的長期事實：個人記憶依伺服器隔離
+        // 多人格：清這個使用者的對話記憶（跨頻道，持久化）
         clearUserMemory(userId);
-        const forgotten = forgetLongTerm(() => getMemoryStore().forgetAllUser(userId, { origin: originOf(interaction.guildId) }));
-        const notes = [];
-        if (forgotten > 0) notes.push(`> 🗑️ 也刪除了你在${interaction.guildId ? '這個伺服器' : '私訊'}的 ${forgotten} 條長期記憶。`);
-        if (wantScope) notes.push('> ℹ️ 這裡是多人格模式，`scope` 選項只在單一人格頻道有效，已照常清除你自己的記憶。');
-        return interaction.reply({ content: [baseMessage, ...notes].join('\n') });
+        const note = wantScope ? '\n> ℹ️ 這裡是多人格模式，`scope` 選項只在單一人格頻道有效，已照常清除你自己的記憶。' : '';
+        return interaction.reply({ content: baseMessage + note });
     }
 
     // 單一人格是群聊：群組歷史是依頻道抓的，所以清除也以這個頻道（討論串就是討論串本身）為單位
@@ -405,23 +347,9 @@ async function handleClear(interaction) {
         clearChannelMemory(channelId);
         return interaction.reply({ content: `${baseMessage}\n> 已清除**這個頻道所有人**的對話記憶（單一人格：${getModeName(scope.persona)}）。` });
     }
-    // 一般成員只讓自己的發言退出這個頻道的群組歷史，並刪除自己在這個公用池的成員記憶；
-    // 措辭不能像是整個頻道都清掉了
+    // 一般成員只讓自己的發言退出這個頻道的群組歷史；措辭不能像是整個頻道都清掉了
     clearUserInChannel(channelId, userId);
-    const forgotten = forgetLongTerm(() => getMemoryStore().forgetMember(scope.scopeKey, userId));
-    const lines = [baseMessage, '> 這裡是單一人格模式，只清除了**你自己**在這個頻道的對話記憶，其他人的不受影響。'];
-    if (forgotten > 0) lines.push(`> 🗑️ 也刪除了群組記憶裡關於你的 ${forgotten} 條成員記憶。`);
-    await interaction.reply({ content: lines.join('\n') });
-}
-
-// 刪除長期記憶失敗不影響 /ai clear 的短期部分
-function forgetLongTerm(fn) {
-    try {
-        return fn();
-    } catch (err) {
-        logger.warn('Memory', `刪除長期記憶失敗：${err.message}`);
-        return 0;
-    }
+    await interaction.reply({ content: `${baseMessage}\n> 這裡是單一人格模式，只清除了**你自己**在這個頻道的對話記憶，其他人的不受影響。` });
 }
 
 // ── /ai tts ──────────────────────────────────────────────
@@ -689,8 +617,7 @@ function describeScope(scope) {
     return [
         `🎭 目前範圍：${kindText}`,
         `來源：${SCOPE_SOURCE_LABEL[scope.source] ?? scope.source}`,
-        scope.scopeKey ? `記憶池：\`${scope.scopeKey}\`` : null,
-        `整理公用記憶：${scope.memoryExtract ? '開啟' : '關閉'}`,
+        scope.scopeKey ? `範圍代號：\`${scope.scopeKey}\`` : null,
     ].filter(Boolean).join('\n');
 }
 
@@ -723,36 +650,26 @@ async function handleScopeSet(interaction) {
     if (!await checkScopeAdmin(interaction)) return;
 
     const personaInput = interaction.options.getString('persona')?.trim().toLowerCase() || null;
-    // 只填 persona 沒填 kind 時，當作要切成單一人格
-    const kind         = interaction.options.getString('kind') ?? (personaInput ? 'single' : null);
+    const kind         = interaction.options.getString('kind', true);
     const onChannel    = interaction.options.getBoolean('channel') ?? false;
-    const extractOpt   = interaction.options.getString('memory_extract');
     const byOwner      = isOwner(interaction.user.id);
 
-    if (!kind && !extractOpt) {
-        return interaction.reply({ content: '❌ 請至少指定 kind 或 memory_extract。', flags: MessageFlags.Ephemeral });
-    }
-
-    const cfg = {};
-    if (extractOpt) cfg.memoryExtract = extractOpt === 'on';
-    if (kind) {
-        cfg.kind = kind;
-        if (kind === 'single') {
-            if (!personaInput) {
-                return interaction.reply({ content: '❌ 單一人格模式必須指定 persona（人格代號）。', flags: MessageFlags.Ephemeral });
-            }
-            const matched = getAvailableModes().find(m => m.toLowerCase() === personaInput);
-            if (!matched) {
-                return interaction.reply({ content: `❌ 找不到人格：\`${personaInput}\``, flags: MessageFlags.Ephemeral });
-            }
-            if (!isPersonaAllowedInSingle(matched, byOwner)) {
-                return interaction.reply({
-                    content: `❌ 「${getModeName(matched)}」不開放設成群組共用的人格（只有擁有者能設定）。`,
-                    flags: MessageFlags.Ephemeral,
-                });
-            }
-            cfg.persona = matched;
+    const cfg = { kind };
+    if (kind === 'single') {
+        if (!personaInput) {
+            return interaction.reply({ content: '❌ 單一人格模式必須指定 persona（人格代號）。', flags: MessageFlags.Ephemeral });
         }
+        const matched = getAvailableModes().find(m => m.toLowerCase() === personaInput);
+        if (!matched) {
+            return interaction.reply({ content: `❌ 找不到人格：\`${personaInput}\``, flags: MessageFlags.Ephemeral });
+        }
+        if (!isPersonaAllowedInSingle(matched, byOwner)) {
+            return interaction.reply({
+                content: `❌ 「${getModeName(matched)}」不開放設成群組共用的人格（只有擁有者能設定）。`,
+                flags: MessageFlags.Ephemeral,
+            });
+        }
+        cfg.persona = matched;
     }
 
     const guildId   = interaction.guildId;
@@ -790,9 +707,6 @@ async function handleScopeSet(interaction) {
                 ? '在這裡大家都會跟同一個人格對話，個人的 `/ai mode` 設定只在多人格的地方生效。'
                 : '在這個伺服器（沒有自己覆寫的頻道）大家都會跟同一個人格對話，個人的 `/ai mode` 設定只在多人格的地方生效。',
         );
-        if (changedScope.memoryExtract) {
-            lines.push('> ℹ️ 之後這裡的對話可能會被整理成群組的公開記憶，可以用 `/ai memory list` 查看、`/ai memory forget` 刪除，或用 `/ai memory optout` 讓自己的發言不被整理；管理員也可以用 `/ai scope set memory_extract:off` 關閉整理。');
-        }
         return interaction.reply({ content: lines.join('\n') });
     }
     return interaction.reply({ content: lines.join('\n'), flags: MessageFlags.Ephemeral });
@@ -814,151 +728,6 @@ async function handleScopeReset(interaction) {
     const after  = getScopeForChannel(interaction.channel, guildId);
     return interaction.reply({
         content: `${result.changed ? '🔄 已移除' : 'ℹ️ 本來就沒有'}${target}。\n\n${describeScope(after)}`,
-        flags: MessageFlags.Ephemeral,
-    });
-}
-
-// ── /ai memory list / forget / optout ───────────────────
-const MEMORY_LIST_MAX_CHARS = 1800;
-
-function fmtExpire(ts) {
-    if (!Number.isFinite(ts)) return '';
-    const d = new Date(ts);
-    return `（到 ${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}）`;
-}
-
-// 一行一條；超過 Discord 字數上限時截斷並註明還有幾條
-function joinFactLines(header, lines, footer) {
-    const out = [header];
-    let used = header.length + footer.length;
-    let shown = 0;
-    for (const line of lines) {
-        if (used + line.length + 1 > MEMORY_LIST_MAX_CHARS) break;
-        out.push(line);
-        used += line.length + 1;
-        shown++;
-    }
-    if (shown < lines.length) out.push(`…還有 ${lines.length - shown} 條沒有列出`);
-    out.push(footer);
-    return out.filter(Boolean).join('\n');
-}
-
-const factLine = (f, suffix = '') => `\`${f.id}\` ${f.text}${fmtExpire(f.expiresAt)}${suffix}`;
-const isScopeAdmin = interaction => !!isAdmin(interaction) || isOwner(interaction.user.id);
-
-async function handleMemoryList(interaction) {
-    const userId = interaction.user.id;
-    const scope  = getScopeForChannel(interaction.channel, interaction.guildId);
-    const store  = getMemoryStore();
-    const optNote = isOptedOut(userId) ? '> ⚠️ 你已關閉長期記憶（optout）：不會整理你的發言，也不會帶入對話。' : '';
-
-    if (scope.kind === 'single') {
-        const data  = store.listScopeFacts(scope.scopeKey);
-        const admin = isScopeAdmin(interaction);
-        const lines = [];
-        if (data.groupFacts.length) {
-            lines.push('**群組共同記憶**');
-            for (const f of data.groupFacts) {
-                const mine = f.reportedBy === userId || f.about === userId;
-                lines.push(factLine(f, mine ? '（你可以刪除）' : ''));
-            }
-        }
-        const own = data.members[userId];
-        if (own?.facts.length) {
-            lines.push('**關於你的成員記憶**');
-            own.facts.forEach(f => lines.push(factLine(f)));
-        }
-        // 其他成員的記憶：管理員看得到內容，一般成員只看得到條數
-        const others = Object.entries(data.members).filter(([uid]) => uid !== userId);
-        if (others.length) {
-            if (admin) {
-                for (const [uid, m] of others) {
-                    lines.push(`**成員：${m.name || uid}**`);
-                    m.facts.forEach(f => lines.push(factLine(f)));
-                }
-            } else {
-                const count = others.reduce((n, [, m]) => n + m.facts.length, 0);
-                lines.push(`其他 ${others.length} 位成員共有 ${count} 條成員記憶。`);
-            }
-        }
-        const header = `🧠 這裡（單一人格：${getModeName(scope.persona)}）的公用記憶${lines.length ? '：' : '目前是空的。'}`;
-        const footer = [
-            optNote,
-            lines.length ? '> 用 `/ai memory forget id:<代號>` 刪除；關於你自己的、或你提供的群組記憶可以自己刪，其他的需要管理員。' : '',
-            '> 個人（多人格）的記憶請到多人格的頻道或私訊查看。',
-        ].filter(Boolean).join('\n');
-        return interaction.reply({ content: joinFactLines(header, lines, footer), flags: MessageFlags.Ephemeral });
-    }
-
-    // 多人格（含私訊）：本人的事實，依來源伺服器分組，目前這裡的排在最前面
-    const here  = originOf(interaction.guildId);
-    const facts = store.listUserFacts(userId);
-    const originLabel = origin => {
-        if (origin === here) return interaction.guildId ? '這個伺服器' : '私訊';
-        if (origin === 'dm') return '私訊';
-        return interaction.client.guilds.cache.get(origin)?.name ?? '其他伺服器';
-    };
-    const groups = new Map();
-    for (const f of facts) {
-        const origin = f.originGuildId ?? 'dm';
-        if (!groups.has(origin)) groups.set(origin, []);
-        groups.get(origin).push(f);
-    }
-    const order = [...groups.keys()].sort((a, b) => (a === here ? -1 : b === here ? 1 : 0));
-    const lines = order.flatMap(origin => [`**${originLabel(origin)}**`, ...groups.get(origin).map(f => factLine(f))]);
-    const header = facts.length ? `🧠 我記得關於你的事（${facts.length} 條）：` : '🧠 目前沒有關於你的長期記憶。';
-    const footer = [
-        optNote,
-        facts.length ? '> 每個伺服器的記憶只會在該伺服器使用。用 `/ai memory forget id:<代號>` 刪除單條，`id:all` 全部刪除。' : '',
-    ].filter(Boolean).join('\n');
-    return interaction.reply({ content: joinFactLines(header, lines, footer), flags: MessageFlags.Ephemeral });
-}
-
-async function handleMemoryForget(interaction) {
-    const userId = interaction.user.id;
-    const id     = interaction.options.getString('id').trim().toLowerCase();
-    const scope  = getScopeForChannel(interaction.channel, interaction.guildId);
-    const store  = getMemoryStore();
-    const reply  = content => interaction.reply({ content, flags: MessageFlags.Ephemeral });
-
-    if (scope.kind === 'single') {
-        if (id === 'all') {
-            // 清空整個公用池只限管理員
-            if (!isScopeAdmin(interaction)) {
-                return reply('❌ 刪除這裡全部的公用記憶需要管理員權限。只想刪掉關於你的記憶，可以用 `/ai clear`。');
-            }
-            const count = store.resetScope(scope.scopeKey);
-            logger.info('Memory', `${interaction.user.username} 清空了 ${scope.scopeKey} 的公用記憶（${count} 條）`);
-            return reply(`🗑️ 已刪除這裡全部的公用記憶（${count} 條）。`);
-        }
-        const found = store.findScopeFact(scope.scopeKey, id);
-        if (found) {
-            // 本人：關於自己的成員記憶、自己提供或關於自己的群組記憶；其他的只限管理員
-            const allowed = isScopeAdmin(interaction)
-                || (found.type === 'member' && found.userId === userId)
-                || (found.type === 'group' && (found.fact.reportedBy === userId || found.fact.about === userId));
-            if (!allowed) return reply('❌ 這條記憶不是關於你的，只有管理員能刪除。');
-            store.forgetScopeFact(scope.scopeKey, id);
-            return reply(`🗑️ 已刪除：${found.fact.text}`);
-        }
-        // 不在這個池：可能是自己的個人記憶（代號是在私訊或多人格頻道看到的），往下找
-    } else if (id === 'all') {
-        const count = store.forgetAllUser(userId);
-        return reply(count > 0 ? `🗑️ 已刪除關於你的全部長期記憶（${count} 條）。` : 'ℹ️ 目前沒有關於你的長期記憶。');
-    }
-
-    const removed = store.forgetUserFact(userId, id);
-    if (removed) return reply(`🗑️ 已刪除：${removed.text}`);
-    return reply(`❌ 找不到代號 \`${id}\` 的記憶，請用 \`/ai memory list\` 確認。`);
-}
-
-async function handleMemoryOptOut(interaction) {
-    const on = interaction.options.getString('state') === 'on';
-    setOptOut(interaction.user.id, on);
-    return interaction.reply({
-        content: on
-            ? '🔕 已關閉你的長期記憶：之後不會整理你的發言，也不會把記憶帶進對話。已經存下的記憶不會自動刪除，可以用 `/ai memory forget` 刪掉。'
-            : '🔔 已重新開啟你的長期記憶。',
         flags: MessageFlags.Ephemeral,
     });
 }
@@ -1029,12 +798,6 @@ function setupAICommands(client) {
         const scope    = getScopeForChannel(channel, guildId);
         const logExtra = { kind: scope.kind, scopeKey: scope.scopeKey };
 
-        // 長期記憶（單一人格）：頻道裡的人類訊息只計數，萃取時才抓原文。
-        // 要放在「@ 了別人就略過」之前，否則 @ 其他人的訊息不會被計數；bot（含 webhook、PluralKit）在最上面就已排除。
-        // 頻道萃取開關、人格 memory: off、optOut 都在 noteActivity 裡檢查；多人格頻道直接 return。
-        // 沒有 GEMINI_API_KEY 時 AI 整個停用，不排萃取（否則每次都只會打 API 失敗）
-        if (scope.kind === 'single' && process.env.GEMINI_API_KEY) memoryExtractor.noteActivity({ channel, scope, botId, authorId: userId });
-
         if (hasOtherMention && !hasReference && !isMentioned) return;
 
         // ── @ 提及（頻道停用不影響此區塊）──
@@ -1104,10 +867,9 @@ function setupAICommands(client) {
 
             try {
                 const mode = getUserMode(userId, scope);
-                let notedText = '';
 
                 // 「正在輸入中」涵蓋圖片下載/壓縮階段，使用者不用乾等
-                const { text: answer, chunks, skipTTS, toolsExecuted } = await withTyping(message.channel, async () => {
+                const { text: answer, chunks, skipTTS } = await withTyping(message.channel, async () => {
                     // emoji → 網址圖片、embed、附件三者彼此獨立，並行處理
                     const [{ question, emojiParts, urlImagePartsRaw }, embedParts, attachmentParts] = await Promise.all([
                         processCustomEmojis(rawQuestion).then(async ({ cleanedText, emojiParts }) => ({
@@ -1140,21 +902,12 @@ function setupAICommands(client) {
                     const toolCtx = toolContextFrom('text', {
                         guild: message.guild, member: message.member, channel: message.channel, userId,
                     });
-                    notedText = question;
-                    // 單一人格：確實執行了工具就立刻標記排除萃取（之後回覆失敗、送出失敗也不會漏掉）
-                    const onToolsExecuted = scope.kind === 'single' ? () => memoryExtractor.excludeMessage(messageId) : null;
-                    return getGeminiResponse(userId, question, imageParts, channel, messageId, botId, message, mode, toolCtx, { scope, onToolsExecuted });
+                    return getGeminiResponse(userId, question, imageParts, channel, messageId, botId, message, mode, toolCtx, { scope });
                 });
 
                 for (const chunk of chunks) {
                     const sentMsg = await message.channel.send(chunk);
                     recordBotMessageContext(sentMsg.id, mode, userId, userName, logExtra);
-                }
-
-                // 長期記憶：本輪確實執行了工具（點歌、記帳…）的訊息不萃取。
-                // 多人格在這裡登記本人的原文；單一人格已經在上面 noteActivity 計數過，排除標記在工具階段（onToolsExecuted）就做了
-                if (scope.kind !== 'single' && !toolsExecuted) {
-                    memoryExtractor.note({ userId, guildId, text: notedText, msgId: messageId, persona: mode });
                 }
 
                 if (!skipTTS) await speakWithTTS(message, answer, guildId);

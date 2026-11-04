@@ -66,13 +66,12 @@ module.exports = function registerPrompts(router) {
       shortDescription: mode.shortDescription ?? '',
       clearMemoryMessage: mode.clearMemoryMessage,
       singleScope: mode.singleScope ?? '',
-      memory: mode.memory ?? '',
       prompt: mode.prompt,
     };
   });
 
-  // body：{ name, shortDescription, clearMemoryMessage, singleScope?, memory?, prompt, create? }；create 為 true 時代號已存在就拒絕
-  // singleScope / memory 沒帶（舊版前端）就保留檔案裡原本的值，空字串＝移除
+  // body：{ name, shortDescription, clearMemoryMessage, singleScope?, prompt, create? }；create 為 true 時代號已存在就拒絕
+  // singleScope 沒帶（舊版前端）就保留檔案裡原本的值，空字串＝移除
   router.put('/api/prompts/modes/:key', ({ params, body, audit }) => {
     const key = modeKey(params);
     const existed = !!promptStore.getMode(key);
@@ -84,7 +83,6 @@ module.exports = function registerPrompts(router) {
       shortDescription: str(body.shortDescription, '簡短說明', { max: 200, allowEmpty: true }),
       clearMemoryMessage: str(body.clearMemoryMessage, '清除記憶訊息', { max: 500, allowEmpty: true }),
       singleScope: body.singleScope === undefined ? undefined : oneOf(body.singleScope, ['', ...promptStore.SINGLE_SCOPE_VALUES], '群組人格限制'),
-      memory: body.memory === undefined ? undefined : oneOf(body.memory, ['', ...promptStore.MEMORY_VALUES], '長期記憶'),
       prompt: str(body.prompt, 'Prompt 本文', { max: MAX_PROMPT }),
     });
     audit(`${existed ? '修改' : '建立'} AI 人格「${promptStore.getMode(key)?.name ?? key}」（${key}）`);

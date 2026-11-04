@@ -134,9 +134,8 @@ const NO_ACTION_RULE = '【注意】這次沒有替使用者播放音樂、記�
  * @param {string} [opts.mode]    人格模式（只用於用量統計）
  * @param {boolean} [opts.mergeUser] 本次訊息併進歷史最後的 user content（單一人格）。
  *                                   群組歷史的 part 數／字數由呼叫端先精簡（aiCore 的 compactHistory）
- * @returns {Promise<{ text: string, skipTTS: boolean, executed?: boolean }|null>}
- *          text：附在 system instruction 後面的文字；skipTTS：這次回覆不要朗讀（用到了 quiet 工具，例如點歌）；
- *          executed：這次確實執行了工具（成功或失敗都算；長期記憶不萃取這種訊息）
+ * @returns {Promise<{ text: string, skipTTS: boolean }|null>}
+ *          text：附在 system instruction 後面的文字；skipTTS：這次回覆不要朗讀（用到了 quiet 工具，例如點歌）
  */
 async function runToolStage({ history, parts, text, ctx, mode = null, mergeUser = false }) {
     if (!isEnabled() || !ctx?.guild || !ctx.member || !needsTools(text)) return null;
@@ -172,7 +171,6 @@ async function runToolStage({ history, parts, text, ctx, mode = null, mergeUser 
     return {
         text: `${RESULT_HEADER}\n${lines.join('\n')}\n${RESULT_RULE}`,
         skipTTS: results.some(r => r.quiet),
-        executed: true,
     };
 }
 

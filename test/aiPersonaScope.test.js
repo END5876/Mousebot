@@ -62,8 +62,8 @@ test('system instruction：順序 persona → _general → _voice → _group；�
   assert.equal(buildSystemInstruction({ mode: 'chat', scope: single }), 'CHAT\n\nGENERAL\n\nGROUP');
   assert.equal(buildSystemInstruction({ mode: 'chat', isVoice: true, scope: single }), 'CHAT\n\nGENERAL\n\nVOICE\n\nGROUP');
   assert.equal(
-    buildSystemInstruction({ mode: 'chat', scope: single, memoryBlock: 'MEM', roster: 'ROSTER' }),
-    'CHAT\n\nGENERAL\n\nGROUP\n\nMEM\n\nROSTER',
+    buildSystemInstruction({ mode: 'chat', scope: single, roster: 'ROSTER' }),
+    'CHAT\n\nGENERAL\n\nGROUP\n\nROSTER',
   );
 });
 
@@ -87,10 +87,6 @@ test('/ai 指令包含 scope 子指令群組（show / set / reset）', () => {
   assert.ok(scope, '缺少 scope 群組');
   assert.deepEqual(scope.options.map((o) => o.name).sort(), ['reset', 'set', 'show']);
   const set = scope.options.find((o) => o.name === 'set');
-  assert.deepEqual(set.options.map((o) => o.name), ['kind', 'persona', 'channel', 'memory_extract']);
-  const memory = json.options.find((o) => o.name === 'memory');
-  assert.ok(memory, '缺少 memory 群組');
-  assert.deepEqual(memory.options.map((o) => o.name).sort(), ['forget', 'list', 'optout']);
-  const forget = memory.options.find((o) => o.name === 'forget');
-  assert.deepEqual(forget.options.map((o) => [o.name, o.required]), [['id', true]]);
+  assert.deepEqual(set.options.map((o) => [o.name, o.required]), [['kind', true], ['persona', false], ['channel', false]]);
+  assert.equal(json.options.find((o) => o.name === 'memory'), undefined);
 });

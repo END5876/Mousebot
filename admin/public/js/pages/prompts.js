@@ -10,17 +10,11 @@ const SHARED_INFO = {
   _general: { title: '全局規則', desc: '接在每個人格的 prompt 後面，文字與語音回覆都會用到。' },
   _voice: { title: '語音規則', desc: '語音對話（喚醒詞、錄音按鈕）時再額外接上。' },
   _group: { title: '群組規則', desc: '單一人格模式（大家共用同一個人格的群聊）時再額外接上；留空就不加。' },
-  _memory: { title: '記憶整理規則', desc: '背景整理長期記憶時用的中性 prompt（不帶人格）；留空就用內建版。可用 {personaName}、{date}、{subjectRule} 代入。' },
 };
 // 人格 front matter 的選填欄位（空字串＝沒寫，使用預設）
 const SINGLE_SCOPE_OPTIONS = [
   { value: '', label: '不限制（預設）' },
   { value: 'off', label: '只有擁有者能設成群組人格' },
-];
-const MEMORY_OPTIONS = [
-  { value: '', label: '一般（預設）' },
-  { value: 'strict', label: '嚴格：只收客觀資料' },
-  { value: 'off', label: '關閉：只讀不寫' },
 ];
 const MODE_KEY_RE = /^[A-Za-z0-9_-]{1,32}$/;
 const MAX_PROMPT = 30000;
@@ -234,8 +228,6 @@ export default function mountPrompts(root, ctx) {
     const clearMsg = h('input', { class: 'input', id: 'pm-clear', value: init.clearMemoryMessage ?? '', maxlength: 500, placeholder: '🧠 已清除你的對話記憶。' });
     const singleScope = selectEl({ options: SINGLE_SCOPE_OPTIONS, value: init.singleScope === 'off' ? 'off' : '', ariaLabel: '群組人格限制' });
     singleScope.id = 'pm-single';
-    const memory = selectEl({ options: MEMORY_OPTIONS, value: ['strict', 'off'].includes(init.memory) ? init.memory : '', ariaLabel: '長期記憶' });
-    memory.id = 'pm-memory';
     const prompt = h('textarea', { class: 'textarea code editor-textarea', id: 'pm-prompt', value: init.prompt ?? '', spellcheck: 'false' });
     const counter = h('span', { class: 'counter' });
     const historyKey = mode?.key ?? prefill?.key;
@@ -246,7 +238,6 @@ export default function mountPrompts(root, ctx) {
         short.value = v.shortDescription ?? '';
         clearMsg.value = v.clearMemoryMessage ?? '';
         singleScope.value = v.singleScope === 'off' ? 'off' : '';
-        memory.value = ['strict', 'off'].includes(v.memory) ? v.memory : '';
         prompt.value = v.prompt ?? '';
         tracker.update();
       }),
@@ -268,7 +259,7 @@ export default function mountPrompts(root, ctx) {
       onclick: () => removeMode(mode),
     }, icon('trash', 'ic-sm'), '刪除');
 
-    const fields = [key, name, short, clearMsg, singleScope, memory, prompt];
+    const fields = [key, name, short, clearMsg, singleScope, prompt];
     const tracker = trackChanges(fields, () => JSON.stringify(fields.map((f) => f.value)), {
       saveBtn, revertBtn, counter, promptEl: prompt,
       canSave: () => MODE_KEY_RE.test(key.value.trim()) && !!prompt.value.trim(),
@@ -284,7 +275,7 @@ export default function mountPrompts(root, ctx) {
 
       const ok = await withBusy(saveBtn, () => api.put(`/api/prompts/modes/${seg(k)}`, {
         name: name.value, shortDescription: short.value, clearMemoryMessage: clearMsg.value,
-        singleScope: singleScope.value, memory: memory.value, prompt: prompt.value, create: isNew,
+        singleScope: singleScope.value, prompt: prompt.value, create: isNew,
       }));
       if (!ok) return;
       tracker.markSaved();
@@ -318,8 +309,6 @@ export default function mountPrompts(root, ctx) {
         h('div', { class: 'form-row' },
           h('div', { class: 'field' }, h('label', { for: 'pm-single' }, '設成群組人格'), singleScope,
             h('div', { class: 'hint' }, '單一人格模式（/ai scope）能不能選這個人格；戀人類人格建議只限擁有者')),
-          h('div', { class: 'field' }, h('label', { for: 'pm-memory' }, '長期記憶'), memory,
-            h('div', { class: 'hint' }, '整理長期記憶的方式；嚴格只收行程、喜好等客觀資料')),
         ),
         h('div', { class: 'field' },
           h('label', { for: 'pm-prompt' }, 'Prompt 本文'),

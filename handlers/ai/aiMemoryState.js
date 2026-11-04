@@ -1,7 +1,7 @@
 // handlers/ai/aiMemoryState.js
-// 「清除記憶的時間點」與記憶 optOut，存在 data/aiMemoryState.json。
+// 「清除對話記憶的時間點」，存在 data/aiMemoryState.json。
 // 過去 memoryClearedAt 只存在記憶體，Bot 重啟後 /ai clear 就失效（舊對話又流回歷史）。
-// 寫入頻率很低（只有 /ai clear、管理面板、optOut），直接用 writeJsonAtomic 整份寫回。
+// 寫入頻率很低（只有 /ai clear、管理面板），直接用 writeJsonAtomic 整份寫回。
 //
 // 注意：不要 require aiUtils（會連帶載入 ttsHandler 與 sharp），aiUtils 反過來 re-export 這裡的函式。
 // 第一次用到時才讀檔（lazy），require 本模組不會碰到任何檔案。
@@ -12,7 +12,7 @@ const { dataPath } = require('../../utils/dataDir');
 
 const FILE_NAME = 'aiMemoryState.json';
 
-let state = null;   // { userClears, channelClears, userInChannel, optOut }
+let state = null;   // { userClears, channelClears, userInChannel }
 let filePath = null;
 
 function asTimeMap(raw) {
@@ -28,15 +28,10 @@ function load() {
     if (state) return state;
     filePath = dataPath(FILE_NAME);
     const raw = readJson(filePath, {});
-    const optOut = {};
-    if (raw?.optOut && typeof raw.optOut === 'object') {
-        for (const [k, v] of Object.entries(raw.optOut)) if (v === true) optOut[k] = true;
-    }
     state = {
         userClears: asTimeMap(raw?.userClears),
         channelClears: asTimeMap(raw?.channelClears),
         userInChannel: asTimeMap(raw?.userInChannel),
-        optOut,
     };
     return state;
 }
@@ -82,18 +77,6 @@ function getUserInChannelClearTime(channelId, userId) {
     return load().userInChannel[`${channelId}:${userId}`] ?? 0;
 }
 
-// ── 長期記憶 optOut：關閉後不萃取也不注入 ──
-function setOptOut(userId, value) {
-    const s = load();
-    if (value) s.optOut[userId] = true;
-    else delete s.optOut[userId];
-    save();
-}
-
-function isOptedOut(userId) {
-    return load().optOut[userId] === true;
-}
-
 /** 測試用：丟掉記憶體內的狀態，下次呼叫重新讀檔（模擬重啟） */
 function _reset() {
     state = null;
@@ -104,6 +87,5 @@ module.exports = {
     clearUserMemory, getMemoryClearTime,
     clearChannelMemory, getChannelClearTime,
     clearUserInChannel, getUserInChannelClearTime,
-    setOptOut, isOptedOut,
     _reset,
 };

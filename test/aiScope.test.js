@@ -1,6 +1,6 @@
 'use strict';
 
-// AI 範圍（多人格／單一人格）的解析、切換與持久化；人格 front matter 的 singleScope / memory。
+// AI 範圍（多人格／單一人格）的解析、切換與持久化；人格 front matter 的 singleScope。
 // 資料目錄用 MOUSEBOT_DATA_DIR 指到暫存資料夾，不碰正式的 data/。
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -50,7 +50,6 @@ test('預設是多人格；DM 一律多人格', () => {
   assert.equal(s.kind, 'multi');
   assert.equal(s.scopeKey, null);
   assert.equal(s.source, 'default');
-  assert.equal(s.memoryExtract, true);
 
   aiScope.setGuildScope(G, { kind: 'single', persona: 'chat' }, 'u1');
   const dm = aiScope.getScope(null, C);
@@ -82,7 +81,7 @@ test('解析順序：頻道 > 伺服器 > 預設；scopeKey 依命中層級', ()
   assert.equal(s.source, 'channel');
 });
 
-test('討論串跟著父頻道（共用記憶池），自己的覆寫優先', () => {
+test('討論串跟著父頻道（共用同一個範圍），自己的覆寫優先', () => {
   aiScope.setChannelScope(C, G, { kind: 'single', persona: 'chat' }, 'u1');
   let s = aiScope.getScope(G, T, C);
   assert.equal(s.kind, 'single');
@@ -115,7 +114,7 @@ test('設定驗證：single 必須有存在的人格；不能什麼都不改', (
   assert.equal(aiScope.setGuildScope(G, { kind: 'single', persona: 'nope' }, 'u1').ok, false);
   assert.equal(aiScope.setGuildScope(G, { kind: 'weird' }, 'u1').ok, false);
   assert.equal(aiScope.setGuildScope(G, {}, 'u1').ok, false);
-  assert.equal(aiScope.setGuildScope(G, { memoryExtract: 'yes' }, 'u1').ok, false);
+  assert.equal(aiScope.setGuildScope(G, { persona: 'chat' }, 'u1').ok, false);
   assert.equal(fs.existsSync(path.join(TMP, 'aiScope.json')), false);
 });
 
@@ -140,26 +139,6 @@ test('每次切換 epoch 變大、changedAt 遞增；設成一樣的不動', () 
   assert.ok(s3.epoch > s2.epoch);
 });
 
-test('只改 memoryExtract 不動 epoch；解析順序 頻道 > 伺服器 > 預設 true', () => {
-  aiScope.setGuildScope(G, { kind: 'single', persona: 'chat' }, 'u1');
-  const before = aiScope.getScope(G, C);
-
-  aiScope.setGuildScope(G, { memoryExtract: false }, 'u1');
-  let s = aiScope.getScope(G, C);
-  assert.equal(s.memoryExtract, false);
-  assert.equal(s.epoch, before.epoch);
-  assert.equal(s.changedAt, before.changedAt);
-  assert.equal(s.kind, 'single');
-
-  // 頻道只覆寫 memoryExtract：kind 仍繼承伺服器、記憶池仍是 g:
-  aiScope.setChannelScope(C, G, { memoryExtract: true }, 'u1');
-  s = aiScope.getScope(G, C);
-  assert.equal(s.memoryExtract, true);
-  assert.equal(s.scopeKey, `g:${G}`);
-  assert.equal(s.epoch, before.epoch);
-  assert.equal(aiScope.getScope(G, C2).memoryExtract, false);
-});
-
 test('頻道 reset 留下 tombstone：changedAt 不會退回伺服器較舊的值', () => {
   aiScope.setGuildScope(G, { kind: 'multi' }, 'u1');
   const guildChangedAt = aiScope.getScope(G, C).changedAt;
@@ -180,18 +159,14 @@ test('頻道 reset 留下 tombstone：changedAt 不會退回伺服器較舊的�
   assert.equal(aiScope.setChannelScope(C2, G, null, 'u1').changed, false);
 });
 
-test('只有 memoryExtract 覆寫的 reset 也回報 changed；重複 reset 不算', () => {
-  aiScope.setChannelScope(C, G, { memoryExtract: false }, 'u1');
-  assert.equal(aiScope.getScope(G, C).memoryExtract, false);
-  const res = aiScope.setChannelScope(C, G, null, 'u1');
-  assert.equal(res.changed, true);
-  assert.equal(aiScope.getScope(G, C).memoryExtract, true);
+test('重複 reset 不算改變；設成跟原本一樣也不算', () => {
+  aiScope.setChannelScope(C, G, { kind: 'multi' }, 'u1');
+  assert.equal(aiScope.setChannelScope(C, G, null, 'u1').changed, true);
   assert.equal(aiScope.setChannelScope(C, G, null, 'u1').changed, false);
 
-  // 設成跟原本一樣：沒有改變
-  aiScope.setGuildScope(G, { kind: 'single', persona: 'chat', memoryExtract: true }, 'u1');
-  assert.equal(aiScope.setGuildScope(G, { kind: 'single', persona: 'chat', memoryExtract: true }, 'u1').changed, false);
-  assert.equal(aiScope.setGuildScope(G, { memoryExtract: false }, 'u1').changed, true);
+  aiScope.setGuildScope(G, { kind: 'single', persona: 'chat' }, 'u1');
+  assert.equal(aiScope.setGuildScope(G, { kind: 'single', persona: 'chat' }, 'u1').changed, false);
+  assert.equal(aiScope.setGuildScope(G, { kind: 'single', persona: 'loss' }, 'u1').changed, true);
 });
 
 test('伺服器 reset 後回到預設多人格，epoch 仍然變大', () => {
@@ -221,7 +196,7 @@ test('singleScope: off 的人格只有擁有者能選', () => {
 });
 
 test('寫檔後重新載入（模擬重啟）結果一致；listScopePersonas', () => {
-  aiScope.setGuildScope(G, { kind: 'single', persona: 'chat', memoryExtract: false }, 'u1');
+  aiScope.setGuildScope(G, { kind: 'single', persona: 'chat' }, 'u1');
   aiScope.setChannelScope(C, G, { kind: 'single', persona: 'loss' }, 'u2');
   aiScope.setChannelScope(C2, G, { kind: 'single', persona: 'loss' }, 'u2');
   aiScope.setChannelScope(C2, G, null, 'u2');
@@ -249,35 +224,27 @@ test('壞掉的設定檔：single 沒有人格就當作繼承', () => {
   assert.equal(s.epoch, 3);
 });
 
-// ── 人格 front matter：singleScope / memory ─────────────────
-test('promptStore：解析與存檔保留 singleScope / memory', () => {
+// ── 人格 front matter：singleScope ─────────────────
+test('promptStore：解析與存檔保留 singleScope', () => {
   const { parseModeFile, serializeModeFile, mergeModeData } = require('../handlers/ai/promptStore')._internal;
-  const raw = '---\nname: 戀人\nsingleScope: OFF\nmemory: strict\n---\n本文\n';
+  const raw = '---\nname: 戀人\nsingleScope: OFF\n---\n本文\n';
   const parsed = parseModeFile('lover', raw);
   assert.equal(parsed.singleScope, 'off');
-  assert.equal(parsed.memory, 'strict');
 
-  const bad = parseModeFile('x', '---\nsingleScope: maybe\nmemory: lots\n---\n本文');
+  const bad = parseModeFile('x', '---\nsingleScope: maybe\n---\n本文');
   assert.equal(bad.singleScope, undefined);
-  assert.equal(bad.memory, undefined);
 
-  // /ai prompt edit 不帶這兩個欄位：保留原值
+  // /ai prompt edit 不帶這個欄位：保留原值
   const merged = mergeModeData('lover', parsed, { prompt: '新本文', name: '' });
   assert.equal(merged.singleScope, 'off');
-  assert.equal(merged.memory, 'strict');
   const text = serializeModeFile(merged);
   assert.match(text, /singleScope: off/);
-  assert.match(text, /memory: strict/);
-  assert.deepEqual(
-    (({ singleScope, memory }) => ({ singleScope, memory }))(parseModeFile('lover', text)),
-    { singleScope: 'off', memory: 'strict' },
-  );
+  assert.equal(parseModeFile('lover', text).singleScope, 'off');
 
   // 管理面板送空字串＝移除
-  const cleared = mergeModeData('lover', parsed, { prompt: 'p', singleScope: '', memory: '' });
+  const cleared = mergeModeData('lover', parsed, { prompt: 'p', singleScope: '' });
   assert.equal(cleared.singleScope, undefined);
-  assert.equal(cleared.memory, undefined);
-  assert.doesNotMatch(serializeModeFile(cleared), /singleScope|memory/);
+  assert.doesNotMatch(serializeModeFile(cleared), /singleScope/);
 });
 
 test('promptStore：_group 是共用規則，缺檔時回傳空字串', () => {
