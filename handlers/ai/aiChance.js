@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const logger = require('../../utils/logger');
 const { readJson, writeJsonAtomic } = require('../../utils/jsonStore');
 const { dataPath } = require('../../utils/dataDir');
@@ -70,6 +71,53 @@ function saveDisabledChannels() {
 function getReplyChance(guildId) {
     if (!guildId) return DEFAULT_CHANCE;
     return chanceMap.has(guildId) ? chanceMap.get(guildId) : DEFAULT_CHANCE;
+}
+
+// ════════════════════════════════════════════════════════
+//  隨機回覆擲骰（和同群其他 bot 協調）
+// ════════════════════════════════════════════════════════
+// 同一個群有多隻 bot 時，各自擲骰可能同一句話好幾隻都回。
+// 改用 messageId 算骰子值 r：每隻 bot 看到的是同一則訊息、同一個 r。
+// AI_RANDOM_SLOT=i/n（第 i 隻、共 n 隻，i 從 0 起算）表示這隻佔用從 i/n 開始、長度為機率 p 的區段（超過 1 就繞回 0）。
+//   - 只有一隻：不論區段在哪，命中率都剛好是 p，和原本一樣
+//   - n 隻：每隻的 p ≤ 1/n 就保證不會同時回；超過時只有超出的部分會重疊
+// 預設 MouseBot 0/2、lite 1/2；第三隻以上（例如再開一個 lite 人格）要明確設定，例如 0/3、1/3、2/3。
+const DEFAULT_SLOT = '0/2';
+
+/** 解析 i/n，回傳區段起點 [0, 1)；格式不對時用預設值 */
+function parseSlot(value) {
+    const m = /^\s*(\d+)\s*\/\s*(\d+)\s*$/.exec(value || '');
+    if (m) {
+        const i = Number(m[1]), n = Number(m[2]);
+        if (n >= 1 && i < n) return i / n;
+    }
+    return null;
+}
+
+function getSlotOffset() {
+    const env = process.env.AI_RANDOM_SLOT;
+    const offset = parseSlot(env);
+    if (offset === null && env?.trim()) logger.warn('AI', `AI_RANDOM_SLOT 格式應為 i/n（例如 1/2），收到 "${env}"，改用預設 ${DEFAULT_SLOT}`);
+    return offset ?? parseSlot(DEFAULT_SLOT);
+}
+
+/** messageId → [0, 1) 的固定值（沒有 messageId 時退回 Math.random） */
+function messageRoll(messageId) {
+    if (!messageId) return Math.random();
+    return crypto.createHash('sha256').update(String(messageId)).digest().readUInt32BE(0) / 0x100000000;
+}
+
+/**
+ * 這則訊息要不要隨機回覆
+ * @param {string} messageId
+ * @param {number} chance 0 ~ 1
+ * @param {number} [offset] 區段起點 [0, 1)，預設讀 AI_RANDOM_SLOT
+ */
+function shouldRandomReply(messageId, chance, offset = getSlotOffset()) {
+    if (chance <= 0) return false;
+    if (chance >= 1) return true;
+    const shifted = (messageRoll(messageId) - offset + 1) % 1;
+    return shifted < chance;
 }
 
 /**
@@ -165,6 +213,9 @@ loadDisabledChannels();
 module.exports = {
     DEFAULT_CHANCE,
     getReplyChance,
+    shouldRandomReply,
+    messageRoll,
+    parseSlot,
     setReplyChance,
     resetReplyChance,
     isChannelDisabled,

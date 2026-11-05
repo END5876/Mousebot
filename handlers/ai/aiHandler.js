@@ -35,6 +35,7 @@ const {
 const {
     DEFAULT_CHANCE,
     getReplyChance,
+    shouldRandomReply,
     setReplyChance,
     resetReplyChance,
     isChannelDisabled,
@@ -954,7 +955,7 @@ function setupAICommands(client) {
             if (/^!(gugu|m|stt)/.test(rawCleaned)) return;
 
             const chance = getReplyChance(guildId);
-            if (Math.random() < chance) {
+            if (shouldRandomReply(messageId, chance)) {
                 try {
                     let mode;
                     const shortReply = await withTyping(message.channel, async () => {
