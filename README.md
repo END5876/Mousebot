@@ -8,7 +8,7 @@
 
 | 功能模組 | 說明 |
 |---|---|
-| **AI 對話** | 整合 Google Gemini API（`gemini-3.1-flash-lite`），支援多種角色扮演人格（prompt 外部化、可熱重載、可用指令線上編輯）、圖片輸入、每頻道隨機插話、AI 回覆自動朗讀 |
+| **AI 對話** | 整合 Google Gemini API（`gemini-3.1-flash-lite`），支援多種角色扮演人格（prompt 外部化、可熱重載、可用指令線上編輯）、圖片輸入、每頻道隨機插話、AI 回覆自動朗讀、AI 可用自然語言點歌／記帳／查限免／操作語音（function calling） |
 | **文字轉語音（TTS）** | 主力使用 GPT-SoVITS，離線時自動 fallback 至 Edge-TTS，附排隊系統、多模型切換、LRU 快取 |
 | **語音轉文字（STT）** | 搭配 OpenWakeWord 喚醒詞偵測 + Groq Whisper，支援語音指令觸發與手動錄音按鈕 |
 | **線上音樂播放** | 支援 YouTube / Bilibili 串流播放、搜尋與播放清單匯入，含循環模式、佇列管理、隨機連播、響度正規化、閒置自動停止 |
@@ -58,6 +58,7 @@ singleScope: off       # 選填：只有擁有者能把它設成單一人格模�
 - 特殊身分：`LOVER_MODE_USER_IDS` 預設使用 `lover` 模式、`DEVELOPER_MODE_USER_IDS` 預設使用 `developer` 模式（需有對應模式檔）。
 - **多人格／單一人格**：預設是多人格（每個人用自己的人格）。管理員可用 `/ai scope set kind:single persona:<模式>` 把整個伺服器（或加 `channel:true` 只限目前頻道）改成單一人格：大家共用同一個人格，`/ai mode` 與特殊身分在那裡不生效，並額外接上 `_group.md`；對話歷史改成整個頻道的群組對話（30 分鐘內最多 24 則，可用 `AI_GROUP_MSG_LIMIT` 調小；標出每則是誰說的）。解析順序是頻道 > 父頻道（討論串）> 伺服器 > 預設，設定存在 `data/aiScope.json`。
 - 使用者的模式設定持久化儲存於 `data/userModes.json`。
+- **AI 工具（function calling）**：使用者主動找 Bot 時（@提及、`/ai ask`、語音喚醒），AI 可以替人點歌／控制音樂、記帳、查免費遊戲、操作語音（`handlers/ai/tools/`）。隨機插話一律不帶工具；音樂控制要求使用者與 Bot 在同一個語音頻道，記帳要本人按確認卡。`AI_TOOLS=0` 可整個關閉。
 
 
 ---
@@ -174,12 +175,13 @@ npm run check   # 以上兩者（GitHub Actions 每次 push / PR 也會跑 lint 
 ```
 Mousebot/
 ├── index.js                 # 主程式入口：建立 Discord Client、載入所有模組
-├── admin/                   # 管理 API，給 admin-panel 呼叫（設定 ADMIN_AGENT_TOKEN 才啟動）
-│   ├── server.js、auth.js、http.js   # HTTP 伺服器、登入與簽章 Cookie、極簡路由
+├── admin/                   # 管理 API，給 admin-panel 呼叫（設定 ADMIN_AGENT_TOKEN 才啟動；網頁與登入在 admin-panel）
+│   ├── agent.js、http.js    # HTTP 層（金鑰驗證、audit 標頭）、極簡路由
 │   ├── api/                 # 各頁面的 API
-│   └── public/              # 網頁（原生 JS ES modules，無建置步驟、不載入外部資源）
+│   └── backup.js、cacheTools.js、discordInfo.js、voiceState.js   # 備份還原、快取清理、Discord 資訊、語音狀態
 ├── handlers/
 │   ├── ai/                  # /ai 對話、人格 prompt（promptStore）、Gemini 入口、額度與 token 用量、搜尋接地
+│   │   └── tools/           # AI 的 function calling（點歌、分帳、免費遊戲、語音）
 │   ├── musicplayer/         # 線上／本地音樂、統一播放佇列（unifiedQueue/）、快取、響度正規化、網頁同步
 │   ├── voice/               # STT（喚醒詞 → 錄音 → Groq Whisper）與 ttsHandler/（SoVITS + Edge-TTS）
 │   ├── notice/              # Steam／Epic 限免通知、整點報時
@@ -319,10 +321,11 @@ Mousebot/
 
 ## 技術架構
 
-### 雙服務容器架構
+### 容器架構（supervisord 管理三個程序）
 
 ```
 Docker Container (node:22-slim)
+├── [Node.js] bgutil PO Token Provider   ← 優先啟動（priority=1），供 yt-dlp 索取 PO Token
 ├── [Python] OWW Server (Flask)   ← 優先啟動（priority=1）
 │     ├── 端點：/health、/detect、/pause、/resume、/reset
 │     ├── Session TTL 自動清除（預設 120 秒）
