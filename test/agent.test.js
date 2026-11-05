@@ -124,8 +124,10 @@ test('agent：路由與 body 錯誤回明確的狀態碼', async () => {
     method: 'PUT', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'text/plain' }, body: 'x',
   });
   assert.equal(wrongType.status, 415);
-  const big = await call('PUT', '/api/things/abc', { body: JSON.stringify({ v: 'x'.repeat(300 * 1024) }) });
-  assert.equal(big.status, 413);
+  // 超過上限：伺服器回 413 並關閉連線、不再讀取。用戶端還在上傳時，有時收到的是連線被中斷而不是 413，兩種都算擋下
+  const big = await call('PUT', '/api/things/abc', { body: JSON.stringify({ v: 'x'.repeat(9 * 1024 * 1024) }) })
+    .then((res) => res.status, () => 'connection closed');
+  assert.ok([413, 'connection closed'].includes(big), `超過上限沒有被擋下：${big}`);
   const boom = await call('GET', '/api/boom');
   assert.equal(boom.status, 500);
 });
@@ -142,7 +144,7 @@ test('agent：這隻 Bot 的 API 模組都載入得起來，features 只列出�
   }
   // 回報的頁面都要有對應的 API
   const has = (p) => router.routes.some((r) => r.re.test(p));
-  const PROBE = { usage: '/api/ai/usage', voice: '/api/voice', status: '/api/presence', maintenance: '/api/system', logs: '/api/logs', overview: '/api/overview' };
+  const PROBE = { ai: '/api/ai/settings', usage: '/api/ai/usage', voice: '/api/voice', status: '/api/presence', maintenance: '/api/system', logs: '/api/logs', overview: '/api/overview' };
   for (const f of api.features(client)) if (PROBE[f]) assert.ok(has(PROBE[f]), `${f} 沒有 ${PROBE[f]}`);
 });
 

@@ -2,8 +2,6 @@
 // admin/api/system.js — Bot 狀態文字、以 Bot 身分發訊息、Slash 指令同步、音樂快取、設定備份、重新啟動
 // （操作紀錄在 admin-panel：處理函式的 audit('…') 會經由回應標頭交給面板記錄）
 
-const fs = require('fs');
-const path = require('path');
 const { PermissionFlagsBits } = require('discord.js');
 const presence = require('../../handlers/presenceHandler');
 const { syncCommands, clientSyncOptions, getSyncStatus } = require('../../utils/commandSync');
@@ -11,8 +9,8 @@ const { requestShutdown, isSupervised } = require('../../utils/processGuards');
 const { cacheStats, clearDownloads } = require('../cacheTools');
 const { TEXT_TYPES, VOICE_TYPES, guildSummary, guildChannels } = require('../discordInfo');
 const { HttpError, FileResponse, oneOf, snowflake, str, requireReady } = require('../http');
+const { createBackupTools, BackupError } = require('../backup');
 
-const DATA_DIR = path.join(__dirname, '..', '..', 'data');
 const SYNC_COOLDOWN_MS = 30 * 1000;
 const RESTART_DELAY_MS = 500;
 const SUBCOMMAND_TYPES = [1, 2]; // SUB_COMMAND、SUB_COMMAND_GROUP
@@ -26,35 +24,17 @@ const SETTINGS_FILES = [
 ];
 const STATS_FILES = ['tokenUsage.json', 'musicPlayCount.json', 'steamnotified.json', 'epicnotified.json'];
 
+// AI 人格（data/prompts/ 的共用規則與 modes/*.md，不含 .history 版本紀錄）一併備份
+const backupTools = createBackupTools({
+  app: 'Mousebot',
+  settingsFiles: SETTINGS_FILES,
+  statsFiles: STATS_FILES,
+  sharedPrompts: ['_general', '_voice', '_group'],
+});
+
 const shorten = (text, max = 60) => (text.length > max ? `${text.slice(0, max)}…` : text);
 
-function readDataFile(rel) {
-  const file = path.join(DATA_DIR, rel);
-  if (!fs.existsSync(file)) return undefined;
-  const raw = fs.readFileSync(file, 'utf8');
-  if (!rel.endsWith('.json')) return raw;
-  try { return JSON.parse(raw); } catch { return raw; }
-}
 
-function buildBackup(includeStats) {
-  const files = {};
-  for (const rel of [...SETTINGS_FILES, ...(includeStats ? STATS_FILES : [])]) {
-    const value = readDataFile(rel);
-    if (value !== undefined) files[rel] = value;
-  }
-  // AI 人格：共用規則與各模式（不含 .history 版本紀錄）
-  for (const rel of ['prompts/_general.md', 'prompts/_voice.md', 'prompts/_group.md']) {
-    const value = readDataFile(rel);
-    if (value !== undefined) files[rel] = value;
-  }
-  const modesDir = path.join(DATA_DIR, 'prompts', 'modes');
-  if (fs.existsSync(modesDir)) {
-    for (const f of fs.readdirSync(modesDir).filter((name) => name.endsWith('.md')).sort()) {
-      files[`prompts/modes/${f}`] = readDataFile(`prompts/modes/${f}`);
-    }
-  }
-  return { app: 'Mousebot', type: 'settings-backup', version: 1, createdAt: new Date().toISOString(), files };
-}
 
 function stamp(date = new Date()) {
   const p = (n) => String(n).padStart(2, '0');
@@ -172,13 +152,35 @@ module.exports = function registerSystem(router, client) {
   // ── 設定備份（下載一個 JSON 檔）──────────────────────────
   router.get('/api/backup', ({ query, audit: log }) => {
     const includeStats = query.get('stats') === '1';
-    const backup = buildBackup(includeStats);
+    const backup = backupTools.build(includeStats);
     log(`下載設定備份（${Object.keys(backup.files).length} 個檔案${includeStats ? '，含統計資料' : ''}）`);
     return new FileResponse({
       filename: `mousebot-backup-${stamp()}.json`,
       contentType: 'application/json; charset=utf-8',
       body: JSON.stringify(backup, null, 2),
     });
+  });
+
+  // ── 還原設定備份 ─────────────────────────────────────────
+  // body：{ backup: <下載的備份檔內容> }。預覽只比對、不寫入；還原先暫存，重新啟動時才套用（見 admin/backup.js）
+  const backupError = (fn) => {
+    try { return fn(); } catch (err) {
+      if (err instanceof BackupError) throw new HttpError(400, err.message);
+      throw err;
+    }
+  };
+
+  router.post('/api/backup/preview', ({ body }) => ({
+    ...backupError(() => backupTools.preview(body.backup)),
+    supervised: isSupervised(),
+  }));
+
+  router.post('/api/backup/restore', ({ body, audit: log }) => {
+    const result = backupError(() => backupTools.stage(body.backup));
+    const supervised = isSupervised();
+    log(`還原設定備份（${result.staged} 個檔案${result.skipped.length ? `，略過 ${result.skipped.length} 個` : ''}），重新啟動後套用`);
+    setTimeout(() => requestShutdown('管理面板的還原設定備份'), RESTART_DELAY_MS);
+    return { ...result, supervised };
   });
 
   // ── 重新啟動 ─────────────────────────────────────────────

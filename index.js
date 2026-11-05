@@ -2,6 +2,8 @@ require('dotenv').config();
 // 必須最早安裝：之後載入的任何模組在載入期間丟出的錯誤也要被接住
 const processGuards = require('./utils/processGuards');
 processGuards.install();
+// 管理面板的「還原設定備份」：暫存的檔案要在任何模組讀 data/ 之前套用（見 admin/backup.js）
+require('./admin/backup').applyPendingRestore();
 const { Client, GatewayIntentBits, Collection, MessageFlags } = require('discord.js');
 const logger = require('./utils/logger');
 const bootSummary = require('./utils/bootSummary');

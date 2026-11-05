@@ -33,7 +33,8 @@ const { botSummary } = require('./discordInfo');
 
 const PROTOCOL = 1;
 const MIN_TOKEN_LENGTH = 32;
-const MAX_BODY_BYTES = 256 * 1024;
+// 還原設定備份時整份備份檔會放在 body 裡（含統計資料、多個人格檔時可能到幾 MB）
+const MAX_BODY_BYTES = 8 * 1024 * 1024;
 const MAX_SOURCE_LENGTH = 200;
 const SUMMARY_NAME = '管理 API';
 
