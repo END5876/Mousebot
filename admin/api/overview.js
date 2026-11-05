@@ -6,28 +6,11 @@ const logger = require('../../utils/logger');
 const { collectHealth } = require('../../utils/health');
 const tokenTracker = require('../../handlers/ai/tokenTracker');
 const aiQuota = require('../../handlers/ai/aiQuota');
-const { listGuilds } = require('../discordInfo');
+const { botSummary, listGuilds } = require('../discordInfo');
 const { voiceInfo, musicState } = require('../voiceState');
 const { getLastCrash } = require('../../utils/crashLog');
 
-function botSummary(client) {
-  if (!client.user) return null;
-  return {
-    id: client.user.id,
-    name: client.user.globalName || client.user.username,
-    tag: client.user.tag,
-    avatarUrl: client.user.displayAvatarURL({ size: 128 }),
-  };
-}
-
 module.exports = function registerOverview(router, client) {
-  // 側邊欄的 Bot 資訊，也用來確認是否已登入（很輕量，不做外部服務探測）
-  router.get('/api/me', () => ({
-    ready: client.isReady(),
-    ping: client.ws.ping,
-    bot: botSummary(client),
-  }));
-
   router.get('/api/overview', async () => {
     const { body: health } = await collectHealth(client);
     const [today] = tokenTracker.getUsageHistory(1);

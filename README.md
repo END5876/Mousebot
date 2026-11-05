@@ -1,6 +1,6 @@
 # 🐭 Mousebot
 
-一個功能豐富的私人 Discord 機器人，整合 AI 角色扮演對話、語音喚醒詞互動、TTS/STT、線上與本地音樂播放、**含網頁介面的多人分帳系統（即時同步、分享連結、AI 帳單辨識）**、遊戲限免通知、整點報時等多項功能。以 Node.js 為主體，搭配 Python 撰寫的 OpenWakeWord 喚醒詞偵測服務，並內建**網頁管理面板**，透過 Docker + supervisord 容器化部署。
+一個功能豐富的私人 Discord 機器人，整合 AI 角色扮演對話、語音喚醒詞互動、TTS/STT、線上與本地音樂播放、**含網頁介面的多人分帳系統（即時同步、分享連結、AI 帳單辨識）**、遊戲限免通知、整點報時等多項功能。以 Node.js 為主體，搭配 Python 撰寫的 OpenWakeWord 喚醒詞偵測服務，並提供給**網頁管理面板**（admin-panel 服務）呼叫的管理 API，透過 Docker + supervisord 容器化部署。
 
 ---
 
@@ -21,7 +21,7 @@
 | **自動加入語音頻道** | 可設定 Bot 自動加入指定語音頻道，並支援防踢靜音播放 |
 | **咕咕嘎嘎生成器** | 依主題生成「咕咕嘎嘎體」文章（已併入 `/ai gugu`） |
 | **Slash 指令** | 全指令皆以 Discord Slash Command（`/`）介面提供 |
-| **管理面板（Web）** | 用瀏覽器設定與管理 Bot：狀態總覽、自訂回應與 AI 人格編輯（含版本紀錄）、使用者模式與插話機率、AI 用量圖表、語音頻道與點歌、TTS 設定、通知頻道與整點報時、Bot 狀態文字、指令同步／快取／備份／重新啟動、操作紀錄、即時日誌（設定 `ADMIN_PASSWORD` 後啟用，見下方「管理面板」） |
+| **管理面板（Web）** | 經由 admin-panel 服務用瀏覽器設定與管理 Bot：狀態總覽、自訂回應與 AI 人格編輯（含版本紀錄）、使用者模式與插話機率、AI 用量圖表、語音頻道與點歌、TTS 設定、通知頻道與整點報時、Bot 狀態文字、指令同步／快取／備份／重新啟動、即時日誌（設定 `ADMIN_AGENT_TOKEN` 後啟用，見下方「管理面板」） |
 
 ---
 
@@ -64,47 +64,22 @@ singleScope: off       # 選填：只有擁有者能把它設成單一人格模�
 
 ## 管理面板（Web 管理介面）
 
-設定 `ADMIN_PASSWORD` 後，Bot 會在程序內多開一個網頁伺服器（`admin/`），用瀏覽器就能設定與管理 Bot，不必記指令。修改後立即生效，和 Discord 指令操作的是同一份資料（直接呼叫各模組的函式，記憶體中的設定與 `data/` 檔案保持一致）。支援深色模式與手機版面。
+網頁管理面板已拆成獨立的服務 **admin-panel**（另一個 repo），一個網頁就能同時管理 Mousebot、mousebot-lite 與之後的 Bot；
+頁面說明、登入與安全性見 admin-panel 的 README。
 
-| 頁面 | 可以做的事 |
-|---|---|
-| 總覽 | Bot 狀態、運行時間、記憶體、Discord 延遲、外部服務（OWW、PO Token）、模組開機摘要、語音連線、伺服器清單 |
-| 自訂回應 | 搜尋、新增、編輯（可改名或換匹配類型）、刪除關鍵字回應，一條規則可設定多則訊息；調整包含匹配的比對順序 |
-| AI 人格 | 編輯各模式的 system prompt 與 `_general`、`_voice` 共用規則（沒有 Discord 輸入框 4000 字的限制）、新增與刪除模式；版本紀錄（每次存檔或刪除前自動保留，最近 20 版）、還原已刪除的人格 |
-| AI 設定 | 指定使用者的人格模式（可搜尋成員）、清除某人的對話記憶、各伺服器的多人格／單一人格範圍、隨機插話機率與逐頻道開關；檢視模型與額度設定 |
-| AI 用量 | 近 7／30／90 天的每日 token 長條圖，依來源、人格、使用者拆分，可切換成表格 |
-| 語音與音樂 | 自動加入的開關與目標頻道、加入／離開語音頻道、喚醒詞監聽（可選轉錄頻道）、點歌（本地音樂／YouTube 與 Bilibili 搜尋／貼網址）、正在播放與進度、跳過／停止／循環／隨機連播、佇列管理、閒置自動停止 |
-| TTS 語音 | 各伺服器的 SoVITS 模型、edge-tts 聲音、AI 回覆自動朗讀開關、試聽；SoVITS 連線狀態 |
-| 通知與報時 | Steam / Epic 限免通知頻道、查詢目前的限免遊戲、立即檢查並推播、通知紀錄（可移除讓它重新推播）、各伺服器整點報時開關、報時音檔檢查 |
-| 狀態與訊息 | Bot 的線上狀態與活動文字（正在聽／正在玩／自訂狀態…）、以 Bot 身分在頻道發訊息（等同 `/say`） |
-| 維護 | Slash 指令與 Discord 上已註冊的比對、強制重新同步；音樂下載快取統計與清除；下載設定備份；重新啟動 Bot |
-| 操作紀錄 | 在管理面板上做過的每個變更與登入紀錄（含來源 IP，保留最近 1000 筆） |
-| 日誌 | 最近 500 則 log，每 2 秒更新，可依等級、模組、關鍵字篩選 |
+Bot 這邊只保留**管理 API**（`admin/`）：設定 `ADMIN_AGENT_TOKEN` 後在程序內多開一個 HTTP API，由面板帶著金鑰呼叫。
+API 留在 Bot 程序內，是因為各模組的設定快取在記憶體裡（aiChance、modeSelector、noticeService…）、語音連線與播放佇列也只存在這個程序裡；
+直接呼叫各模組的函式，記憶體中的設定與 `data/` 檔案才會一致，和 Discord 指令操作的是同一份資料。
 
-幾點說明：
-
-- **TTS 模型／聲音、AI 回覆朗讀開關**現在會存檔（`data/ttsSettings.json`、`data/aiTTS.json`），`/tts model`、`/tts edgevoice`、`/ai tts` 與管理面板共用，重新啟動後保留。SoVITS 伺服器一次只能載入一組權重，在任何一個伺服器切換模型都會影響其他伺服器。
-- **Bot 狀態文字**存在 `data/presence.json`；沒有設定時沿用原本的「正在聽 逼逼 機油好難喝」。
-- **清除下載快取**只會刪除線上歌曲的下載檔（檔名結尾是 `[yt_…]`、`[BV…]`、`[av…]`），本地音樂、正在播放或排在佇列裡的歌都會保留。
-- **重新啟動**走與 `SIGTERM` 相同的關閉流程，由 supervisord 重新拉起；不是由 supervisord 管理時（例如 `npm start`），這個按鈕會變成「關閉 Bot」，關閉後需要手動再啟動。
-- **設定備份**是一個 JSON 檔，包含設定與 AI 人格，不含任何金鑰與 Cookie。
-
-### 連線方式
-
-- **本機執行**：`.env` 設定 `ADMIN_PASSWORD` 後啟動 Bot，開啟 `http://localhost:3940/` 登入。
-- **部署在伺服器／容器**：預設只監聽 `127.0.0.1`，外部連不到。要從其他裝置使用時設定 `ADMIN_HOST=0.0.0.0`，並讓同一個 Docker 網路上的反向代理（例如 Caddy）把一個 **HTTPS** 網域轉到 `ADMIN_PORT`（預設 3940）。不要以純 HTTP 對外開放，否則密碼會以明文傳送。
-
-### 安全性
-
-- 沒有設定 `ADMIN_PASSWORD`（或少於 12 個字元）時完全不啟動；建議使用 24 個字元以上的隨機密碼。
-- 登入後以 HttpOnly、SameSite=Strict 的 Cookie 維持（預設 7 天）。簽章金鑰存在 `data/admin-session-secret`，再和密碼一起衍生：**換密碼等於讓所有裝置登出**。
-- 登入限流：每個來源 10 分鐘內最多失敗 10 次，全站 10 分鐘內最多失敗 50 次（已登入的裝置不受影響）。
-  成功登入過的裝置（`mb_admin_dev` Cookie，90 天）不受全站上限影響，攻擊者灌錯誤密碼鎖不住擁有者。
-- 來源 IP：連線來自信任的反向代理時改用 `X-Forwarded-For`（最右邊那一個）。信任範圍由 `ADMIN_TRUSTED_PROXIES` 決定；
-  沒設定時信任所有私有網段（VPS 上 Caddy 經由 Docker 網路連進來需要這個）。知道代理的網段時，建議設成只包含它，
-  同一個私有網路裡的其他程式就不能自己帶 `X-Forwarded-For` 換來源。操作紀錄在經由代理時會一併記下 TCP 連線的位址。
-- 只有真的登出了一個有效 session 才寫「登出」紀錄：沒登入的請求不能灌爆操作紀錄、把真正的管理操作擠掉。
-- 所有寫入請求都必須帶自訂 header 與 JSON body（防 CSRF）；網頁設有嚴格的 Content-Security-Policy，外部資料（伺服器名稱、回應內容、log）一律以純文字顯示。
+- `admin/agent.js`：HTTP 層（金鑰驗證、`GET /api/me` 回報支援的功能、把操作描述經由 `x-admin-audit` 標頭交給面板寫進操作紀錄）。與 mousebot-lite 完全相同。
+- `admin/api/`：各頁面的 API；`admin/api/index.js` 列出這隻 Bot 回報給面板的 `features`。
+- `ADMIN_AGENT_TOKEN` 至少 32 個字元，要和面板的 `PANEL_TOKEN_<代號>` 相同。容器裡設 `ADMIN_HOST=0.0.0.0` 讓面板連進來，但**不要讓反向代理把這個 port 對外公開**：網頁一律經由 admin-panel。
+- 幾點說明：
+  - **TTS 模型／聲音、AI 回覆朗讀開關**會存檔（`data/ttsSettings.json`、`data/aiTTS.json`），`/tts model`、`/tts edgevoice`、`/ai tts` 與管理面板共用。SoVITS 伺服器一次只能載入一組權重，在任何一個伺服器切換模型都會影響其他伺服器。
+  - **Bot 狀態文字**存在 `data/presence.json`；沒有設定時沿用原本的「正在聽 逼逼 機油好難喝」。
+  - **清除下載快取**只會刪除線上歌曲的下載檔（檔名結尾是 `[yt_…]`、`[BV…]`、`[av…]`），本地音樂、正在播放或排在佇列裡的歌都會保留。
+  - **重新啟動**走與 `SIGTERM` 相同的關閉流程，由 supervisord 重新拉起；不是由 supervisord 管理時（例如 `npm start`），面板上的按鈕會變成「關閉 Bot」。
+  - **設定備份**是一個 JSON 檔，包含設定與 AI 人格，不含任何金鑰與 Cookie。
 
 ---
 
@@ -135,7 +110,7 @@ docker build -t mousebot .
 docker run -d --name mousebot --restart unless-stopped --env-file .env -v "$(pwd)/data:/app/data" mousebot
 ```
 
-Docker image 以 `node:22-slim` 為基底，已透過 **supervisord** 同時管理 Node.js 主程式與 Python OWW 服務，並自動安裝 `edge-tts`、`yt-dlp` 等執行期工具，無需額外設定。分帳網頁介面已獨立成另一個專案與服務（splitbill-service）；容器內只有選用的管理面板會開網頁 port（預設只監聽 127.0.0.1，見「管理面板」）。
+Docker image 以 `node:22-slim` 為基底，已透過 **supervisord** 同時管理 Node.js 主程式與 Python OWW 服務，並自動安裝 `edge-tts`、`yt-dlp` 等執行期工具，無需額外設定。分帳網頁介面已獨立成另一個專案與服務（splitbill-service）；容器內只有選用的管理 API 會開 port（預設只監聽 127.0.0.1，見「管理面板」）。
 
 ### 方法二：本機直接執行
 
@@ -181,7 +156,7 @@ npm run check   # 以上兩者（GitHub Actions 每次 push / PR 也會跑 lint 
 | `GEMINI_API_KEY` | ✅ | Google Gemini（`/ai` 對話與帳單照片辨識）；模型預設 `gemini-3.1-flash-lite`，可用 `GEMINI_MODEL` 換 |
 | `OWNER_USER_ID` | 建議 | Bot 擁有者的 Discord ID（逗號分隔）。未設定時 `/ai mode`、`/response add`、`/autojoin` 變更頻道等擁有者功能全部拒絕 |
 | `GROQ_API_KEY` | | Groq Whisper 語音辨識；未設定時只有 STT 停用 |
-| `ADMIN_PASSWORD` | | 啟用管理面板（至少 12 字元，見「管理面板」） |
+| `ADMIN_AGENT_TOKEN` | | 啟用給 admin-panel 呼叫的管理 API（至少 32 字元，見「管理面板」） |
 | `SOVITS_HOST`／`SOVITS_PORT`／`SOVITS_MODEL_{KEY}_*` | | GPT-SoVITS TTS；未設定時只用 Edge-TTS |
 | `MUSIC_LIB_URL`／`MUSIC_LIB_SECRET` | | 共用音樂庫服務（music-library-service）；未設定則只用本機 `data/music` |
 | `SPLITBILL_SERVICE_URL`／`SPLITBILL_SERVICE_KEY` | | 分帳服務（splitbill-service）；未設定時 `/splitbill` 面板無法使用 |
@@ -199,7 +174,7 @@ npm run check   # 以上兩者（GitHub Actions 每次 push / PR 也會跑 lint 
 ```
 Mousebot/
 ├── index.js                 # 主程式入口：建立 Discord Client、載入所有模組
-├── admin/                   # 管理面板（設定 ADMIN_PASSWORD 才啟動）
+├── admin/                   # 管理 API，給 admin-panel 呼叫（設定 ADMIN_AGENT_TOKEN 才啟動）
 │   ├── server.js、auth.js、http.js   # HTTP 伺服器、登入與簽章 Cookie、極簡路由
 │   ├── api/                 # 各頁面的 API
 │   └── public/              # 網頁（原生 JS ES modules，無建置步驟、不載入外部資源）
@@ -234,7 +209,7 @@ Mousebot/
 | `responses.json`、`userModes.json`、`replyChance*.json` | 自訂回應、使用者人格模式、AI 插話機率 |
 | `ttsSettings.json`、`aiTTS.json`、`presence.json`、`timeAnnouncerSettings.json` | TTS 模型／聲音、AI 朗讀開關、狀態文字、整點報時開關 |
 | `musicPlayCount.json`、`musicSession.json` | 播放次數、播放快照（重啟後接續播放） |
-| `tokenUsage.json`、`adminAudit.json`、`admin-session-secret` | Gemini token 用量、管理面板操作紀錄與 Cookie 簽章金鑰 |
+| `tokenUsage.json` | Gemini token 用量 |
 
 ---
 

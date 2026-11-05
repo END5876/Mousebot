@@ -1,5 +1,6 @@
 'use strict';
-// admin/api/system.js — Bot 狀態文字、以 Bot 身分發訊息、Slash 指令同步、音樂快取、設定備份、重新啟動、操作紀錄
+// admin/api/system.js — Bot 狀態文字、以 Bot 身分發訊息、Slash 指令同步、音樂快取、設定備份、重新啟動
+// （操作紀錄在 admin-panel：處理函式的 audit('…') 會經由回應標頭交給面板記錄）
 
 const fs = require('fs');
 const path = require('path');
@@ -7,7 +8,6 @@ const { PermissionFlagsBits } = require('discord.js');
 const presence = require('../../handlers/presenceHandler');
 const { syncCommands, clientSyncOptions, getSyncStatus } = require('../../utils/commandSync');
 const { requestShutdown, isSupervised } = require('../../utils/processGuards');
-const audit = require('../audit');
 const { cacheStats, clearDownloads } = require('../cacheTools');
 const { TEXT_TYPES, VOICE_TYPES, guildSummary, guildChannels } = require('../discordInfo');
 const { HttpError, FileResponse, oneOf, snowflake, str, requireReady } = require('../http');
@@ -24,7 +24,7 @@ const SETTINGS_FILES = [
   'steamchannel.json', 'epicchannel.json', 'timeAnnouncerSettings.json', 'voiceMonitorEnabled.json',
   'presence.json', 'ttsSettings.json', 'aiTTS.json', 'aiScope.json',
 ];
-const STATS_FILES = ['tokenUsage.json', 'musicPlayCount.json', 'steamnotified.json', 'epicnotified.json', 'adminAudit.json'];
+const STATS_FILES = ['tokenUsage.json', 'musicPlayCount.json', 'steamnotified.json', 'epicnotified.json'];
 
 const shorten = (text, max = 60) => (text.length > max ? `${text.slice(0, max)}…` : text);
 
@@ -195,12 +195,5 @@ module.exports = function registerSystem(router, client) {
     // 先讓這個回應送出去，再走與 SIGTERM 相同的關閉流程（寫出播放快照、用量紀錄、操作紀錄）
     setTimeout(() => requestShutdown('管理面板的重新啟動要求'), RESTART_DELAY_MS);
     return { supervised };
-  });
-
-  // ── 操作紀錄 ─────────────────────────────────────────────
-  router.get('/api/audit', ({ query }) => {
-    const before = Number.parseInt(query.get('before') ?? '', 10);
-    const limit = Math.min(200, Math.max(1, Number.parseInt(query.get('limit') ?? '100', 10) || 100));
-    return { entries: audit.list({ before: Number.isFinite(before) ? before : Infinity, limit }) };
   });
 };

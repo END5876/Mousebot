@@ -9,7 +9,7 @@ const { OWNER_USER_IDS } = require('./utils/config');
 const { syncCommands, clientSyncOptions } = require('./utils/commandSync');
 const { startHealthServer } = require('./utils/health');
 const { startHeartbeat } = require('./utils/heartbeat');
-const { startAdminServer } = require('./admin/server');
+const { startAgentServer } = require('./admin/agent');
 
 // ── 導入所有處理器 ─────────────────────────────────────────
 const { applyPresence }          = require('./handlers/presenceHandler');
@@ -167,8 +167,8 @@ client.once('clientReady', async () => {
 });
 
 startHealthServer(client);
-// 管理面板（設定 ADMIN_PASSWORD 才會啟動）
-startAdminServer(client);
+// 管理 API：給 admin-panel 服務呼叫（設定 ADMIN_AGENT_TOKEN 才會啟動）
+startAgentServer(client, require('./admin/api'));
 
 // ── 錯誤處理 ──────────────────────────────────────────────
 client.on('error', error => {

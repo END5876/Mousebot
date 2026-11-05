@@ -9,6 +9,17 @@ const { SNOWFLAKE_RE } = require('./http');
 const TEXT_TYPES = [ChannelType.GuildText, ChannelType.GuildAnnouncement];
 const VOICE_TYPES = [ChannelType.GuildVoice, ChannelType.GuildStageVoice];
 
+/** Bot 自己的名稱與頭像；還沒登入 Discord 時是 null */
+function botSummary(client) {
+  if (!client.user) return null;
+  return {
+    id: client.user.id,
+    name: client.user.globalName || client.user.username,
+    tag: client.user.tag,
+    avatarUrl: client.user.displayAvatarURL({ size: 128 }),
+  };
+}
+
 function guildSummary(guild) {
   return {
     id: guild.id,
@@ -132,6 +143,7 @@ async function searchMembers(client, query, limit = 10) {
 module.exports = {
   TEXT_TYPES,
   VOICE_TYPES,
+  botSummary,
   guildSummary,
   listGuilds,
   guildChannels,

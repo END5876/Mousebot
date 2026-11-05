@@ -100,9 +100,12 @@ function requestShutdown(reason) {
   return gracefulShutdown(reason);
 }
 
-/** 是否由 supervisord 管理（它會在子程序的環境變數設定 SUPERVISOR_ENABLED） */
+/**
+ * 結束後會不會有人自動重新啟動：supervisord 會在子程序的環境變數設定 SUPERVISOR_ENABLED；
+ * 直接當容器主程序（restart: unless-stopped）時由 compose 設定 RESTART_MANAGED=1
+ */
 function isSupervised() {
-  return !!process.env.SUPERVISOR_ENABLED;
+  return !!process.env.SUPERVISOR_ENABLED || process.env.RESTART_MANAGED === '1';
 }
 
 module.exports = { install, setFatalHook, onShutdown, requestShutdown, isSupervised };
