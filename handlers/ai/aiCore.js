@@ -752,9 +752,9 @@ async function getShortResponse(userId, promptText, imageParts = [], channel = n
         const scope = resolveScope(opts?.scope, { channel: channel ?? message?.channel ?? null, guildId: message?.guildId ?? null });
         if (!mode) mode = getUserMode(userId, scope);
         const { history, speakers } = await loadHistory({ scope, channel, userId, messageId, botId, mode });
-        const shortPrompt = imageParts.length > 0 && !promptText
-            ? `請用大約10~200個字回應這張圖片`
-            : `請用大約10~200字回應訊息：「${promptText}」`;
+        // 直接傳原文，像群裡有人說了話，不包成「請回應…」的指令；長度交給 prompt（_general / 人格）與 maxOutputTokens。
+        // 只傳圖時不能留空，否則會被標成「只 @ 了你」
+        const shortPrompt = promptText || (imageParts.length > 0 ? '（傳了一張圖片）' : '');
 
         // 短回覆標籤邏輯
         const messageParts = message
