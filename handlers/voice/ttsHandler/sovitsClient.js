@@ -8,8 +8,12 @@ const logger = require('../../../utils/logger');
 const { getActiveModel } = require('./models');
 
 // ── SoVITS 連線設定 ──────────────────────────────────────
-const SOVITS_HOST = process.env.SOVITS_HOST || 'localhost';
+// 未設定 SOVITS_HOST＝不使用 SoVITS，只用 edge-tts（不再預設連 localhost；本機 SoVITS 請明確設 localhost）
+const SOVITS_HOST = process.env.SOVITS_HOST?.trim() || '';
 const SOVITS_PORT = parseInt(process.env.SOVITS_PORT) || 9880;
+
+/** 有沒有設定 SoVITS 主機；沒設定時下面的函式都不送任何網路請求 */
+const isSoVITSConfigured = () => !!SOVITS_HOST;
 
 // SoVITS 健康狀態追蹤
 // 記錄 SoVITS 是否可用，避免每次都等 timeout 才 fallback
@@ -36,6 +40,7 @@ const DNS_NEGATIVE_CACHE_TTL_MS = 60 * 1000;
 const SKIP_DNS_LOOKUP = net.isIP(SOVITS_HOST) !== 0 || SOVITS_HOST.toLowerCase() === 'localhost';
 
 async function resolveSoVITSHost() {
+  if (!isSoVITSConfigured()) return null;
   if (SKIP_DNS_LOOKUP) return SOVITS_HOST;
 
   const now = Date.now();
@@ -57,6 +62,7 @@ async function resolveSoVITSHost() {
 }
 
 async function switchSoVITSWeights(gptWeights, sovitsWeights) {
+  if (!isSoVITSConfigured()) throw new Error('未設定 SOVITS_HOST，無法切換 SoVITS 模型');
   const resolvedIP = await resolveSoVITSHost();
 
   const callAPI = (apiPath) => new Promise((resolve, reject) => {
@@ -88,6 +94,10 @@ async function switchSoVITSWeights(gptWeights, sovitsWeights) {
 //  定期探測 SoVITS 是否可用，避免每次都等 timeout 才 fallback
 // ════════════════════════════════════════════════════════
 async function checkSoVITSHealth() {
+  if (!isSoVITSConfigured()) {
+    sovitsHealthy = false;
+    return false;
+  }
   const now = Date.now();
   if (now - sovitsLastCheckAt < SOVITS_HEALTH_INTERVAL_MS) return sovitsHealthy;
 
@@ -197,6 +207,7 @@ function reportSovitsFailure() {
 module.exports = {
   SOVITS_HOST,
   SOVITS_PORT,
+  isSoVITSConfigured,
   resolveSoVITSHost,
   checkSoVITSHealth,
   switchSoVITSWeights,

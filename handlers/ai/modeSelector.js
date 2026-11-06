@@ -1,4 +1,4 @@
-const { LOVER_MODE_USER_IDS, DEVELOPER_MODE_USER_IDS, DEFAULT_MODE } = require('./aiSettings');
+const { USER_MODE_OVERRIDES, DEFAULT_MODE } = require('./aiSettings');
 const promptStore = require('./promptStore');
 const logger = require('../../utils/logger');
 const { readJson, writeJsonAtomic } = require('../../utils/jsonStore');
@@ -68,17 +68,35 @@ function listUserModes() {
 
 /**
  * 根據用戶 ID 選擇適當的模式
- * 優先順序：動態覆蓋 > 特殊身份 > 預設
- * 覆蓋的模式檔若已被刪除，就略過覆蓋往下判斷
+ * 優先順序：動態覆蓋 > AI_USER_MODE_OVERRIDES > 預設
+ * 覆蓋或固定人格的模式檔若不存在，就略過往下判斷
  */
 function selectMode(userId, content) {
     const override = userModeOverride.get(userId);
     if (override && promptStore.getMode(override)) return override;
 
-    if (LOVER_MODE_USER_IDS.includes(userId)) return 'lover';
-    if (DEVELOPER_MODE_USER_IDS.includes(userId)) return 'developer';
+    const fixed = USER_MODE_OVERRIDES[userId];
+    if (fixed) {
+        if (promptStore.getMode(fixed)) return fixed;
+        warnMissingFixedMode(fixed);
+    }
 
     return DEFAULT_MODE;
+}
+
+// 固定人格的模式檔不存在時，每個代號只警告一次（不印使用者 ID）
+const warnedMissingFixed = new Set();
+function warnMissingFixedMode(mode) {
+    if (warnedMissingFixed.has(mode)) return;
+    warnedMissingFixed.add(mode);
+    logger.warn('ModeSelector', `AI_USER_MODE_OVERRIDES 指定的人格 ${mode} 不存在，改用 ${DEFAULT_MODE}（之後不再重複提示）`);
+}
+
+/**
+ * AI_USER_MODE_OVERRIDES 指定的固定人格 { userId: mode }（管理面板用；回傳複本）
+ */
+function listFixedUserModes() {
+    return { ...USER_MODE_OVERRIDES };
 }
 
 /**
@@ -101,5 +119,6 @@ module.exports = {
     setUserMode,
     getUserModeOverride,
     listUserModes,
+    listFixedUserModes,
     getAvailableModes,
 };

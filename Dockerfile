@@ -46,7 +46,8 @@ RUN pip install --no-cache-dir -r /tmp/oww-requirements.txt
 RUN python3 -c "import openwakeword; print('OWW OK')" && \
     python3 -c "import flask; print('Flask OK')" && \
     ffmpeg -version | head -1 && \
-    python3 -c "from openwakeword.utils import download_models; download_models(); print('OWW models OK')"
+    python3 -c "from openwakeword.utils import download_models; download_models(); print('OWW models OK')" && \
+    python3 -c "from openwakeword.model import Model; Model(wakeword_models=['hey_jarvis'], inference_framework='onnx'); print('OWW hey_jarvis OK')"
 
 # ── 安裝額外工具（edge-tts / yt-dlp 每次有新版就重新安裝）──
 # 放在 OWW 模型下載之後：快取失效時不必重新下載模型。
@@ -76,71 +77,6 @@ ENV PYTHONUNBUFFERED=1
 # ── 工作目錄 ────────────────────────────────────────────
 WORKDIR /app
 
-# ── supervisord 設定 ────────────────────────────────────
-# fatal-listener：子程序重試到放棄（FATAL）時結束 supervisord，讓 Docker 重啟整個容器
-# （細節與例外見 docker/fatal-listener.py）。它以 root 執行，才能對 supervisord 送訊號。
-RUN mkdir -p /etc/supervisor/conf.d && printf '\
-[supervisord]\n\
-nodaemon=true\n\
-logfile=/dev/stdout\n\
-logfile_maxbytes=0\n\
-loglevel=info\n\
-\n\
-[program:bgutil-pot]\n\
-command=node /opt/bgutil/build/main.js\n\
-directory=/opt/bgutil\n\
-autostart=true\n\
-autorestart=true\n\
-startretries=5\n\
-startsecs=3\n\
-priority=1\n\
-user=bot\n\
-environment=HOME="/home/bot",USER="bot"\n\
-stdout_logfile=/dev/stdout\n\
-stdout_logfile_maxbytes=0\n\
-stderr_logfile=/dev/stderr\n\
-stderr_logfile_maxbytes=0\n\
-\n\
-[program:oww-server]\n\
-command=/opt/oww-env/bin/python3 /app/oww-server/server.py\n\
-directory=/app/oww-server\n\
-autostart=true\n\
-autorestart=true\n\
-startretries=5\n\
-startsecs=5\n\
-priority=1\n\
-user=bot\n\
-environment=HOME="/home/bot",USER="bot"\n\
-stdout_logfile=/dev/stdout\n\
-stdout_logfile_maxbytes=0\n\
-stderr_logfile=/dev/stderr\n\
-stderr_logfile_maxbytes=0\n\
-\n\
-[eventlistener:fatal-listener]\n\
-command=/usr/bin/python3 /app/docker/fatal-listener.py\n\
-events=PROCESS_STATE_FATAL\n\
-autostart=true\n\
-autorestart=true\n\
-stdout_logfile=NONE\n\
-stderr_logfile=/dev/stderr\n\
-stderr_logfile_maxbytes=0\n\
-\n\
-[program:node-bot]\n\
-command=node /app/index.js\n\
-directory=/app\n\
-autostart=true\n\
-autorestart=true\n\
-startretries=5\n\
-startsecs=8\n\
-priority=10\n\
-user=bot\n\
-environment=HOME="/home/bot",USER="bot"\n\
-stdout_logfile=/dev/stdout\n\
-stdout_logfile_maxbytes=0\n\
-stderr_logfile=/dev/stderr\n\
-stderr_logfile_maxbytes=0\n\
-' > /etc/supervisor/conf.d/supervisord.conf
-
 # ── 安裝 Node 套件 ──────────────────────────────────────
 COPY package*.json ./
 RUN npm ci --omit=dev
@@ -152,14 +88,9 @@ RUN apt-get purge -y make g++ && apt-get autoremove -y && rm -rf /var/lib/apt/li
 COPY . .
 
 # ── 啟動 ────────────────────────────────────────────────
-# supervisord 以 root 啟動，只負責：①確保可寫目錄存在 ②把掛載的 Volume（常為 root 所有）
-# 交給 bot 帳號 ③讓 supervisord 把 oww-server 與 node-bot 兩個子程序降權成 bot 再執行。
-# chown 只動「不屬於 bot 的檔案」，Volume 很大時重啟也不會每次都全量改權限。
-RUN printf '#!/bin/sh\n\
-mkdir -p /app/data /app/temp /app/handlers/voice/temp\n\
-find /app/data /app/temp /app/handlers/voice/temp ! -user bot -exec chown bot:bot {} + 2>/dev/null || true\n\
-exec supervisord -c /etc/supervisor/conf.d/supervisord.conf\n\
-' > /usr/local/bin/docker-entrypoint.sh && chmod +x /usr/local/bin/docker-entrypoint.sh
+# supervisord 以 root 啟動；可寫目錄、Volume 權限交給 bot、oww-server / bgutil-pot 要不要自動啟動，
+# 都由 docker/entrypoint.sh 處理（它依 FEATURES 代入 docker/supervisord.conf，寫到 /etc/supervisor/conf.d/）。
+RUN mkdir -p /etc/supervisor/conf.d && chmod +x /app/docker/entrypoint.sh
 
 # ── 健康檢查 ────────────────────────────────────────────
 # utils/health.js 在 127.0.0.1:${HEALTH_PORT:-3939}/healthz 回報 Discord 連線狀態（503 = 斷線超過寬限期）。
@@ -167,4 +98,4 @@ exec supervisord -c /etc/supervisor/conf.d/supervisord.conf\n\
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
     CMD node -e "fetch('http://127.0.0.1:'+(process.env.HEALTH_PORT||3939)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-CMD ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["/bin/sh", "/app/docker/entrypoint.sh"]

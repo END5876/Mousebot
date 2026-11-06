@@ -4,7 +4,8 @@ const js = require('@eslint/js');
 const globals = require('globals');
 
 module.exports = [
-  { ignores: ['node_modules/**', 'data/**', 'temp/**'] },
+  // .upstream／.lite：CI 的同步檢查會把另一個 repo checkout 到這兩個目錄
+  { ignores: ['node_modules/**', 'data/**', 'temp/**', '.upstream/**', '.lite/**'] },
   js.configs.recommended,
   {
     files: ['**/*.js'],

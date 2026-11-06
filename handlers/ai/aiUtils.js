@@ -1,7 +1,7 @@
-const { playTTS } = require('../voice/ttsHandler');
+// handlers/ai/aiUtils.js
+// AI 對話共用的工具函式：圖片／emoji／embed 處理、訊息分割、提及轉換、輸入中提示、Bot 訊息脈絡紀錄。
+// AI 回覆朗讀（TTS）不在這裡，放在 handlers/ai/aiTTS.js，透過 features.get('aiTts') 取得；沒有 TTS 模組的版本沒有那個檔案。
 const logger = require('../../utils/logger');
-const path = require('path');
-const { readJson, writeJsonAtomic } = require('../../utils/jsonStore');
 const sharp = require('sharp'); // 引入 sharp 進行圖片壓縮
 // 關閉 libvips 的 operation cache（預設最多 50MB）：每張圖只處理一次，結果已由下方 imageCache 快取，這層純屬重複
 sharp.cache(false);
@@ -23,7 +23,6 @@ const { PermissionFlagsBits } = require('discord.js');
 //  設定常數
 // ════════════════════════════════════════════════════════
 const MAX_IMAGE_SIZE_MB = 30;
-const TTS_MAX_LENGTH = 1000;
 const IMAGE_CACHE_TTL_MS = 10 * 60 * 1000;
 const IMAGE_CACHE_MAX_ENTRIES = 40;          // 每筆最多約 1MB 級 base64，限制總量避免吃光記憶體
 const IMAGE_FETCH_TIMEOUT_MS = 10_000;
@@ -36,29 +35,7 @@ const EMOJI_MAX_COUNT = 5;                   // 每則訊息最多送出的 emoj
 // ════════════════════════════════════════════════════════
 //  快取
 // ════════════════════════════════════════════════════════
-// 各伺服器的 AI 回覆朗讀開關（/ai tts 與管理面板共用），存在 data/aiTTS.json，重新啟動後保留
-const AI_TTS_PATH = path.resolve(__dirname, '../../data/aiTTS.json');
-const aiTTSEnabled = (() => {
-    const saved = readJson(AI_TTS_PATH, {});
-    return new Map(Object.entries(saved && typeof saved === 'object' ? saved : {}).filter(([, v]) => typeof v === 'boolean'));
-})();
 const imageCache = new Map();
-
-// ════════════════════════════════════════════════════════
-//  記憶 / TTS 開關
-// ════════════════════════════════════════════════════════
-function isAITTSEnabled(guildId) {
-    return aiTTSEnabled.get(guildId) ?? true;
-}
-
-function setAITTSEnabled(guildId, value) {
-    aiTTSEnabled.set(guildId, value);
-    try {
-        writeJsonAtomic(AI_TTS_PATH, Object.fromEntries(aiTTSEnabled));
-    } catch (err) {
-        logger.warn('AI', `儲存 AI 朗讀開關失敗：${err.message}`);
-    }
-}
 
 // 清除記憶的時間點（含頻道／成員層級）已移到 aiMemoryState.js，存在 data/aiMemoryState.json，
 // 重啟後仍有效；這裡 re-export 維持原本的呼叫方式
@@ -581,29 +558,6 @@ async function withTyping(channel, asyncFn) {
 }
 
 // ════════════════════════════════════════════════════════
-//  TTS 播放
-// ════════════════════════════════════════════════════════
-async function speakWithTTS(source, text, guildId) {
-    if (!guildId || !isAITTSEnabled(guildId)) return;
-    const voiceChannel = source.member?.voice?.channel;
-    if (!voiceChannel) {
-        logger.info('TTS', `🔇 使用者不在語音頻道，跳過朗讀`);
-        return;
-    }
-    const ttsText = text.length > TTS_MAX_LENGTH ? text.slice(0, TTS_MAX_LENGTH) : text;
-    try {
-        const result = await playTTS(guildId, ttsText);
-        if (!result.success) {
-            logger.warn('TTS', `朗讀失敗 (reason: ${result.reason})`);
-        } else {
-            logger.debug('TTS', `🔊 朗讀中 (engine: ${result.engine}, queued: ${result.queued})`);
-        }
-    } catch (err) {
-        logger.error('TTS', '呼叫 playTTS 發生錯誤:', err.message);
-    }
-}
-
-// ════════════════════════════════════════════════════════
 //  訊息分割
 // ════════════════════════════════════════════════════════
 function splitMessage(text, maxLength = 1900) {
@@ -658,7 +612,6 @@ module.exports = {
     clearUserMemory, getMemoryClearTime,
     clearChannelMemory, getChannelClearTime,
     clearUserInChannel, getUserInChannelClearTime,
-    isAITTSEnabled, setAITTSEnabled,
     recordBotMessageContext, getBotMessageContext,
     processAttachments,
     processCustomEmojis,
@@ -667,7 +620,7 @@ module.exports = {
     dedupeInlineParts,
     hasMissingSignature, 
     resolveDiscordImageUrl, 
-    withTyping, speakWithTTS, splitMessage,
+    withTyping, splitMessage,
     replaceMentions,
     sniffImageType,
 };

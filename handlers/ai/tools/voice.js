@@ -5,6 +5,7 @@
 const { Type } = require('@google/genai');
 const { fail } = require('./toolError');
 const { botVoiceChannelId, requireBotAndUserTogether } = require('./voiceGuard');
+const features = require('../../../utils/features');
 
 const MAX_SAY_LENGTH = 200;
 
@@ -52,6 +53,7 @@ const tools = [
         },
         label: '加入語音',
         run: join,
+        isAvailable: () => features.isEnabled('voice'),
     },
     {
         declaration: {
@@ -61,6 +63,7 @@ const tools = [
         },
         label: '離開語音',
         run: leave,
+        isAvailable: () => features.isEnabled('voice'),
     },
     {
         declaration: {
@@ -76,9 +79,17 @@ const tools = [
         },
         label: '語音唸出',
         run: say,
+        // 要有能用的 TTS 引擎；Bot 也可能是 autojoin 或 music 帶進語音的，所以不要求 voice 模組
+        isAvailable: () => features.get('tts')?.isUsable() ?? false,
         // 語音對話的回覆本來就會用 TTS 唸出來，不需要這個工具
         skipSources: ['voice'],
     },
 ];
 
-module.exports = { tools };
+// AI 工具的預篩關鍵字（tools/index.js 的 needsTools 用）：召回率優先，精準度交給判斷階段
+const keywords = [
+    '語音', '進來', '過來', '離開', '出去', '唸', '念出', '說一聲', '講一聲', '廣播', '大聲',
+    '跟大家(說|講)', '幫我(說|講)',
+];
+
+module.exports = { tools, keywords };

@@ -362,4 +362,16 @@ const tools = [
 ];
 
 // quiet：用到音樂工具時，這次的 AI 回覆不用 TTS 朗讀（朗讀會蓋過／打斷剛點的歌）
-module.exports = { tools: tools.map(t => ({ ...t, quiet: true })), _rankLocal: rankLocal, _rankOnline: rankOnline };
+// AI 工具的預篩關鍵字（tools/index.js 的 needsTools 用）：召回率優先，精準度交給判斷階段
+const keywords = [
+    '歌', '曲', '音樂', '播', '放', '點', '跳過', '切', '下一首', '停', '循環', '重複', '佇列', '隊列',
+    'music', 'play', 'skip', 'song', 'youtu', 'bilibili', 'b23\\.tv',
+];
+
+// 可不可用由群組（music 模組）判斷，工具本身一律可用
+module.exports = {
+    tools: tools.map(t => ({ ...t, quiet: true, isAvailable: () => true })),
+    keywords,
+    _rankLocal: rankLocal,
+    _rankOnline: rankOnline,
+};

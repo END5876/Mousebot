@@ -247,4 +247,10 @@ const tools = [
     },
 ];
 
-module.exports = { tools, _buildExpense: buildExpense, _findMemberByName: findMemberByName };
+// AI 工具的預篩關鍵字（tools/index.js 的 needsTools 用）：召回率優先，精準度交給判斷階段
+const keywords = [
+    '分帳', '記帳', '帳', '付', '欠', '還錢', '請客', '花了', '多少錢', '行程',
+    '\\d\\s*(元|塊|圓|円|日幣|日圓|美金|台幣|twd|jpy|usd)',
+];
+
+module.exports = { tools, keywords, _buildExpense: buildExpense, _findMemberByName: findMemberByName };

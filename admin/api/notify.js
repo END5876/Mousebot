@@ -1,25 +1,28 @@
 'use strict';
 // admin/api/notify.js — 限免通知頻道（Steam / Epic）與整點報時
+// 只在 notice 模組啟用時註冊（見 ./index.js）；整點報時的路由與欄位只在 timeannounce 啟用時提供。
+// 選用模組不在最上層 require，一律在 register 時透過 utils/features.js 取得。
 
 const { PermissionFlagsBits } = require('discord.js');
-const { PLATFORMS } = require('../../handlers/notice/noticeHandler');
-const timeAnnouncer = require('../../handlers/notice/timeAnnouncer');
+const features = require('../../utils/features');
 const { TEXT_TYPES, guildSummary, guildChannels, describeChannel } = require('../discordInfo');
 const { HttpError, bool, oneOf, snowflake, str, requireReady } = require('../http');
 
-const PLATFORM_KEYS = Object.keys(PLATFORMS);
 const SEND_PERMISSIONS = [
   PermissionFlagsBits.ViewChannel,
   PermissionFlagsBits.SendMessages,
   PermissionFlagsBits.EmbedLinks,
 ];
 
-const platformOf = (params) => PLATFORMS[oneOf(params.platform, PLATFORM_KEYS, '平台')];
-
 module.exports = function registerNotify(router, client) {
+  const { PLATFORMS } = features.get('notice');
+  const timeAnnouncer = features.get('timeannounce'); // 整點報時沒開時是 null
+  const PLATFORM_KEYS = Object.keys(PLATFORMS);
+  const platformOf = (params) => PLATFORMS[oneOf(params.platform, PLATFORM_KEYS, '平台')];
+
   router.get('/api/notify', () => {
     requireReady(client);
-    const announcerGuilds = new Set(timeAnnouncer.listEnabledGuilds());
+    const announcerGuilds = new Set(timeAnnouncer ? timeAnnouncer.listEnabledGuilds() : []);
     const guilds = [...client.guilds.cache.values()]
       .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'))
       .map((guild) => ({
@@ -35,10 +38,10 @@ module.exports = function registerNotify(router, client) {
         channels: PLATFORMS[key].service.listChannels().map((id) => describeChannel(client, id)),
       })),
       guilds,
-      timeAnnouncer: {
+      timeAnnouncer: timeAnnouncer ? {
         timezone: timeAnnouncer.TIMEZONE,
         sounds: timeAnnouncer.getSoundStatus(),
-      },
+      } : null,
     };
   });
 
@@ -108,6 +111,7 @@ module.exports = function registerNotify(router, client) {
     };
   });
 
+  if (!timeAnnouncer) return;
   router.put('/api/time-announcer/:guildId', ({ params, body, audit }) => {
     const guildId = snowflake(params.guildId, '伺服器');
     const enabled = bool(body.enabled, '整點報時');

@@ -2,6 +2,14 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('path');
+const { spawnSync } = require('child_process');
+
+// 工具群組依模組決定是否可用（utils/features.js）：分帳要 SPLITBILL_SERVICE_URL，aiTools 要 ai（GEMINI_API_KEY）。
+// 這個檔案在 FEATURES 沒設定（全開）的情況下測；FEATURES 的組合在下面的子程序裡測
+process.env.SPLITBILL_SERVICE_URL ||= 'http://splitbill.example';
+process.env.GEMINI_API_KEY ||= 'x';
+delete process.env.FEATURES;
 
 // 先換掉 Gemini 與用量統計：不打真的 API，也不寫入 data/tokenUsage.json
 const generateCalls = [];
@@ -21,6 +29,8 @@ const { _cache: freeGamesCache } = require('../handlers/ai/tools/freeGames');
 const { _buildExpense, _findMemberByName } = require('../handlers/ai/tools/splitbill');
 const { _rankLocal, _rankOnline } = require('../handlers/ai/tools/music');
 const { zhFold } = require('../utils/zhFold');
+// voice_say 要有能用的 TTS 引擎；測試不實際偵測 edge-tts，直接當成已安裝
+require('../handlers/voice/ttsHandler/edgeTTS').setHasEdgeTTS(true);
 
 const guild = { id: 'g1', members: { me: { voice: { channelId: null } }, cache: new Map() } };
 const ctxOf = (overrides = {}) => ({
@@ -209,4 +219,96 @@ test('判斷階段只帶最近 3 輪對話，而且從使用者開始', async ()
   assert.deepEqual(tools._recentTurns([{ role: 'model' }, { role: 'user' }, { role: 'model' }], 1).map(c => c.role), ['user', 'model']);
   assert.deepEqual(tools._recentTurns([{ role: 'model' }], 3), []);
   assert.deepEqual(tools._recentTurns([], 3), []);
+});
+
+// ── 依模組決定可用的工具（子程序：FEATURES 在載入時以外也會重新判斷，但每個情境用乾淨的 env 比較清楚）──
+const TOOLS_SCRIPT = `
+const stub = (rel, exports) => { const p = require.resolve(rel); require.cache[p] = { id: p, filename: p, loaded: true, exports }; };
+const generateCalls = [];
+stub('./handlers/ai/geminiClient', { generate: async (o) => { generateCalls.push(o); return {}; }, MODEL_NAME: 'test-model' });
+stub('./handlers/ai/tokenTracker', { recordUsage: () => {} });
+require('./handlers/voice/ttsHandler/edgeTTS').setHasEdgeTTS(process.env.TEST_EDGE_TTS === '1');
+const features = require('./utils/features');
+const tools = require('./handlers/ai/tools');
+const guild = { id: 'g1', members: { me: { voice: { channelId: null } }, cache: new Map() } };
+const ctx = { guild, member: { id: 'u1', voice: { channel: null, channelId: null } }, textChannel: null, userId: 'u1', source: 'text' };
+const parts = (t) => [{ text: '【發言者：tester】\\n' + t }];
+(async () => {
+  const out = { aiTools: features.isEnabled('aiTools'), needs: {}, declared: null, stage: null };
+  for (const t of ['幫我記帳 晚餐 900', '放晴天', '現在 Epic 送什麼', '進來語音陪我']) out.needs[t] = tools.needsTools(t);
+  const text = '放晴天 然後幫我跟大家說晚安';
+  out.stage = await tools.runToolStage({ history: [], parts: parts(text), text, ctx });
+  out.declared = generateCalls[0] ? generateCalls[0].config.tools[0].functionDeclarations.map(d => d.name) : null;
+  out.generateCalls = generateCalls.length;
+  out.noAction = tools._noActionRule();
+  process.stdout.write(JSON.stringify(out));
+})().catch((e) => { process.stderr.write(String(e && e.stack || e)); process.exit(1); });
+`;
+
+const PASS_ENV = ['PATH', 'Path', 'SystemRoot', 'SYSTEMROOT', 'windir', 'ComSpec', 'PATHEXT', 'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'LANG'];
+
+function runTools(extraEnv) {
+  const env = { LOG_LEVEL: 'error', GEMINI_API_KEY: 'x', SPLITBILL_SERVICE_URL: 'http://splitbill.example', TEST_EDGE_TTS: '1' };
+  for (const k of PASS_ENV) if (process.env[k] !== undefined) env[k] = process.env[k];
+  Object.assign(env, extraEnv);
+  for (const [k, v] of Object.entries(env)) if (v === undefined) delete env[k];
+  const res = spawnSync(process.execPath, ['-e', TOOLS_SCRIPT], { cwd: path.join(__dirname, '..'), env, encoding: 'utf8', timeout: 30_000 });
+  assert.equal(res.status, 0, res.stderr);
+  return JSON.parse(res.stdout);
+}
+
+const FULL_NO_ACTION = '【注意】這次沒有替使用者播放音樂、記帳、查遊戲或進出語音頻道。'
+  + '只有在使用者明顯是要你做這些事時才需要理會這段：不要假裝已經做了，可以請他把要求說清楚（例如要放哪首歌）。'
+  + '使用者只是在聊天的話，完全忽略這段，也不要提起。';
+
+test('模組全開：宣告全部工具，NO_ACTION 字串和原本逐字相同', () => {
+  const out = runTools({});
+  assert.equal(out.aiTools, true);
+  assert.deepEqual(out.declared, [
+    'music_play', 'music_random', 'music_control', 'music_status',
+    'splitbill_my_balance', 'splitbill_add_expense', 'free_games', 'voice_join', 'voice_leave', 'voice_say',
+  ], '宣告順序維持音樂、分帳、免費遊戲、語音');
+  assert.equal(out.noAction, FULL_NO_ACTION);
+  assert.equal(out.stage.text, FULL_NO_ACTION, '模型沒有呼叫工具時附上同一段提醒');
+  assert.equal(tools._noActionRule(), FULL_NO_ACTION, '本程序（全開）也一樣');
+  assert.ok(Object.values(out.needs).every(Boolean));
+});
+
+test('FEATURES=ai,music：只宣告 music_*，分帳的關鍵字不再命中預篩', () => {
+  const out = runTools({ FEATURES: 'ai,music' });
+  assert.ok(out.declared.length > 0);
+  assert.ok(out.declared.every(n => n.startsWith('music_')), out.declared.join(','));
+  assert.equal(out.needs['幫我記帳 晚餐 900'], false);
+  assert.equal(out.needs['放晴天'], true);
+  assert.equal(out.needs['現在 Epic 送什麼'], false);
+  assert.equal(out.needs['進來語音陪我'], false);
+  assert.equal(out.noAction.startsWith('【注意】這次沒有替使用者播放音樂。'), true, out.noAction);
+});
+
+test('FEATURES=ai：沒有任何工具群組時不跑判斷階段', () => {
+  const out = runTools({ FEATURES: 'ai' });
+  assert.equal(out.aiTools, true);
+  assert.ok(Object.values(out.needs).every(v => v === false));
+  assert.equal(out.stage, null);
+  assert.equal(out.generateCalls, 0);
+});
+
+test('FEATURES 不含 tts：沒有 voice_say；不含 voice：沒有 voice_join／voice_leave', () => {
+  const noTts = runTools({ FEATURES: 'all,-tts' });
+  assert.ok(!noTts.declared.includes('voice_say'));
+  assert.ok(noTts.declared.includes('voice_join') && noTts.declared.includes('voice_leave'));
+  assert.equal(noTts.noAction, FULL_NO_ACTION);
+
+  const ttsOnly = runTools({ FEATURES: 'ai,tts' });
+  assert.deepEqual(ttsOnly.declared, ['voice_say'], 'Bot 可能是 autojoin／music 帶進語音的，voice_say 不要求 voice 模組');
+  assert.equal(ttsOnly.noAction.startsWith('【注意】這次沒有替使用者進出語音頻道。'), true);
+
+  const noEngine = runTools({ FEATURES: 'ai,tts', TEST_EDGE_TTS: '0' });
+  assert.equal(noEngine.declared, null, '沒有 TTS 引擎時沒有可宣告的工具，不呼叫模型');
+  assert.equal(noEngine.stage, null);
+});
+
+test('沒有 GEMINI_API_KEY 時 aiTools 停用（需要 ai）', () => {
+  const out = runTools({ GEMINI_API_KEY: undefined });
+  assert.equal(out.aiTools, false);
 });

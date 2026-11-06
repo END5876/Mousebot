@@ -10,11 +10,10 @@
 //   bootSummary.report('文字轉語音 (/tts)', 'warn', 'SoVITS 離線，改用 edge-tts fallback');
 //   bootSummary.report('限免通知 (/notify)', 'off', '尚未設定任何通知頻道');
 //
-// 目前所有會回報的模組（依 index.js 載入順序）：
-//   語音頻道 (/voice)、基本指令、自訂回應 (/response)、AI 對話 (/ai)、
-//   自動加入語音頻道、文字轉語音 (/tts)、語音辨識 STT、限免通知 (/notify)、
-//   整點報時 (/timeannounce)、分帳系統 (/splitbill, /splitbill-quick)、
-//   音樂播放 (/play, /music)、線上音樂 (YouTube/Bilibili)、Slash Commands 註冊
+// 會回報哪些模組、依什麼順序，由 utils/features.js 的 MODULES 決定
+//   （啟用的模組在自己的 setup 裡回報；沒啟用的由 setupModules() 回報成 off）。
+//   另外還有模組內部或 index.js 自己回報的列，例如線上音樂 (YouTube/Bilibili)、
+//   網頁正在播放同步、擁有者權限、Slash Commands 註冊。
 
 const items = [];
 

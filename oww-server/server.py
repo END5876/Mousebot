@@ -27,9 +27,16 @@ load_dotenv()
 # =========================================================
 BASE_DIR = Path(__file__).resolve().parent
 
-# 每個參數都有預設值（和正式環境使用中的值相同），.env 沒寫也能啟動，
-# 不會因為少一個變數就 KeyError、被 supervisord 重試到 FATAL
-MODEL_PATH      = Path(os.environ.get("OWW_MODEL_PATH") or BASE_DIR / "models" / "hey_taffy.onnx")
+# 每個參數都有預設值，.env 沒寫也能啟動，不會因為少一個變數就 KeyError、被 supervisord 重試到 FATAL。
+# 喚醒詞模型預設用內建的 hey_jarvis；要用自訂模型（例如 ./models/hey_taffy.onnx）就設 OWW_MODEL_PATH。
+# 門檻（OWW_PROB_THRESHOLD、OWW_MIN_CONSECUTIVE）的預設值是針對 hey_taffy 調的，換模型時可能要調整。
+MODEL_PATH_ENV  = os.environ.get("OWW_MODEL_PATH", "").strip()
+BUILTIN_MODEL   = os.environ.get("OWW_BUILTIN_MODEL", "").strip() or "hey_jarvis"
+# 有設 OWW_MODEL_PATH 用自訂模型檔（相對路徑以 cwd 為準，容器內是 supervisord 的 directory=/app/oww-server），
+# 否則用 openWakeWord 內建模型的名稱（Model() 會到 openwakeword 的 resources/models 找對應的 onnx）
+MODEL_FROM_FILE = bool(MODEL_PATH_ENV)
+MODEL_PATH      = Path(MODEL_PATH_ENV) if MODEL_FROM_FILE else None
+MODEL_SPEC      = str(MODEL_PATH) if MODEL_FROM_FILE else BUILTIN_MODEL
 HTTP_PORT       = int(os.environ.get("OWW_PORT", "5001"))
 CHUNK_SIZE      = int(os.environ.get("OWW_CHUNK_SIZE", "1280"))
 PROB_THRESHOLD  = float(os.environ.get("OWW_PROB_THRESHOLD", "0.65"))
@@ -273,24 +280,31 @@ class SessionManager:
 # Bootstrap
 # =========================================================
 print("[OWW] 啟動中...")
-print(f"[OWW] MODEL_PATH={MODEL_PATH}")
+print(f"[OWW] MODEL={MODEL_SPEC}（{'自訂檔案 OWW_MODEL_PATH' if MODEL_FROM_FILE else '內建 OWW_BUILTIN_MODEL'}）")
 print(f"[OWW] PROB_THRESHOLD={PROB_THRESHOLD}, MIN_CONSECUTIVE={MIN_CONSECUTIVE}")
 print(f"[OWW] MAX_SESSIONS={MAX_SESSIONS}")
 print(f"[OWW] SESSION_TTL_SEC={SESSION_TTL_SEC}, TTL_CHECK_SEC={TTL_CHECK_SEC}")
 print(f"[OWW] MAX_DETECT_SEC={MAX_DETECT_SEC}, MAX_DETECT_BYTES={MAX_DETECT_BYTES}")
 print(f"[OWW] RATE_LIMIT={RATE_LIMIT_MAX_CALLS} calls / {RATE_LIMIT_WINDOW_SEC}s")
 
-check_model_files(MODEL_PATH)
+if MODEL_FROM_FILE:
+    check_model_files(MODEL_PATH)
 
 # =========================================================
 # OpenWakeWord 範本模型（ONNX 推論 session 由所有串流共用）
 # =========================================================
 print("[OWW] 載入模型中...")
 
-TEMPLATE_MODEL = Model(
-    wakeword_models=[str(MODEL_PATH)],
-    inference_framework="onnx",
-)
+try:
+    TEMPLATE_MODEL = Model(
+        wakeword_models=[MODEL_SPEC],
+        inference_framework="onnx",
+    )
+except Exception:
+    if not MODEL_FROM_FILE:
+        import openwakeword
+        print(f"[OWW] 載入內建模型 {MODEL_SPEC!r} 失敗；可用的內建模型：{', '.join(sorted(openwakeword.MODELS))}")
+    raise
 
 MODEL_NAMES = list(TEMPLATE_MODEL.models.keys())
 if not MODEL_NAMES:

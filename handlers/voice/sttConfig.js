@@ -54,12 +54,11 @@ const VAD_FRAME_BYTES     = VAD_FRAME_SAMPLES * 2;
 const SILENCE_CHECK_MS    = 100;
 
 // ── 環境變數檢查 ─────────────────────────────────────────
-// 沒有 GROQ_API_KEY 時 Bot 照常啟動，只有語音辨識停用（sttHandler.js 不建立 Groq client）
+// 沒有 GROQ_API_KEY 時 utils/features.js 把 stt 判定為未設定、不載入這裡，停用的那一列由 setupModules 回報；
+// 這裡只在有設定時回報就緒（sttHandler.js 沒有 key 時仍不建立 Groq client，作為最後防線）
 const STT_AVAILABLE = !!process.env.GROQ_API_KEY;
 
-if (!STT_AVAILABLE) {
-  bootSummary.report('語音辨識 STT', 'off', '未設定 GROQ_API_KEY，語音辨識停用（其他功能不受影響）');
-} else {
+if (STT_AVAILABLE) {
   bootSummary.report('語音辨識 STT', 'ok', '喚醒詞偵測 + Groq Whisper 已就緒');
 }
 

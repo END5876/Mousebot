@@ -1,0 +1,4 @@
+* text=auto
+# 容器內執行的 shell 腳本必須是 LF，否則 shebang 會失效（Windows 預設 core.autocrlf=true）
+*.sh text eol=lf
+docker/*.conf text eol=lf

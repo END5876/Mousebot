@@ -1,5 +1,8 @@
 'use strict';
 
+// 共用（MouseBot 與 mousebot-lite 都有）：jsonStore、commandSync、rateLimiter、音樂網址工具。
+// TTS 分句（只有 MouseBot 有）在 test/ttsTextSplitter.test.js。
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -9,7 +12,6 @@ const path = require('path');
 const { readJson, writeJsonAtomic, createDebouncedWriter } = require('../utils/jsonStore');
 const { hashCommands, stableStringify } = require('../utils/commandSync');
 const { SlidingWindowRateLimiter } = require('../utils/rateLimiter');
-const { splitSentences } = require('../handlers/voice/ttsHandler/textSplitter');
 const { cleanUrl, _isYouTubeWithoutList, _formatDuration, _resolveEntryUrl } =
   require('../handlers/musicplayer/unifiedQueue/search/urlUtils');
 
@@ -94,19 +96,6 @@ test('rateLimiter：視窗內超過上限即拒絕，被拒的不佔名額', () 
   assert.ok(third.retryAfterMs > 0 && third.retryAfterMs <= 60_000);
   assert.equal(limiter.hits.get('u').length, 2);
   assert.equal(limiter.check('other').allowed, true);
-});
-
-// ── TTS 分句 ──────────────────────────────────────────────
-test('splitSentences：依句號切割、長句再細分、純標點併回前句', () => {
-  assert.deepEqual(splitSentences(''), []);
-  assert.deepEqual(splitSentences('你好。今天天氣很好！要出門嗎？'), ['你好。', '今天天氣很好！', '要出門嗎？']);
-  assert.deepEqual(splitSentences('好耶！！！'), ['好耶！！！']);
-
-  const long = '第一段文字比較長，第二段文字也很長，第三段文字一樣很長，第四段文字還是很長';
-  const parts = splitSentences(long, 20);
-  assert.ok(parts.length > 1);
-  assert.ok(parts.every(p => p.length <= 20));
-  assert.equal(parts.join(''), long);
 });
 
 // ── 音樂網址工具 ──────────────────────────────────────────

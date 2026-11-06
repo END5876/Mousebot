@@ -16,20 +16,18 @@ const {
   MessageFlags,
 } = require('discord.js');
 
-// STT 相關
-const {
-  startSTTListening,
-  stopSTTListening,
-  ensureManualSession,
-  manualRecordOnce,
-} = require('./voice/sttHandler');
-
-const { getGeminiResponseVoice } = require('./ai/aiHandler');
-const { contextFrom: toolContextFrom } = require('./ai/tools');
 const logger = require('../utils/logger');
-const { isQuotaError, quotaMessage } = require('./ai/aiQuota');
-const { playTTS, stopTTS } = require('./voice/ttsHandler');
 const bootSummary = require('../utils/bootSummary');
+const features = require('../utils/features');
+
+// STT、AI、TTS 都是選用模組，而且 sttHandler、aiHandler 會反過來載入這裡，
+// 所以一律在函式裡透過登錄表取得（不可以在最上層呼叫 features.get）。
+// 模組停用時 features.get 回傳 null。
+const stt = () => features.get('stt');
+const ai  = () => features.get('ai');
+const tts = () => features.get('tts');
+
+const STT_UNAVAILABLE_MESSAGE = '❌ 語音辨識未啟用（未設定 GROQ_API_KEY 或 FEATURES 未包含 stt）';
 
 // 改用 audioManager 統一管理靜音層
 const {
@@ -122,7 +120,7 @@ function watchConnectionDestroyed(connection, guildId) {
   watchedConnections.add(connection);
   connection.on(VoiceConnectionStatus.Destroyed, () => {
     if (getVoiceConnection(guildId)) return; // 已有新連線，狀態屬於新連線
-    stopSTTListening(guildId);
+    stt()?.stopSTTListening(guildId);
     sttActiveGuilds.delete(guildId);
     manualGuildLocks.delete(guildId);
   });
@@ -165,11 +163,11 @@ async function joinChannel(voiceChannel) {
         if (current && current !== connection) return;
 
         logger.warn('Voice', '語音連接已斷開');
-        stopTTS(guildId); // 正在播的 TTS 段落等不到 Idle，佇列要主動重置
+        tts()?.stopTTS(guildId); // 正在播的 TTS 段落等不到 Idle，佇列要主動重置
         cleanupGuild(guildId);
 
         if (sttActiveGuilds.has(guildId)) {
-          stopSTTListening(guildId);
+          stt()?.stopSTTListening(guildId);
           sttActiveGuilds.delete(guildId);
         }
 
@@ -196,7 +194,7 @@ function leaveGuild(guild) {
   const connection = getVoiceConnection(guildId);
   if (!connection) return false;
 
-  stopTTS(guildId); // 正在播的 TTS 段落等不到 Idle，不重置的話重新加入後 TTS 永遠排隊不播
+  tts()?.stopTTS(guildId); // 正在播的 TTS 段落等不到 Idle，不重置的話重新加入後 TTS 永遠排隊不播
   cleanupGuild(guildId);
 
   // ★ Bug 修正：先前這裡從未呼叫 stopMonitoring，導致 /voice leave 後
@@ -209,11 +207,11 @@ function leaveGuild(guild) {
     silenceTimers.delete(guildId);
   }
 
-  const { stopAll } = require('./musicplayer/unifiedQueue');
-  stopAll(guildId);
+  // playback 是播放的基礎設施，音樂模組停用時也存在，不經過 unifiedQueue/index
+  require('./musicplayer/unifiedQueue/playback').stopAll(guildId);
 
   if (sttActiveGuilds.has(guildId)) {
-    stopSTTListening(guildId);
+    stt()?.stopSTTListening(guildId);
     sttActiveGuilds.delete(guildId);
   }
 
@@ -235,7 +233,17 @@ function findTranscriptChannel(guild) {
  * 只用錄音按鈕（/voice record-button）而沒開 STT 時不帶工具，語音只聊天不動作。
  */
 function voiceToolCtx(guildId, opts) {
-  return sttActiveGuilds.has(guildId) ? toolContextFrom('voice', opts) : null;
+  if (!sttActiveGuilds.has(guildId)) return null;
+  return features.get('aiTools')?.contextFrom('voice', opts) ?? null;
+}
+
+/**
+ * 朗讀語音對話的 AI 回覆；TTS 模組停用時視同不朗讀（回傳 null）
+ * @returns {Promise<{success: boolean, reason?: string}|null>}
+ */
+function speakReply(guildId, text) {
+  const ttsModule = tts();
+  return ttsModule ? ttsModule.playTTS(guildId, text) : Promise.resolve(null);
 }
 
 function isWakeWordActive(guildId) {
@@ -244,30 +252,33 @@ function isWakeWordActive(guildId) {
 
 /**
  * 開始喚醒詞監聽，轉錄結果與 AI 回覆送到 textChannel
- * @returns {'started'|'already'|'no_connection'}
+ * @returns {'started'|'already'|'no_connection'|'unavailable'} unavailable：STT 模組沒有啟用
  */
 function startWakeWord(guild, textChannel) {
+  if (!features.isEnabled('stt')) return 'unavailable';
   const guildId    = guild.id;
   const connection = getVoiceConnection(guildId);
   if (!connection) return 'no_connection';
   if (sttActiveGuilds.has(guildId)) return 'already';
 
   watchConnectionDestroyed(connection, guildId);
-  startSTTListening(
+  stt().startSTTListening(
     connection,
     guild,
     textChannel,
     async (userId, member, text, channel) => {
       try {
-        const { text: aiReply, skipTTS } = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId, voiceToolCtx(guildId, { guild, member, channel, userId }), { textChannel: channel, member });
+        // 只有 stt 為 on 才走得到這裡，而 stt 需要 ai，所以 ai() 一定存在
+        const { text: aiReply, skipTTS } = await ai().getGeminiResponseVoice(userId, text, null, null, null, null, guildId, voiceToolCtx(guildId, { guild, member, channel, userId }), { textChannel: channel, member });
         await channel.send(`🤖 **機器鳥**：${aiReply}`);
 
         // 點歌等音樂操作不朗讀，免得蓋過剛點的歌
         if (!skipTTS) {
-          const result = await playTTS(guildId, aiReply);
-          if (!result.success) logger.warn('STT', `TTS 失敗：${result.reason}`);
+          const result = await speakReply(guildId, aiReply);
+          if (result && !result.success) logger.warn('STT', `TTS 失敗：${result.reason}`);
         }
       } catch (err) {
+        const { isQuotaError, quotaMessage } = require('./ai/aiQuota');
         if (isQuotaError(err)) {
           await channel.send(quotaMessage(err)).catch(() => {});
           return;
@@ -285,7 +296,7 @@ function startWakeWord(guild, textChannel) {
 /** 停止喚醒詞監聽；原本就沒在監聽時回傳 false */
 function stopWakeWord(guildId) {
   if (!sttActiveGuilds.has(guildId)) return false;
-  stopSTTListening(guildId);
+  stt()?.stopSTTListening(guildId);
   sttActiveGuilds.delete(guildId);
   return true;
 }
@@ -293,22 +304,38 @@ function stopWakeWord(guildId) {
 // ════════════════════════════════════════════════════════
 //  /voice 單一指令，底下掛 join / leave / status /
 //  stt(group: start/stop) / silence / record-button
+//  STT 沒有啟用時不註冊 stt 群組和 record-button
 // ════════════════════════════════════════════════════════
-const voiceCommand = {
-  data: new SlashCommandBuilder()
+
+/**
+ * 建立 /voice 指令。sttOn 時的呼叫順序必須和改成條件式之前完全相同，
+ * 指令 JSON 才會一致（不一致的話開機會重新 PUT 全域指令）。
+ */
+function buildVoiceCommand(sttOn) {
+  const builder = new SlashCommandBuilder()
     .setName('voice')
     .setDescription('語音頻道相關功能')
     .addSubcommand(sub => sub.setName('join').setDescription('讓 Bot 加入你目前所在的語音頻道'))
     .addSubcommand(sub => sub.setName('leave').setDescription('讓 Bot 離開語音頻道'))
-    .addSubcommand(sub => sub.setName('status').setDescription('查看 Bot 目前的語音頻道狀態'))
-    .addSubcommandGroup(group =>
+    .addSubcommand(sub => sub.setName('status').setDescription('查看 Bot 目前的語音頻道狀態'));
+  if (sttOn) {
+    builder.addSubcommandGroup(group =>
       group.setName('stt')
         .setDescription('STT 語音辨識功能')
         .addSubcommand(sub => sub.setName('start').setDescription('啟動 STT 語音辨識監聽（喚醒詞）'))
         .addSubcommand(sub => sub.setName('stop').setDescription('停止 STT 語音辨識監聽'))
-    )
-    .addSubcommand(sub => sub.setName('silence').setDescription('管理靜音防踢功能'))
-    .addSubcommand(sub => sub.setName('record-button').setDescription('發送手動錄音按鈕')),
+    );
+  }
+  builder.addSubcommand(sub => sub.setName('silence').setDescription('管理靜音防踢功能'));
+  if (sttOn) {
+    builder.addSubcommand(sub => sub.setName('record-button').setDescription('發送手動錄音按鈕'));
+  }
+  return builder;
+}
+
+const voiceCommand = {
+  // setupVoiceCommands 依 STT 是否啟用建立
+  data: null,
 
   async execute(interaction) {
     const sub   = interaction.options.getSubcommand();
@@ -345,8 +372,10 @@ async function handleJoin(interaction) {
       try {
         await joinChannel(voiceChannel);
 
-        await interaction.editReply(
-          `✅ 已加入語音頻道：**${voiceChannel.name}**\n💡 可用 \`/voice stt start\`（喚醒詞）或 \`/voice record-button\`（按鈕手動錄音）`
+        // STT 沒有啟用時 /voice stt、/voice record-button 都沒有註冊，不提示
+        await interaction.editReply(features.isEnabled('stt')
+          ? `✅ 已加入語音頻道：**${voiceChannel.name}**\n💡 可用 \`/voice stt start\`（喚醒詞）或 \`/voice record-button\`（按鈕手動錄音）`
+          : `✅ 已加入語音頻道：**${voiceChannel.name}**`
         );
 
       } catch (error) {
@@ -382,6 +411,8 @@ async function handleStatus(interaction) {
       const channel     = interaction.guild.channels.cache.get(connection.joinConfig.channelId);
       const activeLayer = getActiveLayer(guildId);
       const isSttActive = sttActiveGuilds.has(guildId);
+      const sttText = !features.isEnabled('stt') ? '⛔ 未啟用'
+        : isSttActive ? '🎙️ 監聽中' : '⏸️ 未啟用';
 
       const layerText = {
         silence: '🔇 靜音防踢中',
@@ -398,7 +429,7 @@ async function handleStatus(interaction) {
             { name: '連接狀態', value: connection.state.status, inline: true },
             { name: '頻道成員', value: `${channel?.members.size || 0} 人`, inline: true },
             { name: '音頻層',   value: layerText, inline: true },
-            { name: 'STT 狀態', value: isSttActive ? '🎙️ 監聽中' : '⏸️ 未啟用', inline: true }
+            { name: 'STT 狀態', value: sttText, inline: true }
           )
           .setTimestamp()
       ]});
@@ -411,6 +442,11 @@ async function handleStt(interaction, sub) {
       if (sub === 'start') {
         const sttTextChannel = findTranscriptChannel(interaction.guild) || interaction.channel;
         const result = startWakeWord(interaction.guild, sttTextChannel);
+
+        // Discord 端可能還留著 STT 啟用時註冊的舊指令
+        if (result === 'unavailable') {
+          return interaction.reply({ content: STT_UNAVAILABLE_MESSAGE, flags: MessageFlags.Ephemeral });
+        }
 
         if (result === 'no_connection') {
           return interaction.reply({
@@ -448,6 +484,11 @@ async function handleStt(interaction, sub) {
 
 // ── /voice record-button（原 /heyjqn） ───────────────────
 async function handleRecordButton(interaction) {
+      // Discord 端可能還留著 STT 啟用時註冊的舊指令
+      if (!features.isEnabled('stt')) {
+        return interaction.reply({ content: STT_UNAVAILABLE_MESSAGE, flags: MessageFlags.Ephemeral });
+      }
+
       const guildId    = interaction.guildId;
       const connection = getVoiceConnection(guildId);
 
@@ -458,12 +499,12 @@ async function handleRecordButton(interaction) {
         });
       }
 
-      ensureManualSession(connection, interaction.guild, interaction.channel, async (userId, member, text, channel) => {
-        const { text: aiReply, skipTTS } = await getGeminiResponseVoice(userId, text, null, null, null, null, guildId, voiceToolCtx(guildId, { guild: interaction.guild, member, channel, userId }), { textChannel: channel, member });
+      stt().ensureManualSession(connection, interaction.guild, interaction.channel, async (userId, member, text, channel) => {
+        const { text: aiReply, skipTTS } = await ai().getGeminiResponseVoice(userId, text, null, null, null, null, guildId, voiceToolCtx(guildId, { guild: interaction.guild, member, channel, userId }), { textChannel: channel, member });
         await channel.send(`🤖 **機器鳥**：${aiReply}`);
         if (skipTTS) return; // 點歌等音樂操作不朗讀
-        const ttsResult = await playTTS(guildId, aiReply);
-        if (!ttsResult.success) {
+        const ttsResult = await speakReply(guildId, aiReply);
+        if (ttsResult && !ttsResult.success) {
           await channel.send(`⚠️ TTS 失敗：${ttsResult.reason}`);
         }
       });
@@ -504,6 +545,8 @@ async function handleSilenceCommand(interaction) {
 //  setupVoiceCommands：註冊合併後的 /voice 指令 + 按鈕/選單監聽
 // ════════════════════════════════════════════════════════
 function setupVoiceCommands(client) {
+  const sttOn = features.isEnabled('stt');
+  voiceCommand.data = buildVoiceCommand(sttOn);
   client.commands.set(voiceCommand.data.name, voiceCommand);
 
   // ── interactionCreate: silence 選單（防重複註冊）──────
@@ -586,13 +629,17 @@ function setupVoiceCommands(client) {
     });
   }
 
-  // ── interactionCreate: heyjqn 按鈕（防重複註冊）──────
-  if (!heyjqnBound) {
+  // ── interactionCreate: heyjqn 按鈕（防重複註冊；STT 沒有啟用時不註冊）──
+  if (sttOn && !heyjqnBound) {
     heyjqnBound = true;
 
     client.on('interactionCreate', async (interaction) => {
       if (!interaction.isButton()) return;
       if (!interaction.customId.startsWith('heyjqn_record:')) return;
+
+      if (!features.isEnabled('stt')) {
+        return interaction.reply({ content: STT_UNAVAILABLE_MESSAGE, flags: MessageFlags.Ephemeral });
+      }
 
       const guildId    = interaction.guildId;
       const userId     = interaction.user.id;
@@ -664,18 +711,18 @@ function setupVoiceCommands(client) {
         });
 
         // 2) 確保手動 Session
-        ensureManualSession(connection, interaction.guild, interaction.channel, async (uid, member, text, channel) => {
-          const { text: aiReply, skipTTS } = await getGeminiResponseVoice(uid, text, null, null, null, null, guildId, voiceToolCtx(guildId, { guild: interaction.guild, member, channel, userId: uid }), { textChannel: channel, member });
+        stt().ensureManualSession(connection, interaction.guild, interaction.channel, async (uid, member, text, channel) => {
+          const { text: aiReply, skipTTS } = await ai().getGeminiResponseVoice(uid, text, null, null, null, null, guildId, voiceToolCtx(guildId, { guild: interaction.guild, member, channel, userId: uid }), { textChannel: channel, member });
           await channel.send(`🤖 **機器鳥**：${aiReply}`);
           if (skipTTS) return; // 點歌等音樂操作不朗讀
-          const ttsResult = await playTTS(guildId, aiReply);
-          if (!ttsResult.success) {
+          const ttsResult = await speakReply(guildId, aiReply);
+          if (ttsResult && !ttsResult.success) {
             await channel.send(`⚠️ TTS 失敗：${ttsResult.reason}`);
           }
         });
 
         // 3) 執行錄音流程
-        await manualRecordOnce(guildId, userId, interaction.member, interaction.channel);
+        await stt().manualRecordOnce(guildId, userId, interaction.member, interaction.channel);
 
       } catch (err) {
         logger.error('heyjqn', '按鈕流程錯誤:', err);
@@ -701,7 +748,10 @@ function setupVoiceCommands(client) {
     });
   }
 
-  bootSummary.report('語音頻道 (/voice)', 'ok', 'join / leave / stt / silence / record-button');
+  // 依實際註冊的子指令組字串；全開時和以前的文字相同
+  bootSummary.report('語音頻道 (/voice)', 'ok', sttOn
+    ? 'join / leave / stt / silence / record-button'
+    : 'join / leave / status / silence');
 }
 
 module.exports = {

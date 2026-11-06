@@ -18,6 +18,7 @@
 const path = require('path');
 const { readJson, writeJsonAtomic, createDebouncedWriter } = require('../../../utils/jsonStore');
 const processGuards = require('../../../utils/processGuards');
+const features = require('../../../utils/features');
 
 const SESSION_PATH = path.join(__dirname, '..', '..', '..', 'data', 'musicSession.json');
 const ENABLED = process.env.MUSIC_RESUME !== '0';
@@ -53,7 +54,8 @@ function onChange(fn) {
 }
 
 function freezeAndFlush() {
-    if (!ENABLED || frozen) return;
+    // 音樂模組停用時不會有播放，寫出去只會是空快照，反而蓋掉之前留下的快照
+    if (!ENABLED || frozen || !features.isEnabled('music')) return;
     writer.flush();
     frozen = true;
 }

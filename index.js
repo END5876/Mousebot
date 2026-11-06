@@ -13,37 +13,17 @@ const { startHealthServer } = require('./utils/health');
 const { startHeartbeat } = require('./utils/heartbeat');
 const { startAgentServer } = require('./admin/agent');
 
-// ── 導入所有處理器 ─────────────────────────────────────────
-const { applyPresence }          = require('./handlers/presenceHandler');
-const { setupVoiceCommands }     = require('./handlers/voiceHandler');
-const { setupBasicCommands }     = require('./handlers/commandHandler');
-const { setupCustomResponses }   = require('./handlers/responseHandler');
-const { setupAICommands }        = require('./handlers/ai/aiHandler');
-// gugugagaGenerator.js 現在只匯出純函式，/gugu 已合併進 /ai gugu，由 setupAICommands 註冊
-const { setupAutoJoinCommands }  = require('./handlers/autoJoinHandler');
-const { setupTTSCommands }       = require('./handlers/voice/ttsHandler');
-const { setupNoticeCommands }    = require('./handlers/notice/noticeHandler');
-const { setupTimeAnnouncer }     = require('./handlers/notice/timeAnnouncer');
-
-// ── 導入分帳系統 ────────────────────────
-const { setupSplitbillCommands } = require('./handlers/splitbill/index');
-
-// ── 重構後的音樂模組 ───────────────────────────────────────
-const { setupUnifiedCommands, resumeSavedSessions, startWebSync } = require('./handlers/musicplayer/unifiedQueue');
-const { setupOnlineMusicEngine } = require('./handlers/musicplayer/onlineMusicHandler');
-const { setupLocalMusicEngine }  = require('./handlers/musicplayer/localMusicHandler');
+// ── 核心功能（不受 FEATURES 控制）─────────────────────────
+const { applyPresence } = require('./handlers/presenceHandler');
+// 其他功能模組由 utils/features.js 的登錄表決定要不要載入（環境變數 FEATURES）
+const features = require('./utils/features');
 
 // ── 創建客戶端 ─────────────────────────────────────────────
 const client = new Client({
   // 預設只允許 @使用者；擋掉 @everyone / @here / 身分組提及。
   allowedMentions: { parse: ['users'] },
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildVoiceStates,
-    GatewayIntentBits.GuildMembers,
-  ]
+  // 只要求已啟用模組需要的 intents（全開時是 Guilds、GuildMessages、MessageContent、GuildVoiceStates、GuildMembers）
+  intents: features.intents().map(k => GatewayIntentBits[k]),
 });
 
 // 致命錯誤與 SIGTERM / SIGINT 時刻意不呼叫 client.destroy()：
@@ -57,25 +37,21 @@ if (OWNER_USER_IDS.size === 0) {
 // ── Slash Command 集合 ─────────────────────────────────────
 client.commands = new Collection();
 
-// ── 註冊各模組處理器（同步，順序無關）────────────────────
-setupVoiceCommands(client);
-setupBasicCommands(client);
-setupCustomResponses(client);
-setupAICommands(client);
-setupAutoJoinCommands(client);
-setupTTSCommands(client);
-setupNoticeCommands(client);
-setupTimeAnnouncer(client);
+// ── 錯誤處理 ──────────────────────────────────────────────
+// 要在模組 setup 之前掛上：EventEmitter 發出 'error' 卻沒有監聽器時會直接丟例外，讓程序崩潰。
+// shardError 以前是 autoJoinHandler 代掛的，autojoin 停用時就沒人監聽，所以搬到核心。
+client.on('error', error => {
+  logger.error('Discord', '客戶端錯誤：', error);
+});
+client.on('shardError', error => {
+  logger.error('Discord', 'Shard 錯誤：', error);
+});
 
-// ── 🆕 注入分帳介面與唯一的 /splitbill 指令 ───────────────
-setupSplitbillCommands(client);
-
-// ── 音樂：指令與本地引擎在登入前就註冊 ────────────────────
-// 過去要等 clientReady 後才註冊 /play、/music，這段期間有人下指令會得到「找不到指令」。
-// 本地引擎不依賴網路可立即注入；線上引擎（需檢查 yt-dlp / bgutil）在 ready 後非同步注入，
+// ── 註冊各模組處理器（依 utils/features.js 的清單順序）────
+// 音樂的指令與本地引擎也在登入前就註冊：過去要等 clientReady 後才註冊 /play、/music，
+// 這段期間有人下指令會得到「找不到指令」。線上引擎（需檢查 yt-dlp / bgutil）在 ready 後非同步注入，
 // 注入前呼叫線上功能時各呼叫點會回覆「引擎初始化中」。
-setupLocalMusicEngine(client);
-setupUnifiedCommands(client);
+features.setupModules(client);
 
 // ── Slash Command 互動處理 ─────────────────────────────────
 client.on('interactionCreate', async interaction => {
@@ -149,33 +125,31 @@ client.once('clientReady', async () => {
   // 狀態與活動文字可以在管理面板修改（data/presence.json）
   applyPresence(client);
 
-  // 線上音樂引擎（含 yt-dlp / bgutil 檢查）與指令同步彼此獨立，並行處理
+  // 線上音樂引擎（含 yt-dlp / bgutil 檢查）與指令同步彼此獨立，並行處理；音樂停用時跳過
+  const music = features.get('music');
   await Promise.all([
-    setupOnlineMusicEngine(),
+    music ? features.load('handlers/musicplayer/onlineMusicHandler').setupOnlineMusicEngine() : null,
     registerSlashCommands(),
   ]);
 
   // ── 所有模組都已回報狀態，統一印出開機摘要 ────────────
   // 網頁「正在播放」同步（要在開機摘要之前，才會列進摘要表）
-  startWebSync(client);
+  if (music) music.startWebSync(client);
   // 外部監控的心跳（設定 HEARTBEAT_URL 才啟用）
   startHeartbeat(client);
 
   bootSummary.print();
 
   // ── 接續重啟前的音樂播放（需在線上引擎注入之後）──────
-  const resumed = await resumeSavedSessions(client);
-  if (resumed > 0) logger.success('MusicSession', `已恢復 ${resumed} 個伺服器的播放`);
+  if (music) {
+    const resumed = await music.resumeSavedSessions(client);
+    if (resumed > 0) logger.success('MusicSession', `已恢復 ${resumed} 個伺服器的播放`);
+  }
 });
 
 startHealthServer(client);
 // 管理 API：給 admin-panel 服務呼叫（設定 ADMIN_AGENT_TOKEN 才會啟動）
 startAgentServer(client, require('./admin/api'));
-
-// ── 錯誤處理 ──────────────────────────────────────────────
-client.on('error', error => {
-  logger.error('Discord', '客戶端錯誤：', error);
-});
 
 // ── 登入 ──────────────────────────────────────────────────
 client.login(process.env.DISCORD_TOKEN).catch(error => {

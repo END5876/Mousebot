@@ -4,10 +4,10 @@
 
 const { TTS_MODELS, DEFAULT_MODEL, activeModels, getActiveModel } = require('../../handlers/voice/ttsHandler/models');
 const { EDGE_VOICE_CHOICES, activeEdgeVoices, getHasEdgeTTS } = require('../../handlers/voice/ttsHandler/edgeTTS');
-const { SOVITS_HOST, SOVITS_PORT, checkSoVITSHealth } = require('../../handlers/voice/ttsHandler/sovitsClient');
+const { SOVITS_HOST, SOVITS_PORT, isSoVITSConfigured, checkSoVITSHealth } = require('../../handlers/voice/ttsHandler/sovitsClient');
 const { setGuildModel, setGuildEdgeVoice } = require('../../handlers/voice/ttsHandler/settings');
 const { playTTS } = require('../../handlers/voice/ttsHandler');
-const { isAITTSEnabled, setAITTSEnabled } = require('../../handlers/ai/aiUtils');
+const features = require('../../utils/features');
 const { guildSummary } = require('../discordInfo');
 const { voiceInfo } = require('../voiceState');
 const { HttpError, bool, snowflake, str, requireReady } = require('../http');
@@ -20,6 +20,9 @@ const SAY_FAIL = {
 };
 
 module.exports = function registerTts(router, client) {
+  // AI 回覆朗讀要 ai 模組也開著（aiTts 需要 ai 和 tts）；在 register 時才取，不在最上層呼叫 features.get()
+  const aiTts = features.get('aiTts');
+
   const guildOf = (params) => {
     requireReady(client);
     const guild = client.guilds.cache.get(snowflake(params.guildId, '伺服器'));
@@ -30,10 +33,12 @@ module.exports = function registerTts(router, client) {
 
   router.get('/api/tts', async () => {
     requireReady(client);
-    const online = await checkSoVITSHealth(); // 30 秒內有檢查過就直接用結果
+    // 30 秒內有檢查過就直接用結果；沒設定 SOVITS_HOST 時不送請求、一律 false
+    const online = isSoVITSConfigured() ? await checkSoVITSHealth() : false;
     return {
       sovits: {
-        host: `${SOVITS_HOST}:${SOVITS_PORT}`,
+        // 用字串而不是 null，admin-panel 照常顯示
+        host: isSoVITSConfigured() ? `${SOVITS_HOST}:${SOVITS_PORT}` : '未設定',
         online,
         defaultModel: DEFAULT_MODEL || null,
         models: Object.entries(TTS_MODELS).map(([key, m]) => ({ key, name: m.name })),
@@ -46,7 +51,7 @@ module.exports = function registerTts(router, client) {
           model: activeModels.get(guild.id) ?? null,
           effectiveModel: getActiveModel(guild.id).key ?? null,
           edgeVoice: activeEdgeVoices.get(guild.id) ?? null,
-          aiTTS: isAITTSEnabled(guild.id),
+          aiTTS: aiTts ? aiTts.isAITTSEnabled(guild.id) : null,
           inVoice: !!voiceInfo(guild),
         })),
     };
@@ -82,9 +87,10 @@ module.exports = function registerTts(router, client) {
   });
 
   router.put('/api/tts/:guildId/ai-tts', ({ params, body, audit }) => {
+    if (!aiTts) throw new HttpError(409, 'AI 未啟用');
     const guild = guildOf(params);
     const enabled = bool(body.enabled, 'AI 回覆朗讀');
-    setAITTSEnabled(guild.id, enabled);
+    aiTts.setAITTSEnabled(guild.id, enabled);
     audit(`${enabled ? '開啟' : '關閉'}「${guild.name}」的 AI 回覆朗讀`);
     return { enabled };
   });

@@ -146,11 +146,8 @@ function setupSplitbillCommands(client) {
     }
   });
 
-  if (splitbillClient.isConfigured()) {
-    bootSummary.report('分帳系統 (/splitbill, /splitbill-quick, /splitbill-attach)', 'ok', '資料來自獨立的 splitbill-service（SPLITBILL_SERVICE_URL）');
-  } else {
-    bootSummary.report('分帳系統 (/splitbill, /splitbill-quick, /splitbill-attach)', 'off', '未設定 SPLITBILL_SERVICE_URL，分帳指令將無法使用');
-  }
+  // 沒有 SPLITBILL_SERVICE_URL 時 utils/features.js 不會呼叫這裡（開機摘要由它回報 off）
+  bootSummary.report('分帳系統 (/splitbill, /splitbill-quick, /splitbill-attach)', 'ok', '資料來自獨立的 splitbill-service（SPLITBILL_SERVICE_URL）');
 }
 
 /**

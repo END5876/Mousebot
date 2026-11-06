@@ -5,7 +5,7 @@ const logger = require('../../../utils/logger');
 const { getActiveModel } = require('./models');
 const { getCached, putCache } = require('./cache');
 const {
-  checkSoVITSHealth, generateSoVITS, reportSovitsSuccess, reportSovitsFailure
+  isSoVITSConfigured, checkSoVITSHealth, generateSoVITS, reportSovitsSuccess, reportSovitsFailure
 } = require('./sovitsClient');
 const { resolveVoice, generateEdgeTTS, getHasEdgeTTS } = require('./edgeTTS');
 
@@ -22,8 +22,9 @@ async function generateTTS(text, filename, guildId) {
   const cached = await getCached(text, model.key, tempDir);
   if (cached) return cached;
 
-  // 先做健康檢查，已知不可用時跳過 SoVITS
-  const healthy = await checkSoVITSHealth();
+  // 先做健康檢查，已知不可用時跳過 SoVITS；沒設定 SOVITS_HOST 時直接走 edge-tts
+  const sovitsConfigured = isSoVITSConfigured();
+  const healthy = sovitsConfigured && await checkSoVITSHealth();
 
   if (healthy) {
     try {
@@ -40,7 +41,8 @@ async function generateTTS(text, filename, guildId) {
       reportSovitsFailure();
       logger.warn('SoVITS', `失敗 (${err.message})，切換至 edge-tts`);
     }
-  } else {
+  } else if (sovitsConfigured) {
+    // 沒設定 SoVITS 時每一句都會走到這裡，不印 log 以免洗版
     logger.info('SoVITS', `⚡ 已知不可用，直接使用 edge-tts`);
   }
 

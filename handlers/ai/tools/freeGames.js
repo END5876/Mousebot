@@ -67,4 +67,7 @@ const tools = [
     },
 ];
 
-module.exports = { tools, _cache: cache };
+// AI 工具的預篩關鍵字（tools/index.js 的 needsTools 用）：召回率優先，精準度交給判斷階段
+const keywords = ['免費', '白嫖', '送遊戲', '領取', 'epic', 'steam'];
+
+module.exports = { tools, keywords, _cache: cache };

@@ -82,7 +82,7 @@ function getReplyChance(guildId) {
 //   - 只有一隻：不論區段在哪，命中率都剛好是 p，和原本一樣
 //   - n 隻：每隻的 p ≤ 1/n 就保證不會同時回；超過時只有超出的部分會重疊
 // 預設 MouseBot 0/2、lite 1/2；第三隻以上（例如再開一個 lite 人格）要明確設定，例如 0/3、1/3、2/3。
-const DEFAULT_SLOT = '0/2';
+const DEFAULT_SLOT = require('../../profile').defaultRandomSlot; // MouseBot '0/2'、lite '1/2'（見 profile.js）
 
 /** 解析 i/n，回傳區段起點 [0, 1)；格式不對時用預設值 */
 function parseSlot(value) {

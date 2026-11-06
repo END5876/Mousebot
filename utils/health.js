@@ -17,6 +17,7 @@
 const http = require('http');
 const { Status } = require('discord.js');
 const logger = require('./logger');
+const features = require('./features');
 
 const PORT = Number.parseInt(process.env.HEALTH_PORT ?? '3939', 10);
 const HOST = process.env.HEALTH_HOST || '127.0.0.1';
@@ -63,8 +64,9 @@ function checkDiscord(client) {
 }
 
 async function collect(client) {
-    const owwUrl = process.env.OWW_HTTP_URL ? `${process.env.OWW_HTTP_URL}/health` : null;
-    const potUrl = `${process.env.YT_POT_PROVIDER_URL || 'http://127.0.0.1:4416'}/ping`;
+    // 模組停用時（FEATURES 或缺設定）不探測，回報 disabled 而不是 down
+    const owwUrl = features.isEnabled('stt') && process.env.OWW_HTTP_URL ? `${process.env.OWW_HTTP_URL}/health` : null;
+    const potUrl = features.isEnabled('music') ? `${process.env.YT_POT_PROVIDER_URL || 'http://127.0.0.1:4416'}/ping` : null;
 
     const discord = checkDiscord(client);
     const [oww, potProvider] = await Promise.all([probe(owwUrl), probe(potUrl)]);

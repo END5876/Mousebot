@@ -148,6 +148,169 @@ test('agent：這隻 Bot 的 API 模組都載入得起來，features 只列出�
   for (const f of api.features(client)) if (PROBE[f]) assert.ok(has(PROBE[f]), `${f} 沒有 ${PROBE[f]}`);
 });
 
+// 依 FEATURES 決定的頁面與路由：模組 setup／載入會掛計時器，所以在子程序裡跑（見 utils/features.js）
+const PROBE_PATHS = [
+  '/api/voice', '/api/voice/1/join', '/api/voice/1/wake-word', '/api/music/library', '/api/autojoin',
+  '/api/tts', '/api/notify', '/api/time-announcer/1', '/api/ai/settings', '/api/prompts', '/api/responses',
+];
+
+const API_SCRIPT = `
+const { Router } = require('./admin/http');
+const api = require('./admin/api');
+const client = { isReady: () => false, user: null, ws: { status: 5, ping: -1 },
+  guilds: { cache: new Map() }, channels: { cache: new Map() }, users: { cache: new Map() } };
+const router = new Router();
+api.register(router, client);
+const paths = ${JSON.stringify(PROBE_PATHS)};
+const routes = Object.fromEntries(paths.map((p) => [p, router.routes.some((r) => r.re.test(p))]));
+process.stdout.write(JSON.stringify({ app: api.app, features: api.features(client), routes }));
+process.exit(0);
+`;
+
+function runApi(vars) {
+  const { spawnSync } = require('child_process');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mousebot-agent-api-'));
+  try {
+    const env = { ...process.env, MOUSEBOT_DATA_DIR: tmp, LOG_LEVEL: 'error', ...vars };
+    delete env.FEATURES;
+    if (vars.FEATURES !== undefined) env.FEATURES = vars.FEATURES;
+    const res = spawnSync(process.execPath, ['-e', API_SCRIPT], {
+      cwd: path.resolve(__dirname, '..'), env, encoding: 'utf8', timeout: 60_000,
+    });
+    assert.equal(res.status, 0, `子程序失敗：
+${res.stderr}${res.error ? `
+${res.error}` : ''}`);
+    return JSON.parse(res.stdout);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+const API_FULL_ENV = { GEMINI_API_KEY: 'x', GROQ_API_KEY: 'x', SPLITBILL_SERVICE_URL: 'http://splitbill.example' };
+// 下面幾個案例斷言正式版才有的頁面（TTS、通知、自訂回應）與多人格的 AI 設定；精簡版的對應行為由 liteBaseline／adminAi 測試涵蓋
+const MB_ONLY = { skip: require('../profile').app !== 'mousebot' && '只在正式版（Mousebot）成立' };
+
+test('agent：沒設 FEATURES 時回報的頁面與原本相同，選用頁面的路由都有註冊', MB_ONLY, () => {
+  const r = runApi(API_FULL_ENV);
+  assert.equal(r.app, 'mousebot');
+  assert.deepEqual([...r.features].sort(), [
+    'overview', 'responses', 'prompts', 'ai', 'usage', 'voice', 'tts', 'notify', 'status', 'maintenance', 'logs',
+    'voice:join', 'voice:wakeWord', 'maintenance:backup',
+  ].sort());
+  for (const [p, has] of Object.entries(r.routes)) assert.ok(has, `缺少 ${p}`);
+});
+
+test('agent：FEATURES=music,autojoin 只回報語音頁，不註冊 TTS、通知、AI 與手動加入／喚醒詞路由', () => {
+  const r = runApi({ ...API_FULL_ENV, FEATURES: 'music,autojoin' });
+  const has = new Set(r.features);
+  assert.ok(has.has('voice'));
+  for (const f of ['tts', 'notify', 'voice:join', 'voice:wakeWord', 'ai', 'prompts', 'usage', 'responses']) {
+    assert.ok(!has.has(f), `不應回報 ${f}`);
+  }
+  assert.deepEqual(r.routes, {
+    '/api/voice': true, '/api/voice/1/join': false, '/api/voice/1/wake-word': false,
+    '/api/music/library': true, '/api/autojoin': true,
+    '/api/tts': false, '/api/notify': false, '/api/time-announcer/1': false,
+    '/api/ai/settings': false, '/api/prompts': false, '/api/responses': false,
+  });
+});
+
+test('agent：FEATURES=notice 時通知頁沒有整點報時路由，語音頁不回報', MB_ONLY, () => {
+  const r = runApi({ FEATURES: 'notice' });
+  assert.ok(r.features.includes('notify'));
+  assert.ok(!r.features.includes('voice'));
+  assert.equal(r.routes['/api/notify'], true);
+  assert.equal(r.routes['/api/time-announcer/1'], false);
+  assert.equal(r.routes['/api/voice'], false);
+});
+
+// GET /api/voice：music 沒啟用時多回傳 musicControl:false（面板據此不顯示「點歌」），啟用時不加這個欄位
+const VOICE_SCRIPT = `
+const { Router } = require('./admin/http');
+const api = require('./admin/api');
+const client = { isReady: () => true, user: null, ws: { status: 0, ping: 1 },
+  guilds: { cache: new Map() }, channels: { cache: new Map() }, users: { cache: new Map() } };
+const router = new Router();
+api.register(router, client);
+const m = router.match('GET', '/api/voice');
+Promise.resolve(m.handler({ params: m.params, query: new URLSearchParams(), body: null }))
+  .then((r) => { process.stdout.write(JSON.stringify(r)); process.exit(0); });
+`;
+
+function runVoice(vars) {
+  const { spawnSync } = require('child_process');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mousebot-agent-voice-'));
+  try {
+    const env = { ...process.env, MOUSEBOT_DATA_DIR: tmp, LOG_LEVEL: 'error', ...vars };
+    delete env.FEATURES;
+    if (vars.FEATURES !== undefined) env.FEATURES = vars.FEATURES;
+    const res = spawnSync(process.execPath, ['-e', VOICE_SCRIPT], {
+      cwd: path.resolve(__dirname, '..'), env, encoding: 'utf8', timeout: 60_000,
+    });
+    assert.equal(res.status, 0, `子程序失敗：\n${res.stderr}`);
+    return JSON.parse(res.stdout);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+test('agent：GET /api/voice 只在 music 沒啟用時回傳 musicControl:false', MB_ONLY, () => {
+  assert.deepEqual(Object.keys(runVoice(API_FULL_ENV)).sort(), ['autoJoin', 'guilds']);
+  const noMusic = runVoice({ ...API_FULL_ENV, FEATURES: 'voice' });
+  assert.equal(noMusic.musicControl, false);
+  assert.equal(noMusic.autoJoin, null);
+});
+
+// GET /api/ai/settings：AI_USER_MODE_OVERRIDES 的固定人格放在 fixedUserModes（取代舊的 specialUsers）
+const AI_SETTINGS_SCRIPT = `
+const fs = require('fs');
+const path = require('path');
+const dir = process.env.MOUSEBOT_DATA_DIR;
+fs.mkdirSync(path.join(dir, 'prompts', 'modes'), { recursive: true });
+fs.writeFileSync(path.join(dir, 'prompts', 'modes', 'special.md'), '---\\nname: 特別\\n---\\nSPECIAL');
+fs.writeFileSync(path.join(dir, 'userModes.json'), JSON.stringify({ '900000000000000002': 'special' }));
+const { Router } = require('./admin/http');
+const api = require('./admin/api');
+const known = { id: '900000000000000001', username: 'fixed', globalName: null, displayAvatarURL: () => null };
+const client = { isReady: () => true, user: null, ws: { status: 0, ping: 1 },
+  guilds: { cache: new Map() }, channels: { cache: new Map() },
+  users: { cache: new Map([[known.id, known]]), fetch: async () => { throw new Error('unknown'); } } };
+const router = new Router();
+api.register(router, client);
+const m = router.match('GET', '/api/ai/settings');
+Promise.resolve(m.handler({ params: m.params, query: new URLSearchParams(), body: undefined, audit() {} })).then((r) => {
+  process.stdout.write(JSON.stringify({ hasSpecial: 'specialUsers' in r, fixedUserModes: r.fixedUserModes }));
+  process.exit(0);
+});
+`;
+
+test('agent：/api/ai/settings 用 fixedUserModes 列出固定人格，沒有 specialUsers', MB_ONLY, () => {
+  const { spawnSync } = require('child_process');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mousebot-agent-ai-'));
+  try {
+    const env = {
+      ...process.env, ...API_FULL_ENV, MOUSEBOT_DATA_DIR: tmp, LOG_LEVEL: 'error',
+      AI_USER_MODE_OVERRIDES: '900000000000000001:special,900000000000000002:gone',
+    };
+    delete env.FEATURES;
+    delete env.AI_DEFAULT_MODE;
+    const res = spawnSync(process.execPath, ['-e', AI_SETTINGS_SCRIPT], {
+      cwd: path.resolve(__dirname, '..'), env, encoding: 'utf8', timeout: 60_000,
+    });
+    assert.equal(res.status, 0, `子程序失敗：\n${res.stderr}`);
+    const r = JSON.parse(res.stdout);
+    assert.equal(r.hasSpecial, false);
+    assert.ok(Array.isArray(r.fixedUserModes));
+    assert.deepEqual(r.fixedUserModes.map(({ user, ...rest }) => ({ id: user.id, missing: user.missing, ...rest })), [
+      { id: '900000000000000001', missing: false, mode: 'special', modeName: '特別', overridden: false },
+      // 模式檔不存在 → modeName 為 null；這個人已用 /ai mode 指定 → overridden
+      { id: '900000000000000002', missing: true, mode: 'gone', modeName: null, overridden: true },
+    ]);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('agent：沒設定或太短的 ADMIN_AGENT_TOKEN 不啟動', () => {
   const saved = process.env.ADMIN_AGENT_TOKEN;
   try {

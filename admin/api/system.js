@@ -10,26 +10,19 @@ const { cacheStats, clearDownloads } = require('../cacheTools');
 const { TEXT_TYPES, VOICE_TYPES, guildSummary, guildChannels } = require('../discordInfo');
 const { HttpError, FileResponse, oneOf, snowflake, str, requireReady } = require('../http');
 const { createBackupTools, BackupError } = require('../backup');
+const profile = require('../../profile');
 
 const SYNC_COOLDOWN_MS = 30 * 1000;
 const RESTART_DELAY_MS = 500;
 const SUBCOMMAND_TYPES = [1, 2]; // SUB_COMMAND、SUB_COMMAND_GROUP
 
-// 設定備份包含的檔案。不含任何金鑰（admin-session-secret、cookies），也不含暫存或可重建的檔案。
-// AI 對話狀態（aiMemoryState.json 清除時間、aiMessageLog.json 回覆紀錄）涉及使用者隱私，刻意不放進備份
-const SETTINGS_FILES = [
-  'responses.json', 'userModes.json', 'replyChance.json', 'replyChanceDisabled.json', 'autojoin.json',
-  'steamchannel.json', 'epicchannel.json', 'timeAnnouncerSettings.json', 'voiceMonitorEnabled.json',
-  'presence.json', 'ttsSettings.json', 'aiTTS.json', 'aiScope.json',
-];
-const STATS_FILES = ['tokenUsage.json', 'musicPlayCount.json', 'steamnotified.json', 'epicnotified.json'];
-
+// 設定備份包含的檔案、共用人格規則與備份檔名開頭都在 profile.js 的 backup（各 Bot 不同；不含金鑰與隱私資料的理由見該檔）。
 // AI 人格（data/prompts/ 的共用規則與 modes/*.md，不含 .history 版本紀錄）一併備份
 const backupTools = createBackupTools({
-  app: 'Mousebot',
-  settingsFiles: SETTINGS_FILES,
-  statsFiles: STATS_FILES,
-  sharedPrompts: ['_general', '_voice', '_group'],
+  app: profile.backup.app,
+  settingsFiles: profile.backup.settingsFiles,
+  statsFiles: profile.backup.statsFiles,
+  sharedPrompts: profile.backup.sharedPrompts,
 });
 
 const shorten = (text, max = 60) => (text.length > max ? `${text.slice(0, max)}…` : text);
@@ -155,7 +148,7 @@ module.exports = function registerSystem(router, client) {
     const backup = backupTools.build(includeStats);
     log(`下載設定備份（${Object.keys(backup.files).length} 個檔案${includeStats ? '，含統計資料' : ''}）`);
     return new FileResponse({
-      filename: `mousebot-backup-${stamp()}.json`,
+      filename: `${profile.backup.filePrefix}-backup-${stamp()}.json`,
       contentType: 'application/json; charset=utf-8',
       body: JSON.stringify(backup, null, 2),
     });

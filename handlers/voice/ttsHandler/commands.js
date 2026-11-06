@@ -9,7 +9,7 @@ const {
   TTS_MODELS, loadModelsFromEnv, buildModelChoices
 } = require('./models');
 const {
-  SOVITS_HOST, SOVITS_PORT, resolveSoVITSHost, checkSoVITSHealth
+  SOVITS_HOST, SOVITS_PORT, isSoVITSConfigured, resolveSoVITSHost, checkSoVITSHealth
 } = require('./sovitsClient');
 const {
   EDGE_VOICE_CHOICES, checkEdgeTTS, getHasEdgeTTS, setHasEdgeTTS
@@ -31,25 +31,37 @@ function setupTTSCommands(client) {
 
   setHasEdgeTTS(checkEdgeTTS());
   logger.debug('TTS', getHasEdgeTTS() ? 'edge-tts 已就緒（作為 fallback）' : 'edge-tts 未安裝，fallback 不可用');
-  logger.debug('TTS', `GPT-SoVITS 目標: http://${SOVITS_HOST}:${SOVITS_PORT}`);
+  const modelNote = count > 0 ? `${count} 個模型` : '無自訂模型';
 
-  // SoVITS 連線狀態需要非同步的 DNS + 健康檢查才會知道結果，
-  // 完成後才回報摘要（clientReady 通常會晚於這個檢查完成，時序上沒問題）
-  resolveSoVITSHost().then(ip => {
-    checkSoVITSHealth().then(ok => {
-      const modelNote = count > 0 ? `${count} 個模型` : '無自訂模型';
-      if (ok) {
-        bootSummary.report('文字轉語音 (/tts)', 'ok', `GPT-SoVITS 連線正常（${ip}）｜${modelNote}`);
-      } else if (getHasEdgeTTS()) {
-        bootSummary.report('文字轉語音 (/tts)', 'warn', `SoVITS 離線，已 fallback 至 edge-tts｜${modelNote}`);
-      } else {
-        bootSummary.report('文字轉語音 (/tts)', 'off', 'SoVITS 離線且未安裝 edge-tts，TTS 無法運作');
-      }
+  if (!isSoVITSConfigured()) {
+    // 沒設定 SoVITS 時不查 DNS、不做健康檢查。edge-tts 還能用，不能把整個 TTS 回報成 off
+    logger.debug('TTS', '未設定 SOVITS_HOST，不使用 GPT-SoVITS');
+    if (getHasEdgeTTS()) {
+      bootSummary.report('文字轉語音 (/tts)', 'ok', `Edge-TTS（未設定 SOVITS_HOST，不使用 GPT-SoVITS）｜${modelNote}`);
+    } else {
+      bootSummary.report('文字轉語音 (/tts)', 'off', '未設定 SOVITS_HOST 且未安裝 edge-tts，TTS 無法運作');
+    }
+  } else {
+    logger.debug('TTS', `GPT-SoVITS 目標: http://${SOVITS_HOST}:${SOVITS_PORT}`);
+
+    // SoVITS 連線狀態需要非同步的 DNS + 健康檢查才會知道結果，
+    // 完成後才回報摘要（clientReady 通常會晚於這個檢查完成，時序上沒問題）
+    resolveSoVITSHost().then(ip => {
+      checkSoVITSHealth().then(ok => {
+        if (ok) {
+          bootSummary.report('文字轉語音 (/tts)', 'ok', `GPT-SoVITS 連線正常（${ip}）｜${modelNote}`);
+        } else if (getHasEdgeTTS()) {
+          bootSummary.report('文字轉語音 (/tts)', 'warn', `SoVITS 離線，已 fallback 至 edge-tts｜${modelNote}`);
+        } else {
+          bootSummary.report('文字轉語音 (/tts)', 'off', 'SoVITS 離線且未安裝 edge-tts，TTS 無法運作');
+        }
+      });
     });
-  });
+  }
 
   const modelChoices = buildModelChoices();
-  const hasModels    = modelChoices.length > 0;
+  // 沒設定 SoVITS 時模型沒辦法切換，不列出選項
+  const hasModels    = modelChoices.length > 0 && isSoVITSConfigured();
 
   const builder = new SlashCommandBuilder()
     .setName('tts')

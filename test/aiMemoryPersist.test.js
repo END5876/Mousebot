@@ -63,23 +63,23 @@ test('aiMemoryState：壞資料被忽略', () => {
 });
 
 test('aiMessageLog：紀錄重啟後仍有效（人格隔離不退化）', () => {
-  msgLog.recordBotMessageContext('m1', 'loss', 'u1', 'ming');
+  msgLog.recordBotMessageContext('m1', 'default', 'u1', 'ming');
   msgLog.recordBotMessageContext('m2', 'lover', 'u2', 'hua', { kind: 'single', scopeKey: 'g:1', askText: '  問題'.padEnd(400, '啊') });
   msgLog.recordBotMessageContext('m3', null, 'u1', 'ming'); // 沒有 mode 不記
   // extra 傳 null 或非物件不能拋錯，當成沒有額外欄位
-  assert.doesNotThrow(() => msgLog.recordBotMessageContext('m4', 'loss', 'u1', 'ming', null));
-  assert.doesNotThrow(() => msgLog.recordBotMessageContext('m5', 'loss', 'u1', 'ming', 'x'));
+  assert.doesNotThrow(() => msgLog.recordBotMessageContext('m4', 'default', 'u1', 'ming', null));
+  assert.doesNotThrow(() => msgLog.recordBotMessageContext('m5', 'default', 'u1', 'ming', 'x'));
 
   msgLog._reset(); // 寫出並模擬重啟
   const m1 = msgLog.getBotMessageContext('m1');
-  assert.equal(m1.mode, 'loss');
+  assert.equal(m1.mode, 'default');
   assert.equal(m1.userId, 'u1');
   assert.equal(m1.userName, 'ming');
   assert.equal(m1.kind, undefined);   // 多人格的呼叫端不傳，維持原本的資料形狀
   assert.ok(Number.isFinite(m1.ts));
 
   assert.equal(msgLog.getBotMessageContext('m4').kind, undefined);
-  assert.equal(msgLog.getBotMessageContext('m5').mode, 'loss');
+  assert.equal(msgLog.getBotMessageContext('m5').mode, 'default');
 
   const m2 = msgLog.getBotMessageContext('m2');
   assert.equal(m2.kind, 'single');
@@ -97,23 +97,23 @@ test('aiMessageLog：載入時丟掉超過 7 天的紀錄與壞資料', () => {
   // _reset 會先寫出上一份記憶體內容，所以要在 _reset 之後才覆蓋檔案
   msgLog._reset();
   fs.writeFileSync(path.join(TMP, 'aiMessageLog.json'), JSON.stringify({
-    old: { mode: 'loss', userId: 'u', userName: 'n', ts: now - msgLog.RETENTION_MS - 1000 },
-    fresh: { mode: 'loss', userId: 'u', userName: 'n', ts: now - 1000 },
+    old: { mode: 'default', userId: 'u', userName: 'n', ts: now - msgLog.RETENTION_MS - 1000 },
+    fresh: { mode: 'default', userId: 'u', userName: 'n', ts: now - 1000 },
     bad: { userId: 'u' },
   }));
   fs.rmSync(path.join(TMP, 'aiMessageLog.json.bak'), { force: true });
   assert.equal(msgLog.getBotMessageContext('old'), undefined);
   assert.equal(msgLog.getBotMessageContext('bad'), undefined);
-  assert.equal(msgLog.getBotMessageContext('fresh').mode, 'loss');
+  assert.equal(msgLog.getBotMessageContext('fresh').mode, 'default');
 });
 
 test('aiMessageLog：超過上限時淘汰最舊的', () => {
   for (let i = 0; i < msgLog.MAX_ENTRIES + 5; i++) {
-    msgLog.recordBotMessageContext(`cap${i}`, 'loss', 'u', 'n');
+    msgLog.recordBotMessageContext(`cap${i}`, 'default', 'u', 'n');
   }
   assert.equal(msgLog.getBotMessageContext('cap0'), undefined);
   assert.equal(msgLog.getBotMessageContext('cap4'), undefined);
-  assert.equal(msgLog.getBotMessageContext('cap5').mode, 'loss');
+  assert.equal(msgLog.getBotMessageContext('cap5').mode, 'default');
   msgLog._reset();
   const raw = JSON.parse(fs.readFileSync(path.join(TMP, 'aiMessageLog.json'), 'utf8'));
   assert.equal(Object.keys(raw).length, msgLog.MAX_ENTRIES);

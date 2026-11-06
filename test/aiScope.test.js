@@ -19,7 +19,7 @@ const { DEFAULT_MODE } = require('../handlers/ai/aiSettings');
 let fakeModes;
 function resetModes() {
   fakeModes = {
-    loss: { name: '預設' },
+    default: { name: '預設' },
     chat: { name: '聊天' },
     lover: { name: '戀人', singleScope: 'off' },
   };
@@ -68,9 +68,9 @@ test('解析順序：頻道 > 伺服器 > 預設；scopeKey 依命中層級', ()
   // 別的伺服器不受影響
   assert.equal(aiScope.getScope(G2, C2).kind, 'multi');
 
-  aiScope.setChannelScope(C, G, { kind: 'single', persona: 'loss' }, 'u1');
+  aiScope.setChannelScope(C, G, { kind: 'single', persona: 'default' }, 'u1');
   s = aiScope.getScope(G, C);
-  assert.equal(s.persona, 'loss');
+  assert.equal(s.persona, 'default');
   assert.equal(s.scopeKey, `c:${C}`);
   assert.equal(s.source, 'channel');
 
@@ -128,7 +128,7 @@ test('每次切換 epoch 變大、changedAt 遞增；設成一樣的不動', () 
   aiScope.setGuildScope(G, { kind: 'single', persona: 'chat' }, 'u1');
   assert.equal(aiScope.getScope(G, C).epoch, s1.epoch);
 
-  aiScope.setGuildScope(G, { kind: 'single', persona: 'loss' }, 'u1');
+  aiScope.setGuildScope(G, { kind: 'single', persona: 'default' }, 'u1');
   const s2 = aiScope.getScope(G, C);
   assert.ok(s2.epoch > s1.epoch);
   assert.ok(s2.changedAt > s1.changedAt);
@@ -166,7 +166,7 @@ test('重複 reset 不算改變；設成跟原本一樣也不算', () => {
 
   aiScope.setGuildScope(G, { kind: 'single', persona: 'chat' }, 'u1');
   assert.equal(aiScope.setGuildScope(G, { kind: 'single', persona: 'chat' }, 'u1').changed, false);
-  assert.equal(aiScope.setGuildScope(G, { kind: 'single', persona: 'loss' }, 'u1').changed, true);
+  assert.equal(aiScope.setGuildScope(G, { kind: 'single', persona: 'default' }, 'u1').changed, true);
 });
 
 test('伺服器 reset 後回到預設多人格，epoch 仍然變大', () => {
@@ -182,7 +182,7 @@ test('伺服器 reset 後回到預設多人格，epoch 仍然變大', () => {
 test('伺服器切換不影響有自己覆寫的頻道', () => {
   aiScope.setChannelScope(C, G, { kind: 'single', persona: 'chat' }, 'u1');
   const s1 = aiScope.getScope(G, C);
-  aiScope.setGuildScope(G, { kind: 'single', persona: 'loss' }, 'u1');
+  aiScope.setGuildScope(G, { kind: 'single', persona: 'default' }, 'u1');
   const s2 = aiScope.getScope(G, C);
   assert.equal(s2.epoch, s1.epoch);
   assert.equal(s2.persona, 'chat');
@@ -197,15 +197,15 @@ test('singleScope: off 的人格只有擁有者能選', () => {
 
 test('寫檔後重新載入（模擬重啟）結果一致；listScopePersonas', () => {
   aiScope.setGuildScope(G, { kind: 'single', persona: 'chat' }, 'u1');
-  aiScope.setChannelScope(C, G, { kind: 'single', persona: 'loss' }, 'u2');
-  aiScope.setChannelScope(C2, G, { kind: 'single', persona: 'loss' }, 'u2');
+  aiScope.setChannelScope(C, G, { kind: 'single', persona: 'default' }, 'u2');
+  aiScope.setChannelScope(C2, G, { kind: 'single', persona: 'default' }, 'u2');
   aiScope.setChannelScope(C2, G, null, 'u2');
   const before = [aiScope.getScope(G, C), aiScope.getScope(G, C2)];
 
   fresh();
   const after = [aiScope.getScope(G, C), aiScope.getScope(G, C2)];
   assert.deepEqual(after, before);
-  assert.deepEqual(aiScope.listScopePersonas().sort(), ['chat', 'loss']);
+  assert.deepEqual(aiScope.listScopePersonas().sort(), ['chat', 'default']);
   assert.equal(aiScope.getChannelEntry(C).changedBy, 'u2');
 
   // 重啟後的切換 epoch 仍然繼續往上加

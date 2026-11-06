@@ -10,6 +10,8 @@
 #   - 例外：容器啟動後 FATAL_RESTART_MIN_UPTIME_SEC（預設 600 秒）內就 FATAL 的 oww-server／bgutil-pot，
 #     代表重啟也救不回來（設定錯、模型檔壞掉），不再重啟，讓 Bot 降級運作（只少了喚醒詞／PO Token），
 #     避免整個 Bot 每幾十秒重啟一次、音樂一直中斷。node-bot 本身 FATAL 時一定重啟（Bot 已經不在了）。
+#   - entrypoint 依 FEATURES 設成 autostart=false 的程序（例如沒開 STT 時的 oww-server）會一直停在 STOPPED，
+#     不會產生 PROCESS_STATE_FATAL，所以這裡不必特別處理。
 #
 # 協定（http://supervisord.org/events.html）：stdout 只能寫 READY / RESULT，log 一律寫到 stderr。
 

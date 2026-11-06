@@ -53,12 +53,41 @@ singleScope: off       # 選填：只有擁有者能把它設成單一人格模�
 
 - **熱重載**：以檔案 mtime 比對（約 2 秒檢查一次），修改後**不需重啟**；解析失敗時沿用上一版，不會讓壞檔案弄掛 Bot。
 - **線上編輯**：Bot 擁有者可用 `/ai prompt edit <mode>` 以 Modal 編輯（含 `_general`、`_voice`；輸入不存在的代號即新增模式）。Discord 輸入框上限 4000 字，超過請直接改檔案。
-- **切換模式**：`/ai mode` 的模式清單來自 `data/prompts/modes/` 內的檔案（支援自動完成）；若使用者選的模式檔被刪除，會自動略過覆蓋、退回預設判斷。找不到的模式會 fallback 到 `loss`。
+- **切換模式**：`/ai mode` 的模式清單來自 `data/prompts/modes/` 內的檔案（支援自動完成）；若使用者選的模式檔被刪除，會自動略過覆蓋、退回預設判斷。找不到的模式會 fallback 到預設模式（`AI_DEFAULT_MODE`，預設 `default`）。
 - 首次使用可複製 [`examples/prompts/`](examples/prompts/) 到 `data/prompts/` 當起點。
-- 特殊身分：`LOVER_MODE_USER_IDS` 預設使用 `lover` 模式、`DEVELOPER_MODE_USER_IDS` 預設使用 `developer` 模式（需有對應模式檔）。
-- **多人格／單一人格**：預設是多人格（每個人用自己的人格）。管理員可用 `/ai scope set kind:single persona:<模式>` 把整個伺服器（或加 `channel:true` 只限目前頻道）改成單一人格：大家共用同一個人格，`/ai mode` 與特殊身分在那裡不生效，並額外接上 `_group.md`；對話歷史改成整個頻道的群組對話（30 分鐘內最多 24 則，可用 `AI_GROUP_MSG_LIMIT` 調小；標出每則是誰說的）。解析順序是頻道 > 父頻道（討論串）> 伺服器 > 預設，設定存在 `data/aiScope.json`。
+- 固定人格：`AI_USER_MODE_OVERRIDES=使用者ID:模式代號,…` 指定某些人的預設人格（需有對應模式檔，不存在時改用預設模式並在開機摘要警告）；`/ai mode` 的設定優先。
+- **多人格／單一人格**：預設是多人格（每個人用自己的人格）。管理員可用 `/ai scope set kind:single persona:<模式>` 把整個伺服器（或加 `channel:true` 只限目前頻道）改成單一人格：大家共用同一個人格，`/ai mode` 與固定人格在那裡不生效，並額外接上 `_group.md`；對話歷史改成整個頻道的群組對話（30 分鐘內最多 24 則，可用 `AI_GROUP_MSG_LIMIT` 調小；標出每則是誰說的）。解析順序是頻道 > 父頻道（討論串）> 伺服器 > 預設，設定存在 `data/aiScope.json`。
 - 使用者的模式設定持久化儲存於 `data/userModes.json`。
-- **AI 工具（function calling）**：使用者主動找 Bot 時（@提及、`/ai ask`、語音喚醒），AI 可以替人點歌／控制音樂、記帳、查免費遊戲、操作語音（`handlers/ai/tools/`）。隨機插話一律不帶工具；音樂控制要求使用者與 Bot 在同一個語音頻道，記帳要本人按確認卡。`AI_TOOLS=0` 可整個關閉。
+- **AI 工具（function calling）**：使用者主動找 Bot 時（@提及、`/ai ask`、語音喚醒），AI 可以替人點歌／控制音樂、記帳、查免費遊戲、操作語音（`handlers/ai/tools/`）。隨機插話一律不帶工具；音樂控制要求使用者與 Bot 在同一個語音頻道，記帳要本人按確認卡。`AI_TOOLS=0` 可整個關閉。各組工具跟著對應的模組：音樂、分帳（含沒設 `SPLITBILL_SERVICE_URL`）、限免通知、語音沒啟用時，那組工具不會給 AI（見「模組開關」）。
+- **範圍鎖定（`AI_SCOPE_LOCK`，選填）**：預設 `off`，範圍與人格照上面由 `/ai scope`、`/ai mode` 決定。設 `single` 時所有伺服器、頻道都跟同一個人格群聊（人格是 `AI_PERSONA`，沒設定時用 `AI_DEFAULT_MODE`），`single:<代號>` 則直接指定人格。鎖定時不讀寫 `aiScope.json`、`userModes.json`，`/ai` 只剩 `ask`、`clear`、`tts`、`chance`、`gugu`，而且只能在伺服器裡使用；人格檔不存在時改用內建的通用人格。
+
+### 表情包
+
+人格可以有自己的表情包，圖庫放在 `data/memes/<人格代號>/`（跟 prompts 一樣不隨程式碼部署），每個人格各自一套。用哪一套看這次回覆的人格：多人格時是使用者的人格，範圍鎖定時是鎖定的人格。資料夾不存在或沒有圖時功能關閉，所以預設沒有表情包。
+
+- **自己的圖**：直接把圖放進資料夾，檔名（不含副檔名）就是名字；`memes.json` 可寫 `{ "名字": "什麼時候用" }` 補說明。
+
+  ```
+  data/memes/<人格代號>/
+  ├── 嘴饞.png          # png / jpg / jpeg / gif / webp，單檔 9.5MB 以內
+  └── memes.json
+  ```
+
+- **套組清單**：`memes.json` 寫成 `{ "stickers": [ { id, name, emotion, tags, use, url, hash } ] }`，圖片用到時才從 `url` 下載，快取在 `.cache/`。範例匯入工具 [`examples/memes/importNekowhale.js`](examples/memes/importNekowhale.js) 會產生「大肥鱼」表情包的清單（[dsh-nekowhale-stickers](https://github.com/Loping151/dsh-nekowhale-stickers)；表情包作者：B站 [可以叫我云大人/雾雪](https://space.bilibili.com/103739)，[kiriyuki.com](https://kiriyuki.com) 制作；標註資料 CC BY-NC 4.0，圖片版權歸原作者，**僅限非商業使用並保留作者連結**）：
+
+  ```sh
+  node examples/memes/importNekowhale.js --persona <人格代號>              # 產生 data/memes/<人格代號>/memes.json
+  node examples/memes/importNekowhale.js --persona <人格代號> --with-gpt   # 另外加上「大肥鱼和GPT娘」雙人套組
+  node examples/memes/importNekowhale.js --persona <人格代號> --prefetch   # 順便把 GIF 全部先下載（約 358MB；預設用到才下載）
+  ```
+
+  沒寫 `--persona` 時用 `AI_PERSONA`；兩個都沒有就直接報錯。
+
+AI 在回覆最後單獨一行寫 `[表情:關鍵詞]`，送出時換成圖片（一則最多一張，也可以只送圖）。關鍵詞依序比對名字 → 情緒 → 標籤 → 名字／標籤／用途包含（兩邊先繁轉簡、英文轉小寫，對照表 `handlers/ai/t2sTable.js` 取自 OpenCC），同分隨機、避開最近 20 張；找不到或下載失敗就只送文字。送出前會把圖縮到長邊 `MEME_DISPLAY_SIZE` px（預設 160，動畫保留；`0` = 不縮），縮小版快取在 `.cache/small-<px>/`。
+
+**送網址還是送附件**：手機版 Discord 會把單張附件拉滿訊息寬度，但訊息內容只有圖片網址時產生的預覽照原尺寸顯示。設了 `MEME_PUBLIC_URL`（例如 `https://meme.example.com`，必須 https）時，表情包改成在文字之後另外送一則只有網址的訊息：`<MEME_PUBLIC_URL>/<人格代號>/small-<px>/<檔名>`，要由反向代理對應到 `data/memes/<人格代號>/.cache/small-<px>/<檔名>`（只開放 `small-*` 底下，不要列目錄）。沒設就送附件。
+
+增刪檔案不用重啟（約 5 秒內生效）。讀歷史、引用時，Bot 自己發過的表情包（附件或網址）會還原成 `[表情:名字]`，不重新下載圖片。
 
 
 ---
@@ -124,6 +153,8 @@ cp .env.example .env
 python3 -m venv /opt/oww-env
 source /opt/oww-env/bin/activate
 pip install -r oww-server/requirements.txt
+# 下載 openWakeWord 的特徵模型與內建喚醒詞模型（兩者都要先下載；Docker image 建置時已經下載好）
+python3 -c "from openwakeword.utils import download_models; download_models()"
 
 # 安裝額外執行期工具
 pip install edge-tts yt-dlp
@@ -154,17 +185,30 @@ npm run check   # 以上兩者（GitHub Actions 每次 push / PR 也會跑 lint 
 | 變數 | 必填 | 說明 |
 |---|---|---|
 | `DISCORD_TOKEN`、`CLIENT_ID` | ✅ | Discord Bot Token 與 Application ID |
-| `GEMINI_API_KEY` | ✅ | Google Gemini（`/ai` 對話與帳單照片辨識）；模型預設 `gemini-3.1-flash-lite`，可用 `GEMINI_MODEL` 換 |
+| `GEMINI_API_KEY` | 使用 AI 時 | Google Gemini（`/ai` 對話與帳單照片辨識）；模型預設 `gemini-3.1-flash-lite`，可用 `GEMINI_MODEL` 換。未設定時 AI 功能停用 |
+| `FEATURES` | | 只啟用部分模組，例如 `music,autojoin,ai`、`all,-splitbill`；未設定 = 全部開啟（見「模組開關」） |
+| `AI_DEFAULT_MODE` | | 預設人格代號（`data/prompts/modes/<代號>.md`），預設 `default` |
+| `AI_USER_MODE_OVERRIDES` | | 固定人格：`使用者ID:模式代號,…`，指定某些人的預設人格（見「AI 對話模式」） |
 | `OWNER_USER_ID` | 建議 | Bot 擁有者的 Discord ID（逗號分隔）。未設定時 `/ai mode`、`/response add`、`/autojoin` 變更頻道等擁有者功能全部拒絕 |
-| `GROQ_API_KEY` | | Groq Whisper 語音辨識；未設定時只有 STT 停用 |
+| `GROQ_API_KEY` | | Groq Whisper 語音辨識；未設定時只有 STT 停用，容器內的 OWW 服務也不會自動啟動 |
 | `ADMIN_AGENT_TOKEN` | | 啟用給 admin-panel 呼叫的管理 API（至少 32 字元，見「管理面板」） |
-| `SOVITS_HOST`／`SOVITS_PORT`／`SOVITS_MODEL_{KEY}_*` | | GPT-SoVITS TTS；未設定時只用 Edge-TTS |
+| `SOVITS_HOST`／`SOVITS_PORT`／`SOVITS_MODEL_{KEY}_*` | | GPT-SoVITS TTS；`SOVITS_HOST` 未設定時只用 Edge-TTS（不再預設連 localhost，本機 SoVITS 請設 `localhost`） |
 | `MUSIC_LIB_URL`／`MUSIC_LIB_SECRET` | | 共用音樂庫服務（music-library-service）；未設定則只用本機 `data/music` |
-| `SPLITBILL_SERVICE_URL`／`SPLITBILL_SERVICE_KEY` | | 分帳服務（splitbill-service）；未設定時 `/splitbill` 面板無法使用 |
+| `SPLITBILL_SERVICE_URL`／`SPLITBILL_SERVICE_KEY` | | 分帳服務（splitbill-service）；未設定 `SPLITBILL_SERVICE_URL` 時分帳指令不註冊 |
 | `ALERT_WEBHOOK_URL`／`HEARTBEAT_URL` | | Discord webhook 告警、外部監控心跳 |
 | `DEV_GUILD_ID` | | 開發用：Slash Commands 只註冊到這個伺服器、立即生效 |
 
-其餘選填項目（AI 額度、STT／OWW 參數、TTS 快取、音樂快取與接續播放、YouTube／Bilibili 認證、WARP 代理…）請見 `.env.example`。
+其餘選填項目（AI 額度、範圍鎖定 `AI_SCOPE_LOCK`、AI 朗讀預設 `AI_TTS_DEFAULT`、表情包、STT／OWW 參數、TTS 快取、音樂快取與接續播放、YouTube／Bilibili 認證、WARP 代理…）請見 `.env.example`。
+
+### 模組開關（FEATURES）
+
+模組清單在 `utils/features.js`（`MODULES`）：`voice`、`stt`、`basic`、`responses`、`ai`、`autojoin`、`tts`、`notice`、`timeannounce`、`splitbill`、`music`。
+
+- 未設定（或空白）時全部開啟，和沒有這個變數之前一樣；缺設定的模組照舊停用（沒有 `GEMINI_API_KEY` 就沒有 AI、沒有 `GROQ_API_KEY` 就沒有 STT、沒有 `SPLITBILL_SERVICE_URL` 就沒有分帳）。
+- 以逗號或空白分隔、不分大小寫；`all,-x` 表示全開但拿掉 x。寫錯的名稱會在開機摘要列一行 warn。
+- 依賴：`stt` 需要 `voice` 和 `ai`。AI 工具、AI 回覆朗讀（另外要 `tts`）、`/ai gugu` 跟著 `ai`，不能單獨寫。
+- 沒啟用的模組不會載入、不註冊指令，開機摘要逐一列出原因（`FEATURES 未包含`、`需要先啟用 …`、缺哪個設定）；管理面板也只顯示啟用的模組對應的頁面。
+- Discord intents 只申請啟用的模組需要的（見「注意事項」的對照表）。
 
 > splitbill-service 也要設定相同的 `OWNER_USER_ID`，否則 Bot 擁有者刪除他人行程時會被 service 拒絕。
 
@@ -174,13 +218,14 @@ npm run check   # 以上兩者（GitHub Actions 每次 push / PR 也會跑 lint 
 
 ```
 Mousebot/
-├── index.js                 # 主程式入口：建立 Discord Client、載入所有模組
+├── index.js                 # 主程式入口：建立 Discord Client、依 FEATURES 載入模組
+├── profile.js               # 這隻 Bot 自己的預設值（管理 API 的 app 名稱、備份內容、狀態文字、隨機回覆區段…）
 ├── admin/                   # 管理 API，給 admin-panel 呼叫（設定 ADMIN_AGENT_TOKEN 才啟動；網頁與登入在 admin-panel）
 │   ├── agent.js、http.js    # HTTP 層（金鑰驗證、audit 標頭）、極簡路由
 │   ├── api/                 # 各頁面的 API
 │   └── backup.js、cacheTools.js、discordInfo.js、voiceState.js   # 備份還原、快取清理、Discord 資訊、語音狀態
 ├── handlers/
-│   ├── ai/                  # /ai 對話、人格 prompt（promptStore）、Gemini 入口、額度與 token 用量、搜尋接地
+│   ├── ai/                  # /ai 對話、人格與範圍（persona、promptStore）、表情包（memeStore）、Gemini 入口、額度與 token 用量、搜尋接地
 │   │   └── tools/           # AI 的 function calling（點歌、分帳、免費遊戲、語音）
 │   ├── musicplayer/         # 線上／本地音樂、統一播放佇列（unifiedQueue/）、快取、響度正規化、網頁同步
 │   ├── voice/               # STT（喚醒詞 → 錄音 → Groq Whisper）與 ttsHandler/（SoVITS + Edge-TTS）
@@ -188,10 +233,11 @@ Mousebot/
 │   ├── splitbill/           # /splitbill 面板與指令（呈現層；資料在 splitbill-service）
 │   ├── audioManager.js      # 音頻優先級排程（SILENCE < MUSIC < TTS）
 │   └── …                    # autojoin、自訂回應、狀態文字、/voice 等其他指令
-├── utils/                   # logger、設定、JSON 原子寫入、指令同步、健康檢查、告警、心跳、節流器、關閉流程
-├── oww-server/              # Python OpenWakeWord 喚醒詞服務（Flask）與內建的 hey_taffy.onnx 模型
-├── docker/                  # 容器內的輔助程式（supervisord FATAL 監聽器）
+├── utils/                   # 模組開關（features.js）、logger、設定、JSON 原子寫入、指令同步、健康檢查、告警、心跳、節流器、關閉流程
+├── oww-server/              # Python OpenWakeWord 喚醒詞服務（Flask）與範例自訂模型 hey_taffy.onnx
+├── docker/                  # 容器啟動腳本（entrypoint.sh）、supervisord 設定範本、FATAL 監聽器
 ├── examples/prompts/        # AI 人格 prompt 範本（複製到 data/prompts/ 使用）
+├── examples/memes/          # 表情包範例匯入工具（見「表情包」）
 ├── test/                    # node:test 單元測試（npm test）
 ├── data/                    # 執行期資料（.gitignore 排除，見下方）
 ├── temp/                    # STT 暫存 .wav（.gitignore 排除）
@@ -204,6 +250,7 @@ Mousebot/
 | 路徑 | 內容 |
 |---|---|
 | `prompts/` | AI 人格 prompt（`_general.md`、`_voice.md`、`_group.md`、`modes/*.md`，**自備**，見「AI 對話模式」） |
+| `memes/<人格代號>/` | 表情包圖庫（選用，**自備**，見「表情包」） |
 | `aiScope.json` | AI 多人格／單一人格範圍設定（`/ai scope`） |
 | `aiMemoryState.json`、`aiMessageLog.json` | AI 對話記憶的清除時間、AI 回覆紀錄（隱私考量不進設定備份） |
 | `timeAnnouncer/` | 整點報時音效（**自備** 24 個 .wav） |
@@ -325,14 +372,16 @@ Mousebot/
 
 ```
 Docker Container (node:22-slim)
-├── [Node.js] bgutil PO Token Provider   ← 優先啟動（priority=1），供 yt-dlp 索取 PO Token
-├── [Python] OWW Server (Flask)   ← 優先啟動（priority=1）
+├── [Node.js] bgutil PO Token Provider   ← 優先啟動（priority=1），供 yt-dlp 索取 PO Token；只在 music 開啟時自動啟動
+├── [Python] OWW Server (Flask)   ← 優先啟動（priority=1）；只在 STT 開啟時自動啟動
 │     ├── 端點：/health、/detect、/pause、/resume、/reset
 │     ├── Session TTL 自動清除（預設 120 秒）
 │     └── Rate Limiting（預設每秒最多 10 次 /detect）
 └── [Node.js] Discord Bot   ← 延後啟動（priority=10，等待 OWW 就緒）
       ├── 透過 HTTP 與 OWW Server 通訊（OWW_HTTP_URL）
 ```
+
+容器的 CMD 是 `docker/entrypoint.sh`：先整理 `data/` 等可寫目錄的權限，再用 `node utils/features.js supervisor` 判斷 STT（`FEATURES` 未設定或包含 stt、有 `GROQ_API_KEY`，而且 voice、ai 都啟用）與 music 有沒有開，把結果代入 `docker/supervisord.conf` 的 `autostart`，最後 `exec supervisord`。判斷失敗時照舊全部啟動。沒自動啟動的程序仍然登記在 supervisord 裡，只是停著。
 
 ### 音頻優先級排程
 
@@ -391,11 +440,23 @@ Discord 面板 ──→ splitbillClient.js ──(內部網路 HTTP)──┐
 - 本專案是**自架**用的 Discord 機器人：沒有公開的 Bot 可以邀請，需要自己建立 Discord Application、取得 Token 與各項 API 金鑰後部署（見「安裝與啟動」）。原始碼以 ISC 授權公開，不提供使用支援。
 - `data/` 與 `temp/` 資料夾已列入 `.gitignore`，屬於執行期產生的資料，不會被提交。
 - Bilibili / YouTube 認證資訊請透過環境變數提供，**請勿直接提交任何 Token 或 `cookies.txt` 至版本庫**。
-- 預設的喚醒詞模型 `oww-server/models/hey_taffy.onnx` 已隨版本庫提供；要換成自己的模型時放進同一個資料夾，並設定 `OWW_MODEL_PATH`。
+- 喚醒詞預設使用 openWakeWord 內建的 `hey_jarvis`（`OWW_BUILTIN_MODEL` 可換成其他內建模型）；`oww-server/models/hey_taffy.onnx` 是範例自訂模型，設 `OWW_MODEL_PATH=./models/hey_taffy.onnx` 使用，自己的模型也一樣放進這個資料夾。
+  - `OWW_PROB_THRESHOLD`（預設 0.65）、`OWW_MIN_CONSECUTIVE`（預設 3）是針對 hey_taffy 調的，換成 hey_jarvis 或其他模型時可能要調整（例如門檻 0.5）。
+  - 已知不一致：`/voice stt start` 的提示文字與管理面板的提示仍寫「hey taffy」，用預設模型時實際要說「hey jarvis」才叫得醒。
+- Discord intents 依啟用的模組決定（`utils/features.js` 的 `intents()`）。只要 `basic` 開著就需要 MessageContent（它會監聽訊息內容），記得在 Discord Developer Portal 開啟 Message Content Intent；用到 GuildMembers 的模組也要開 Server Members Intent。
+
+  | FEATURES | intents |
+  |---|---|
+  | 未設定（全開） | Guilds、GuildMessages、MessageContent、GuildVoiceStates、GuildMembers |
+  | `music,autojoin` | Guilds、GuildVoiceStates、GuildMembers |
+  | `splitbill` | Guilds、GuildMessages、MessageContent、GuildMembers |
+  | `notice` | Guilds |
+
+  各模組需要的 intents：voice、stt、autojoin、music 要 GuildVoiceStates＋GuildMembers；basic、responses 要 GuildMessages＋MessageContent；ai、splitbill 要 GuildMessages＋MessageContent＋GuildMembers；tts、timeannounce 要 GuildVoiceStates；notice 不用額外的 intents。Guilds 一定會有。
 - 整點報時功能需自行準備 24 個對應小時的 `.wav` 音效檔，放置於 `data/timeAnnouncer/` 資料夾。
-- GPT-SoVITS 為外部服務，需自行部署並透過 `SOVITS_HOST` / `SOVITS_PORT` 連線；未部署時 TTS 自動 fallback 為 Edge-TTS。
+- GPT-SoVITS 為外部服務，需自行部署並透過 `SOVITS_HOST` / `SOVITS_PORT` 連線；沒設 `SOVITS_HOST` 時只用 Edge-TTS，有設但離線時自動 fallback 為 Edge-TTS。
 - AI 人格 prompt 放在 `data/prompts/`（不隨版本庫提供）。首次部署可先複製 [`examples/prompts/`](examples/prompts/) 當起點，再改成自己的人格，否則會提示找不到任何模式檔。
-- 分帳資料存放在獨立的 splitbill-service；Bot 未設定 `SPLITBILL_SERVICE_URL`／`SPLITBILL_SERVICE_KEY` 時，分帳面板與指令會無法使用（快速分帳 `⚡` 不受影響，因為它不存取行程資料）。
+- 分帳資料存放在獨立的 splitbill-service；Bot 未設定 `SPLITBILL_SERVICE_URL` 時分帳指令（含快速分帳 `⚡`）都不註冊，開機摘要會標示原因；有網址但 `SPLITBILL_SERVICE_KEY` 不對時，面板與指令會無法存取行程（快速分帳 `⚡` 不受影響，因為它不存取行程資料）。
 
 ---
 

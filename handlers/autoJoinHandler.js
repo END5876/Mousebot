@@ -100,6 +100,7 @@ function saveConfig(nextConfig) {
 }
 
 // Client 層級保護：EventEmitter 發出 'error' 卻沒有監聽器時會直接丟例外，讓程序崩潰。
+// index.js 已經在 setup 之前掛好 error / shardError，這裡只是沒人掛時的備援。
 // （process 層級的 unhandledRejection / uncaughtException 已集中到 utils/processGuards.js）
 function bindProcessGuards(client) {
   if (processGuardsBound) return;
@@ -108,12 +109,6 @@ function bindProcessGuards(client) {
   if (client.listenerCount('error') === 0) {
     client.on('error', error => {
       logger.error('AutoJoin', 'Discord client 錯誤:', error);
-    });
-  }
-
-  if (client.listenerCount('shardError') === 0) {
-    client.on('shardError', error => {
-      logger.error('AutoJoin', 'Discord shard 錯誤:', error);
     });
   }
 }

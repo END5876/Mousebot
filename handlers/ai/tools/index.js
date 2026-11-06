@@ -16,12 +16,16 @@
 //
 // 環境變數：
 //   AI_TOOLS=0   關閉整個功能（預設開啟）
+//
+// 依模組決定可用的工具群組（utils/features.js）：音樂←music、分帳←splitbill、免費遊戲←notice、
+// 語音←voice 或 tts。停用的群組不載入、不宣告，預篩關鍵字也不收；全部停用時預篩一律不命中。
 
 const { FunctionCallingConfigMode } = require('@google/genai');
 const { generate } = require('../geminiClient');
 const { recordUsage } = require('../tokenTracker');
 const logger = require('../../../utils/logger');
 const { ToolError } = require('./toolError');
+const features = require('../../../utils/features');
 
 const MAX_CALLS = 3;
 const ROUTER_TIMEOUT_MS = 15_000;
@@ -29,33 +33,47 @@ const ROUTER_TIMEOUT_MS = 15_000;
 // 不需要人格那邊完整的 12 則訊息，對話歷史是判斷呼叫裡最大的變動 token 來源
 const ROUTER_HISTORY_TURNS = 3;
 
-const ALL_TOOLS = [
-    ...require('./music').tools,
-    ...require('./splitbill').tools,
-    ...require('./freeGames').tools,
-    ...require('./voice').tools,
+// 工具群組：available() 為 true 時才載入該檔，每個群組只載入一次。
+// 各檔匯出 { tools, keywords }；陣列順序就是宣告與預篩關鍵字的順序
+const GROUPS = [
+    { key: 'music',     file: './music',     available: () => features.isEnabled('music'),     noAction: '播放音樂' },
+    { key: 'splitbill', file: './splitbill', available: () => features.isEnabled('splitbill'), noAction: '記帳' },
+    { key: 'freeGames', file: './freeGames', available: () => features.isEnabled('notice'),    noAction: '查遊戲' },
+    { key: 'voice',     file: './voice',     available: () => features.isEnabled('voice') || features.isEnabled('tts'), noAction: '進出語音頻道' },
 ];
-const TOOL_MAP = new Map(ALL_TOOLS.map(t => [t.declaration.name, t]));
+const loadedGroups = new Map(); // key → { tools, keywords }
+
+function loadGroup(group) {
+    if (!loadedGroups.has(group.key)) loadedGroups.set(group.key, require(group.file));
+    return loadedGroups.get(group.key);
+}
+
+/** 目前可用的群組（模組狀態每次從 env 重新判斷） */
+function availableGroups() {
+    return GROUPS.filter(g => g.available());
+}
 
 const isEnabled = () => process.env.AI_TOOLS !== '0';
 
-// 召回率優先：寧可多跑一次便宜的判斷，也不要漏掉真正的要求；精準度交給判斷階段
-const TOOL_KEYWORDS = new RegExp([
-    // 音樂
-    '歌', '曲', '音樂', '播', '放', '點', '跳過', '切', '下一首', '停', '循環', '重複', '佇列', '隊列',
-    'music', 'play', 'skip', 'song', 'youtu', 'bilibili', 'b23\\.tv',
-    // 分帳
-    '分帳', '記帳', '帳', '付', '欠', '還錢', '請客', '花了', '多少錢', '行程',
-    '\\d\\s*(元|塊|圓|円|日幣|日圓|美金|台幣|twd|jpy|usd)',
-    // 免費遊戲
-    '免費', '白嫖', '送遊戲', '領取', 'epic', 'steam',
-    // 語音
-    '語音', '進來', '過來', '離開', '出去', '唸', '念出', '說一聲', '講一聲', '廣播', '大聲',
-    '跟大家(說|講)', '幫我(說|講)',
-].join('|'), 'i');
+// 召回率優先：寧可多跑一次便宜的判斷，也不要漏掉真正的要求；精準度交給判斷階段。
+// 關鍵字放在各工具檔；依可用群組的組合組成 regex 並記住
+const keywordMemo = new Map(); // 群組 key 組合 → RegExp|null
+
+function keywordRegex(groups) {
+    const memoKey = groups.map(g => g.key).join(',');
+    if (!keywordMemo.has(memoKey)) {
+        const words = groups.flatMap(g => loadGroup(g).keywords);
+        keywordMemo.set(memoKey, words.length ? new RegExp(words.join('|'), 'i') : null);
+    }
+    return keywordMemo.get(memoKey);
+}
 
 function needsTools(text) {
-    return !!text && TOOL_KEYWORDS.test(text);
+    if (!text) return false;
+    const groups = availableGroups();
+    if (!groups.length) return false;
+    const re = keywordRegex(groups);
+    return !!re && re.test(text);
 }
 
 const ROUTER_PROMPT = [
@@ -66,8 +84,13 @@ const ROUTER_PROMPT = [
     '不確定時不要呼叫。不需要工具時直接回覆 NONE。',
 ].join('\n');
 
+/** 可用群組裡的全部工具（不看 source 與工具層級的 isAvailable） */
+function allTools(groups = availableGroups()) {
+    return groups.flatMap(g => loadGroup(g).tools);
+}
+
 function availableTools(source) {
-    return ALL_TOOLS.filter(t => !t.skipSources?.includes(source));
+    return allTools().filter(t => !t.skipSources?.includes(source) && (t.isAvailable?.() ?? true));
 }
 
 /** 取最近 turns 輪；切完開頭若是 Bot 的話就丟掉，對話一律從使用者開始 */
@@ -97,7 +120,7 @@ function textOnly(contents) {
 }
 
 async function execute(call, ctx) {
-    const tool = TOOL_MAP.get(call.name);
+    const tool = allTools().find(t => t.declaration.name === call.name);
     if (!tool) return { label: call.name, ok: false, text: '不支援的動作', quiet: false };
     const quiet = !!tool.quiet;
     try {
@@ -119,9 +142,14 @@ const RESULT_RULE = '請用你原本的人格語氣，自然地告訴使用者�
     + '不要捏造上面沒有的動作或資料。網址只能原樣貼上面結果裡出現過的，結果裡沒有網址就完全不要貼任何連結（絕對不要自己編 YouTube 網址）。'
     + '不要提到「工具」「系統」這些字眼。';
 // 預篩命中但最後沒有執行任何動作時附上，避免人格嘴上說「好喔幫你放了」實際上什麼都沒做
-const NO_ACTION_RULE = '【注意】這次沒有替使用者播放音樂、記帳、查遊戲或進出語音頻道。'
-    + '只有在使用者明顯是要你做這些事時才需要理會這段：不要假裝已經做了，可以請他把要求說清楚（例如要放哪首歌）。'
-    + '使用者只是在聊天的話，完全忽略這段，也不要提起。';
+// 依可用群組組出「播放音樂、記帳、查遊戲或進出語音頻道」；全開時和原本的字串逐字相同
+function noActionRule(groups = availableGroups()) {
+    const items = groups.map(g => g.noAction);
+    const list = items.length > 1 ? `${items.slice(0, -1).join('、')}或${items.at(-1)}` : (items[0] ?? '');
+    return `【注意】這次沒有替使用者${list}。`
+        + '只有在使用者明顯是要你做這些事時才需要理會這段：不要假裝已經做了，可以請他把要求說清楚（例如要放哪首歌）。'
+        + '使用者只是在聊天的話，完全忽略這段，也不要提起。';
+}
 
 /**
  * 工具階段。回傳要附在人格 system instruction 後面的文字；不需要工具時回傳 null。
@@ -141,6 +169,9 @@ async function runToolStage({ history, parts, text, ctx, mode = null, mergeUser 
     if (!isEnabled() || !ctx?.guild || !ctx.member || !needsTools(text)) return null;
 
     const tools = availableTools(ctx.source);
+    // 例如只剩語音群組、而這次是語音對話（voice_say 不提供）：沒有可宣告的工具就不跑判斷
+    if (!tools.length) return null;
+    const NO_ACTION_RULE = noActionRule();
     let response;
     try {
         response = await generate({
@@ -186,7 +217,8 @@ module.exports = {
     needsTools,
     isEnabled,
     _ROUTER_PROMPT: ROUTER_PROMPT,
-    _ALL_TOOLS: ALL_TOOLS,
+    _allTools: () => allTools(),
+    _noActionRule: () => noActionRule(),
     _textOnly: textOnly,
     _recentTurns: recentTurns,
     _withCurrent: withCurrent,
