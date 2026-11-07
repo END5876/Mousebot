@@ -2,7 +2,7 @@
 
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, UserSelectMenuBuilder, StringSelectMenuBuilder, MessageFlags } = require('discord.js');
 const splitbillClient = require('../utils/splitbillClient');
-const { wouldLeaveTripNonEmpty, memberMention, findMemberByDiscordId, canRemoveMember } = require('../utils/tripHelper');
+const { wouldLeaveTripNonEmpty, memberMention, findMemberByDiscordId, canRemoveMember, isLinkedMember } = require('../utils/tripHelper');
 const { showMainMenu } = require('../commands/splitbill');
 
 // 🆕 [行程獨立化] 成員 = { id, name, discordId? }。從 Discord 使用者選單加進來的人
@@ -32,7 +32,7 @@ module.exports = {
     if (!trip) return showMainMenu(interaction, '⚠️ 找不到行程（可能已被刪除或已在網頁解除綁定）。');
 
     if (customId === 'mem_nav') {
-      const unlinked = trip.members.filter((m) => !m.discordId).length;
+      const unlinked = trip.members.filter((m) => !isLinkedMember(m)).length;
       const embed = new EmbedBuilder()
         .setColor(0x9b59b6)
         .setTitle('👥 行程成員管理')
@@ -91,7 +91,7 @@ module.exports = {
 
       const memberOptions = removable.slice(0, 25).map(m => (m.discordId
         ? { label: m.name.slice(0, 100), value: m.id }
-        : { label: m.name.slice(0, 100), value: m.id, description: '尚未連結 Discord' }));
+        : { label: m.name.slice(0, 100), value: m.id, description: m.lineId ? '已用 LINE 連結' : '尚未連結 Discord' }));
       // 🔒 上限不超過「總數 - 1」，讓使用者在選單層級就不可能一次選光所有成員；
       // 「至少留 1 位已連結成員」由送出後的 wouldLeaveTripNonEmpty() 把關。
       const maxRemovable = Math.max(1, Math.min(memberOptions.length, trip.members.length - 1));
@@ -108,7 +108,8 @@ module.exports = {
     }
 
     if (customId === 'mem_btn_link_ui') {
-      const unlinked = trip.members.filter((m) => !m.discordId);
+      // 🆕 在網頁用 LINE 認領的成員（lineId）已經有主人，不能再連結給別的 Discord 帳號
+      const unlinked = trip.members.filter((m) => !isLinkedMember(m));
       if (!unlinked.length) {
         return interaction.reply({ content: '✅ 所有成員都已經連結 Discord 帳號了。', flags: MessageFlags.Ephemeral });
       }
@@ -133,7 +134,7 @@ module.exports = {
         .setDescription(trip.members.length
           ? trip.members.map((m, i) => (m.discordId
             ? `${i + 1}. <@${m.discordId}> (\`${m.name}\`)`
-            : `${i + 1}. ${m.name}　*（尚未連結 Discord）*`)).join('\n')
+            : `${i + 1}. ${m.name}　*（${m.lineId ? '已用 LINE 連結' : '尚未連結 Discord'}）*`)).join('\n')
           : ' 目前沒有成員。');
 
       const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('mem_nav').setLabel('⬅️ 返回成員管理').setStyle(ButtonStyle.Secondary));
@@ -226,7 +227,7 @@ module.exports = {
     if (baseId === 'mem_select_link_member') {
       const memberId = values[0];
       const member = trip.members.find((m) => m.id === memberId);
-      if (!member || member.discordId) {
+      if (!member || isLinkedMember(member)) {
         return interaction.reply({ content: '⚠️ 這位成員已經被連結或已被移除，請重新操作。', flags: MessageFlags.Ephemeral });
       }
       const embed = new EmbedBuilder().setColor(0x9b59b6).setTitle('🔗 連結 Discord 帳號（2/2）')
@@ -251,6 +252,9 @@ module.exports = {
       }
       if (member.discordId) {
         return interaction.reply({ content: `⚠️「${member.name}」已經連結到 <@${member.discordId}> 了。`, flags: MessageFlags.Ephemeral });
+      }
+      if (member.lineId) {
+        return interaction.reply({ content: `⚠️「${member.name}」已經由本人用 LINE 帳號認領了。`, flags: MessageFlags.Ephemeral });
       }
       const user = interaction.users && interaction.users.get(discordUserId);
       if (user && user.bot) {

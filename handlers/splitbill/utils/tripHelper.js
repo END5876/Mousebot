@@ -9,6 +9,9 @@ const { isOwner } = require('../../../utils/config');
 //   - member.id：行程內部的成員 ID，帳目（payers/participants/deposits）一律引用它。
 //     舊資料的 id 碰巧就是 Discord ID，新成員是 mem_xxxx。
 //   - member.discordId：已連結的 Discord 帳號；沒有＝未連結（網頁上建立、尚未認領）。
+//   - member.lineId：🆕 在網頁上用 LINE 登入認領的成員（line:U…）。不是 Discord 帳號，
+//     Discord 這邊不能 @ 他、他也不能操作面板，但他「已經被認領」：不能再連結給別人，
+//     移除他也跟移除已連結 Discord 的成員一樣只有建立者能做（見 isLinkedMember）。
 // 所以：
 //   - 從 Discord 拿到的使用者 ID（按鈕的操作者、使用者選單、@提及）→ 用
 //     findMemberByDiscordId()／toMemberIds() 換成成員 ID 再寫進帳目
@@ -25,6 +28,11 @@ function findMember(trip, memberId) {
 function findMemberByDiscordId(trip, discordUserId) {
   if (!trip || !Array.isArray(trip.members) || !discordUserId) return null;
   return trip.members.find((m) => m.discordId === discordUserId) || null;
+}
+
+/** 這位成員是否已經被某個帳號認領（Discord 或 LINE）。 */
+function isLinkedMember(m) {
+  return !!(m && (m.discordId || m.lineId));
 }
 
 /** 成員名字（純文字）。找不到的成員（已被移除）顯示提示文字。 */
@@ -92,8 +100,8 @@ function canDeleteTrip(trip, userId) {
  */
 function canRemoveMember(trip, member, userId) {
   if (!member) return false;
-  if (!member.discordId) return true;
-  if (member.discordId === userId) return true;
+  if (!isLinkedMember(member)) return true;
+  if (member.discordId && member.discordId === userId) return true;
   return canDeleteTrip(trip, userId);
 }
 
@@ -161,6 +169,7 @@ module.exports = {
   memberDisplay,
   memberMention,
   findMemberByDiscordId,
+  isLinkedMember,
   toMemberIds,
   ensureMembersExist,
   isTripMember,
