@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { _engines, SEARCH_MARKER, LOCAL_KEY_MARKER } = require('../state');
+const { zhFold } = require('../../../../utils/zhFold');
 
 // ════════════════════════════════════════════════════════
 //  即時線上搜尋（Autocomplete 用）— 節流 + 快取 + 搶時間
@@ -112,11 +113,13 @@ async function handleAutocomplete(interaction) {
     value: '__LOCAL_MULTI__',
   };
 
+  // 本地比對繁簡通用：兩邊都經過 zhFold（小寫＋繁轉簡），打「周杰倫」也找得到「周杰伦」的檔案
+  const focusedFold = zhFold(focusedRaw);
   const fileChoices = localEngine
     ? localEngine.getMusicFiles()
         .filter(f =>
-          f.name.toLowerCase().includes(focused) ||
-          f.filename.toLowerCase().includes(focused)
+          zhFold(f.name).includes(focusedFold) ||
+          zhFold(f.filename).includes(focusedFold)
         )
         .slice(0, 23)
         .map(f => ({
