@@ -125,6 +125,8 @@ const U = {
   e3:     user('900000000000000013', 'e3'),
   e4:     user('900000000000000014', 'e4'),
   e5:     user('900000000000000015', 'e5'),
+  t1:     user('900000000000000021', 't1'),
+  t2:     user('900000000000000022', 't2'),
   admin:  user('900000000000000006', 'admin'),
   member: user('900000000000000007', 'member'),
   owner:  user(OWNER_ID, 'boss'),
@@ -458,6 +460,21 @@ test('隨機回覆：maxOutputTokens 300，回覆送到頻道', async () => {
   assert.equal(got().length, 1);
   assert.equal(got()[0].config.maxOutputTokens, 300);
   assert.deepEqual(channel.sent, [{ content: '真的熱' }]);
+});
+
+test('回覆照抄【現在時間】標籤：送出前拿掉；只剩標籤時當成空回覆不送出', async () => {
+  const tag = '【現在時間：2026年11月8日（星期日）14:05，時區 Asia/Taipei】';
+  const channel = fakeChannel();
+  respond = () => `${tag}\n兩點了，該午睡`;
+  // 每人每分鐘只有 3 次額度：用自己的帳號
+  await emitMessage(userMsg(channel, U.t1, `<@${BOT_ID}> 幾點了`, { mentions: [BOT_USER] }));
+  assert.deepEqual(channel.sent, [{ content: '兩點了，該午睡' }]);
+
+  const i = fakeInteraction({ user: U.t2, channel: fakeChannel(), sub: 'ask', opts: { question: '幾點了' } });
+  respond = () => tag;
+  await runAi(i);
+  assert.ok(i.log.length > 0, '應該有回應（空回覆的提示）');
+  assert.ok(!JSON.stringify(i.log).includes('現在時間'), JSON.stringify(i.log));
 });
 
 // ════════════════════════════════════════════════════════

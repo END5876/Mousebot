@@ -45,9 +45,21 @@ function formatNow(date = new Date(), timeZone = TIME_ZONE) {
     return `${parts.year}年${parts.month}月${parts.day}日（星期${weekday}）${parts.hour}:${parts.minute}，時區 ${timeZone}`;
 }
 
+const TIME_LABEL = '現在時間';
+
 /** 附在本次訊息最前面的 part */
 function currentTimePart(date = new Date()) {
-    return { text: `【現在時間：${formatNow(date)}】` };
+    return { text: `【${TIME_LABEL}：${formatNow(date)}】` };
 }
 
-module.exports = { currentTimePart, formatNow, TIME_ZONE, DEFAULT_TIME_ZONE, _resolveTimeZone: resolveTimeZone };
+// 模型偶爾會照抄這行標籤：回覆送出前（也在 TTS 朗讀與寫進歷史之前）整段拿掉。
+// 只擋原樣照抄；用自己的話講時間（「現在下午兩點喔」）是正常回答，不處理。
+const TIME_ECHO = new RegExp(`[ \\t]*【${TIME_LABEL}：[^】\\n]*】[ \\t]*\\n?`, 'g');
+
+/** 移除回覆中照抄的【現在時間：…】 */
+function stripTimeEcho(text) {
+    if (!text || !text.includes(`【${TIME_LABEL}：`)) return text;
+    return text.replace(TIME_ECHO, '').trim();
+}
+
+module.exports = { currentTimePart, stripTimeEcho, formatNow, TIME_ZONE, DEFAULT_TIME_ZONE, _resolveTimeZone: resolveTimeZone };

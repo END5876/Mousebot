@@ -5,7 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 process.env.LOG_LEVEL = 'error';
-const { formatNow, currentTimePart, DEFAULT_TIME_ZONE, _resolveTimeZone } = require('../handlers/ai/currentTime');
+const { formatNow, currentTimePart, stripTimeEcho, DEFAULT_TIME_ZONE, _resolveTimeZone } = require('../handlers/ai/currentTime');
 
 test('預設時區是 Asia/Taipei', () => {
   assert.equal(DEFAULT_TIME_ZONE, 'Asia/Taipei');
@@ -29,6 +29,21 @@ test('換時區會換日期與星期', () => {
 test('無效的時區退回預設', () => {
   assert.equal(_resolveTimeZone('Mars/Olympus'), 'Asia/Taipei');
   assert.equal(_resolveTimeZone('Asia/Tokyo'), 'Asia/Tokyo');
+});
+
+test('stripTimeEcho：拿掉照抄的標籤（開頭、中間、結尾、多行），其他內容不動', () => {
+  const tag = currentTimePart(new Date('2026-11-08T06:05:00Z')).text;
+  assert.equal(stripTimeEcho(`${tag}\n下午好啊`), '下午好啊');
+  assert.equal(stripTimeEcho(`下午好啊\n${tag}`), '下午好啊');
+  assert.equal(stripTimeEcho(`現在${tag}兩點了`), '現在兩點了');
+  assert.equal(stripTimeEcho(`${tag}\n${tag}\n嗨`), '嗨');
+  assert.equal(stripTimeEcho(tag), '');
+  // 沒有標籤：原樣回傳（不 trim、不改字）
+  assert.equal(stripTimeEcho('  現在下午兩點喔\n'), '  現在下午兩點喔\n');
+  assert.equal(stripTimeEcho('【發言者：ming】\n嗨'), '【發言者：ming】\n嗨');
+  assert.equal(stripTimeEcho(''), '');
+  // 括號沒閉合不算標籤，不會吃掉後面的內容
+  assert.equal(stripTimeEcho('【現在時間：半夜\n快睡'), '【現在時間：半夜\n快睡');
 });
 
 test('currentTimePart 是帶【現在時間】標籤的文字 part', () => {

@@ -23,7 +23,7 @@ const {
     RESEARCH_PROMPT, RESEARCH_CONFIG, RESEARCH_NONE, FACTS_HEADER,
     isSearchEnabled, getGroundingInfo, stripSourcesLine,
 } = require('./searchGrounding');
-const { currentTimePart } = require('./currentTime');
+const { currentTimePart, stripTimeEcho } = require('./currentTime');
 
 const {
     getMemoryClearTime, getBotMessageContext,
@@ -753,7 +753,7 @@ async function getGeminiResponse({
             roster: rosterFor(scope, speakers, userId, message, userName),
         });
         recordUsage('chat', response, { userId, mode });
-        const text = response.text ?? '';
+        const text = stripTimeEcho(response.text ?? '');
         // 被擋下（PROHIBITED_CONTENT/RECITATION 等）時沒有任何文字，送空訊息會被 Discord 拒絕，改丟專用錯誤讓呼叫端提示使用者
         if (!text.trim()) {
             const finishReason = response.candidates?.[0]?.finishReason ?? response.promptFeedback?.blockReason ?? 'unknown';
@@ -807,7 +807,7 @@ async function getGeminiResponseVoice(userId, prompt, channel = null, messageId 
             userId,
             toolCtx, toolText: prompt,
         });
-        const response = (result.text ?? '').trim();
+        const response = stripTimeEcho((result.text ?? '').trim());
         recordUsage('voice', result, { userId, mode });
         logger.debug('Voice AI', `${userId}: "${prompt}" → "${response}"`);
         // text：回覆文字；skipTTS：這次用到了音樂工具，呼叫端不要朗讀
@@ -848,7 +848,7 @@ async function getShortResponse({
             guildId: channel?.guildId ?? message?.guildId ?? null,
         });
         recordUsage('short', response, { userId, mode });
-        const { text, memes } = memeStore.extractMemes((response.text ?? '').trim(), mode);
+        const { text, memes } = memeStore.extractMemes(stripTimeEcho((response.text ?? '').trim()), mode);
         const files = await memeStore.toFiles(memes);
         if (!text && files.length === 0) return null;
         return { text, chunks: text ? splitMessage(text) : [], files };
