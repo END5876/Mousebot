@@ -136,7 +136,7 @@ function setupSplitbillCommands(client) {
       } else {
         logger.error('Splitbill', `Splitbill UI 發生異常錯誤（${where}）:`, error);
       }
-      const errorMsg = `❌ 操作失敗：${error.message || '未知錯誤'}`;
+      const errorMsg = `❌ 操作失敗：${error.message || '請稍後再試一次'}`;
 
       if (interaction.replied || interaction.deferred) {
         await interaction.followUp({ content: errorMsg, flags: MessageFlags.Ephemeral });

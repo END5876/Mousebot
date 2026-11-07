@@ -32,14 +32,14 @@ async function handleButton(interaction, cache) {
       const embed = new EmbedBuilder()
         .setColor(0x3498db)
         .setTitle('💸 記帳管理分頁')
-        .setDescription(`當前行程：**${trip.name}**\n請選擇您要執行的記帳操作：`);
+        .setDescription(`目前行程：**${trip.name}**\n要做什麼？`);
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('exp_btn_add_start').setLabel('➕ 新增花費').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('exp_btn_scan_start').setLabel('📷 掃描帳單新增').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('exp_btn_deposit_start').setLabel('💰 收取金額').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId('exp_btn_ledger_last__exp').setLabel('📒 總帳目清單／刪除').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主控台').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主選單').setStyle(ButtonStyle.Secondary)
       );
 
       return interaction.update({ embeds: [embed], components: [row] });
@@ -47,14 +47,14 @@ async function handleButton(interaction, cache) {
 
     if (customId === 'exp_btn_deposit_start') {
       if (!trip.members || trip.members.length < 2) {
-        return interaction.reply({ content: '⚠️ 此行程成員不足兩人，無法使用訂金功能！', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 行程至少要有兩位成員才能記訂金，請先到「👥 成員管理」新增成員。', flags: MessageFlags.Ephemeral });
       }
 
       const currencies = Object.keys(trip.rates);
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
         .setTitle('💰 步驟 1/4：選擇幣別')
-        .setDescription('這筆訂金是用哪種幣別收的？\n*(訂金會保留原始幣別，不會預先換算成本位幣)*');
+        .setDescription('這筆訂金是用哪種幣別收的？\n*(訂金會保留原始幣別，不會預先換算成基準幣別)*');
 
       const selectRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
@@ -62,7 +62,7 @@ async function handleButton(interaction, cache) {
           .setPlaceholder('選擇訂金幣別...')
           .addOptions(
             currencies.map(c => ({
-              label: `${c}${c === trip.baseCurrency ? ' (基準本位幣)' : ''}`,
+              label: `${c}${c === trip.baseCurrency ? '（基準幣別）' : ''}`,
               value: c
             })).slice(0, 25)
           )
@@ -77,7 +77,7 @@ async function handleButton(interaction, cache) {
 
     if (customId === 'exp_btn_add_start') {
       if (!trip.members || trip.members.length === 0) {
-        return interaction.reply({ content: '⚠️ 此行程目前沒有任何成員，請先到「成員管理」新增成員！', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 這個行程還沒有成員，請先到「👥 成員管理」新增。', flags: MessageFlags.Ephemeral });
       }
 
       const currencies = Object.keys(trip.rates);
@@ -92,7 +92,7 @@ async function handleButton(interaction, cache) {
           .setPlaceholder('選擇結帳貨幣...')
           .addOptions(
             currencies.map(c => ({
-              label: `${c}${c === trip.baseCurrency ? ' (基準本位幣)' : ''}`,
+              label: `${c}${c === trip.baseCurrency ? '（基準幣別）' : ''}`,
               description: c !== trip.baseCurrency ? `參考匯率: ${trip.rates[c]}` : '匯率: 1',
               value: c
             })).slice(0, 25)
@@ -108,11 +108,11 @@ async function handleButton(interaction, cache) {
 
     if (customId === 'exp_btn_scan_start') {
       if (!trip.members || trip.members.length === 0) {
-        return interaction.reply({ content: '⚠️ 此行程目前沒有任何成員，請先到「成員管理」新增成員！', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 這個行程還沒有成員，請先到「👥 成員管理」新增。', flags: MessageFlags.Ephemeral });
       }
 
       if (!process.env.GEMINI_API_KEY) {
-        return interaction.reply({ content: '⚠️ 尚未設定 GEMINI_API_KEY，帳單辨識功能目前無法使用，請改用「➕ 新增花費」手動輸入。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 帳單辨識目前沒有開放，請改用「➕ 新增花費」手動輸入。', flags: MessageFlags.Ephemeral });
       }
 
       return startBillScan(interaction, trip, cache);
@@ -123,7 +123,7 @@ async function handleButton(interaction, cache) {
       const itemCacheUserId = scanItemCacheUserId(interaction.user.id, batchId, index);
       const state = cache.get(guildId, itemCacheUserId);
       if (!state || !state.scanResult) {
-        return interaction.reply({ content: '⚠️ 辨識結果已逾期失效，請重新掃描一次。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 這次辨識結果已經逾時，請重新掃描一次。', flags: MessageFlags.Ephemeral });
       }
 
       const { description, amount, currency, descriptionTranslated, isForeignLanguage } = state.scanResult;
@@ -177,7 +177,7 @@ async function handleButton(interaction, cache) {
     if (customId === 'exp_btn_confirm_delete') {
       const state = cache.get(guildId, interaction.user.id);
       if (!state || !state.pendingDelete) {
-        return interaction.reply({ content: '⚠️ 確認逾時或快取失效，請重新操作一次刪除流程。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 這次刪除已經逾時，請重新選擇要刪除的帳目。', flags: MessageFlags.Ephemeral });
       }
 
       const { type, id: realId, page, source } = state.pendingDelete;
@@ -219,7 +219,7 @@ async function handleButton(interaction, cache) {
 
     if (baseId === 'exp_btn_split_all') {
       const state = cache.get(guildId, draftKey);
-      if (!state) return interaction.reply({ content: '⚠️ 狀態過期，請重新操作。', flags: MessageFlags.Ephemeral });
+      if (!state) return interaction.reply({ content: '⚠️ 這個步驟已經逾時，請從面板重新開始。', flags: MessageFlags.Ephemeral });
       // 🔒 [修正：race condition] 全體成員跟寫入都用流程一開始鎖定的 tripId，避免中途漂移
       const pinnedTrip = await resolveDraftTrip(interaction, cache, state);
       if (!pinnedTrip) return;
@@ -229,7 +229,7 @@ async function handleButton(interaction, cache) {
 
     if (baseId === 'exp_btn_split_custom') {
       const state = cache.get(guildId, draftKey);
-      if (!state) return interaction.reply({ content: '⚠️ 狀態過期，請重新操作。', flags: MessageFlags.Ephemeral });
+      if (!state) return interaction.reply({ content: '⚠️ 這個步驟已經逾時，請從面板重新開始。', flags: MessageFlags.Ephemeral });
       const pinnedTrip = await resolveDraftTrip(interaction, cache, state);
       if (!pinnedTrip) return;
 
@@ -253,7 +253,7 @@ async function handleButton(interaction, cache) {
 
     if (baseId === 'exp_btn_split_custom_amount') {
       const state = cache.get(guildId, draftKey);
-      if (!state) return interaction.reply({ content: '⚠️ 狀態過期，請重新操作。', flags: MessageFlags.Ephemeral });
+      if (!state) return interaction.reply({ content: '⚠️ 這個步驟已經逾時，請從面板重新開始。', flags: MessageFlags.Ephemeral });
       const pinnedTrip = await resolveDraftTrip(interaction, cache, state);
       if (!pinnedTrip) return;
 

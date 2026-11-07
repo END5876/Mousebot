@@ -41,7 +41,7 @@ function renderSplitMethodUI(interaction, state, trip) {
 async function completeExpenseLogging(interaction, trip, state, participantIds, cache) {
   try {
     // 沒有代墊人就不能存：只有人分攤、沒人代墊，整個行程的淨額加總就不再是 0
-    if (!Array.isArray(state.payers) || !state.payers.length) throw new Error('缺少代墊人資料，請重新操作。');
+    if (!Array.isArray(state.payers) || !state.payers.length) throw new Error('找不到代墊人，請重新記一次。');
     const shares = equalSplit(state.amount, participantIds);
     
     const newTotal = shares.reduce((sum, s) => sum + s.share, 0);
@@ -79,7 +79,7 @@ async function completeExpenseLogging(interaction, trip, state, participantIds, 
     return showMainMenu(interaction, msg);
 
   } catch (err) {
-    const errMsg = `❌ 核心記帳計算失敗：${err.message}`;
+    const errMsg = `❌ 記帳失敗：${err.message}`;
     if (interaction.deferred || interaction.replied) {
       return interaction.editReply({ content: errMsg });
     }
@@ -89,7 +89,7 @@ async function completeExpenseLogging(interaction, trip, state, participantIds, 
 
   async function completeExpenseLoggingWithShares(interaction, trip, state, shares, cache) {
     try {
-      if (!Array.isArray(state.payers) || !state.payers.length) throw new Error('缺少代墊人資料，請重新操作。');
+      if (!Array.isArray(state.payers) || !state.payers.length) throw new Error('找不到代墊人，請重新記一次。');
       const amountInBase = Math.round((state.amount * state.exchangeRate + Number.EPSILON) * 100) / 100;
 
       const newExpense = {
@@ -118,7 +118,7 @@ async function completeExpenseLogging(interaction, trip, state, participantIds, 
       return showMainMenu(interaction, msg);
 
     } catch (err) {
-      const errMsg = `❌ 核心記帳計算失敗：${err.message}`;
+      const errMsg = `❌ 記帳失敗：${err.message}`;
       if (interaction.deferred || interaction.replied) {
         return interaction.editReply({ content: errMsg });
       }

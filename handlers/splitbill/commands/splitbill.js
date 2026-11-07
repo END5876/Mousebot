@@ -8,7 +8,7 @@ const { md } = require('../../../utils/markdown');
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('splitbill')
-    .setDescription('召喚 Splitbill 分帳主控台面板'),
+    .setDescription('開啟分帳主選單'),
 
   async execute(interaction) {
     await this.showMainMenu(interaction);
@@ -28,8 +28,8 @@ module.exports = {
 
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
-      .setTitle('🧮 Splitbill 分帳主控面板')
-      .setDescription('歡迎使用分帳系統！您可以透過下方按鈕與選單搞定所有行程與記帳。')
+      .setTitle('🧮 分帳主選單')
+      .setDescription('用下方按鈕和選單管理行程、記帳和結算。')
       .setTimestamp();
 
     if (trip) {
@@ -64,7 +64,7 @@ module.exports = {
     } else {
       embed.addFields({
         name: '⚠️ 提示',
-        value: '你尚未設定或選擇任何行程。請點選下方 **「🧳 行程設定」** 建立或選擇一個行程！'
+        value: '你還沒有選擇行程。請點下方 **「🧳 行程設定」** 建立或選擇一個行程。'
       });
     }
 

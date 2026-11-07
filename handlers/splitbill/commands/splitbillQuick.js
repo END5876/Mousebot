@@ -24,7 +24,7 @@ module.exports = {
     .addNumberOption(opt =>
       opt.setName('amount').setDescription('金額').setRequired(true).setMinValue(0.01))
     .addStringOption(opt =>
-      opt.setName('currency').setDescription('幣別代碼（預設使用行程本位幣）').setRequired(false))
+      opt.setName('currency').setDescription('幣別代碼（預設是行程的基準幣別）').setRequired(false))
     .addUserOption(opt =>
       opt.setName('payer').setDescription('代墊人（預設為你自己；多人代墊請改用 multi_payers）').setRequired(false))
     .addStringOption(opt =>
@@ -60,7 +60,7 @@ module.exports = {
     const splitText = interaction.options.getString('split');
 
     if (!(amount > 0)) {
-      return interaction.reply({ content: '⚠️ 金額必須大於 0。', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: '⚠️ 金額要大於 0。', flags: MessageFlags.Ephemeral });
     }
 
     if (!trip.rates[currency]) {
@@ -83,7 +83,7 @@ module.exports = {
         payers = payers.map((p, i) => ({ userId: payerMemberIds[i], amount: p.amount }));
         const payerSum = round2(payers.reduce((s, p) => s + p.amount, 0));
         if (Math.abs(payerSum - amount) > 0.01) {
-          throw new Error(`multi_payers 金額加總 (${payerSum}) 與總花費 (${amount}) 不相符，差額 ${round2(Math.abs(payerSum - amount))}`);
+          throw new Error(`multi_payers 的金額加起來是 ${payerSum}，跟總花費 ${amount} 差了 ${round2(Math.abs(payerSum - amount))}，請調整後再試一次`);
         }
       } else {
         const payerDiscordId = payerUser ? payerUser.id : user.id;
@@ -102,7 +102,7 @@ module.exports = {
       } else {
         const shareSum = round2(splitInfo.customShares.reduce((s, p) => s + p.amount, 0));
         if (Math.abs(shareSum - amount) > 0.01) {
-          throw new Error(`split 自訂金額加總 (${shareSum}) 與總花費 (${amount}) 不相符，差額 ${round2(Math.abs(shareSum - amount))}`);
+          throw new Error(`split 的金額加起來是 ${shareSum}，跟總花費 ${amount} 差了 ${round2(Math.abs(shareSum - amount))}，請調整後再試一次`);
         }
         const shareMemberIds = toMemberIds(trip, splitInfo.customShares.map(p => p.userId));
         shares = splitInfo.customShares.map((p, i) => ({ userId: shareMemberIds[i], share: p.amount }));
@@ -113,7 +113,7 @@ module.exports = {
       let rateSource;
       if (currency === trip.baseCurrency) {
         exchangeRate = 1;
-        rateSource = '本位幣';
+        rateSource = '基準幣別';
       } else {
         const liveRate = await fetchRealTimeRate(currency, trip.baseCurrency);
         if (liveRate) {

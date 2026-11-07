@@ -23,7 +23,7 @@ async function handleSelectMenu(interaction, cache) {
       const itemCacheUserId = scanItemCacheUserId(user.id, batchId, index);
       const state = cache.get(guildId, itemCacheUserId);
       if (!state || !state.scanResult) {
-        return interaction.reply({ content: '⚠️ 辨識結果已逾期失效，請重新掃描一次。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 這次辨識結果已經逾時，請重新掃描一次。', flags: MessageFlags.Ephemeral });
       }
 
       const selected = values[0];
@@ -91,7 +91,7 @@ async function handleSelectMenu(interaction, cache) {
 
     if (customId === 'exp_select_deposit_collector') {
       const state = cache.get(guildId, user.id);
-      if (!state || !state.depositCurrency) return interaction.reply({ content: '⚠️ 快取失效，請重新操作。', flags: MessageFlags.Ephemeral });
+      if (!state || !state.depositCurrency) return interaction.reply({ content: '⚠️ 這個步驟已經逾時，請從面板重新開始。', flags: MessageFlags.Ephemeral });
       // 🔒 [修正：中途切換行程] 付款人選項也要用選幣別時鎖定的行程，不是現在的作用行程
       const pinnedTrip = await splitbillClient.resolveTripById(guildId, state.tripId);
       if (!pinnedTrip) {
@@ -99,7 +99,7 @@ async function handleSelectMenu(interaction, cache) {
         return interaction.reply({ content: '⚠️ 找不到原本的行程（可能已被刪除），操作已取消，請重新開始。', flags: MessageFlags.Ephemeral });
       }
       if (!pinnedTrip.members.some(m => m.id === values[0])) {
-        return interaction.reply({ content: '⚠️ 選擇的使用者不在此行程的成員名單內！', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 你選的人不是這個行程的成員，請先到「👥 成員管理」把他加進來。', flags: MessageFlags.Ephemeral });
       }
       state.depositCollectorId = values[0];
       
@@ -126,7 +126,7 @@ async function handleSelectMenu(interaction, cache) {
     if (customId === 'exp_select_deposit_payer') {
       const state = cache.get(guildId, user.id);
       if (!state || !state.depositCurrency || !state.depositCollectorId) {
-        return interaction.reply({ content: '⚠️ 快取失效，請重新操作。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 這個步驟已經逾時，請從面板重新開始。', flags: MessageFlags.Ephemeral });
       }
       // 🔒 [修正：中途切換行程] 用鎖定的行程找成員名字，作用行程換掉後這裡會找不到人而報錯
       const pinnedTrip = await splitbillClient.resolveTripById(guildId, state.tripId);
@@ -135,7 +135,7 @@ async function handleSelectMenu(interaction, cache) {
         return interaction.reply({ content: '⚠️ 找不到原本的行程（可能已被刪除），操作已取消，請重新開始。', flags: MessageFlags.Ephemeral });
       }
       if (values.some(id => !pinnedTrip.members.some(m => m.id === id))) {
-        return interaction.reply({ content: '⚠️ 選擇的使用者不在此行程的成員名單內！', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 你選的人不是這個行程的成員，請先到「👥 成員管理」把他加進來。', flags: MessageFlags.Ephemeral });
       }
 
       state.depositPayerIds = values;
@@ -188,7 +188,7 @@ async function handleSelectMenu(interaction, cache) {
 
     if (baseId === 'exp_select_payer') {
       const state = cache.get(guildId, draftKey);
-      if (!state) return interaction.reply({ content: '⚠️ 快取過期，請重新開啟。', flags: MessageFlags.Ephemeral });
+      if (!state) return interaction.reply({ content: '⚠️ 這個步驟已經逾時，請從面板重新開始。', flags: MessageFlags.Ephemeral });
       // 🔒 [修正：中途切換行程] 驗證跟顯示都用草稿鎖定的行程
       const pinnedTrip = await resolveDraftTrip(interaction, cache, state);
       if (!pinnedTrip) return;
@@ -196,7 +196,7 @@ async function handleSelectMenu(interaction, cache) {
       const payerIds = values;
       const invalid = payerIds.filter(id => !pinnedTrip.members.some(m => m.id === id));
       if (invalid.length) {
-        return interaction.reply({ content: '⚠️ 選擇的使用者不在此行程的成員名單內！', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 你選的人不是這個行程的成員，請先到「👥 成員管理」把他加進來。', flags: MessageFlags.Ephemeral });
       }
 
       if (payerIds.length === 1) {
@@ -218,7 +218,7 @@ async function handleSelectMenu(interaction, cache) {
 
     if (baseId === 'exp_select_participants') {
       const state = cache.get(guildId, draftKey);
-      if (!state) return interaction.reply({ content: '⚠️ 快取已失效。', flags: MessageFlags.Ephemeral });
+      if (!state) return interaction.reply({ content: '⚠️ 這個步驟已經逾時，請從面板重新開始。', flags: MessageFlags.Ephemeral });
 
       // 🔒 [修正：race condition] 驗證成員跟最終寫入都用流程一開始鎖定的 tripId，
       // 而不是這次互動當下重新查到的作用行程——避免中途漂移到別的行程。
@@ -226,20 +226,20 @@ async function handleSelectMenu(interaction, cache) {
       if (!pinnedTrip) return;
 
       const participantIds = values.filter(id => pinnedTrip.members.some(m => m.id === id));
-      if (!participantIds.length) return interaction.reply({ content: '⚠️ 所選成員皆不在行程中。', flags: MessageFlags.Ephemeral });
+      if (!participantIds.length) return interaction.reply({ content: '⚠️ 你選的人都不是這個行程的成員，請重新選擇。', flags: MessageFlags.Ephemeral });
 
       return completeExpenseLogging(interaction, pinnedTrip, state, participantIds, cache);
     }
 
     if (baseId === 'exp_select_custom_participants') {
       const state = cache.get(guildId, draftKey);
-      if (!state) return interaction.reply({ content: '⚠️ 快取過期，請重新開啟。', flags: MessageFlags.Ephemeral });
+      if (!state) return interaction.reply({ content: '⚠️ 這個步驟已經逾時，請從面板重新開始。', flags: MessageFlags.Ephemeral });
       const pinnedTrip = await resolveDraftTrip(interaction, cache, state);
       if (!pinnedTrip) return;
 
       const invalid = values.filter(id => !pinnedTrip.members.some(m => m.id === id));
       if (invalid.length) {
-        return interaction.reply({ content: '⚠️ 選擇的使用者不在此行程的成員名單內！', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 你選的人不是這個行程的成員，請先到「👥 成員管理」把他加進來。', flags: MessageFlags.Ephemeral });
       }
 
       state.tempCustomParticipantIds = values;
@@ -297,7 +297,7 @@ async function handleSelectMenu(interaction, cache) {
           `💰 金額：${amountText}` +
           (record.note ? `\n📝 備註：${record.note}` : '');
       } else {
-        return interaction.reply({ content: '⚠️ 無法識別的紀錄類型。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 讀不到這筆紀錄，請重新打開帳目清單再試一次。', flags: MessageFlags.Ephemeral });
       }
 
       // 暫存待刪除資訊，供確認/取消按鈕使用
@@ -307,14 +307,14 @@ async function handleSelectMenu(interaction, cache) {
 
       const embed = new EmbedBuilder()
         .setColor(color)
-        .setTitle('⚠️ 確認刪除此筆紀錄？')
+        .setTitle('🗑️ 刪除這筆紀錄？')
         .setDescription(
           `**${titleText}**\n${detailText}\n\n` +
-          `❗ 此操作**無法復原**，請再次確認是否要刪除。`
+          `刪除後其他成員也會看到。需要的話可以到網頁「設定 → 紀錄」還原。`
         );
 
       const confirmRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('exp_btn_confirm_delete').setLabel('✅ 確認刪除').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('exp_btn_confirm_delete').setLabel('🗑️ 刪除紀錄').setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId('exp_btn_cancel_delete').setLabel('↩️ 取消').setStyle(ButtonStyle.Secondary)
       );
 

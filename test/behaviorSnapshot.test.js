@@ -528,7 +528,7 @@ const EXPECTED = {
       "play",
       "music"
     ],
-    "hash": "3ed61ff4a6e8d07fc2f57aafad19333e1ce30d0f8a6bbe084ee41525cd44e567",
+    "hash": "7f8294b82c63d609f759ed782a9d7b22ab12248662eb6cbaa7a8fd1627ceafb6",
     "perCommand": {
       "ai": "87328ef894fcd4ce0366a01fcfed1ca54e416bfd165ba046bccbb6ebec6dacdf",
       "autojoin": "3ac54ee7c6a6b7c7a0b4d98716ce2bb880d87c8a46f726b4b3e7846489426141",
@@ -540,9 +540,9 @@ const EXPECTED = {
       "response": "cd5b787723643e981f1845e2896d2b9c804bbff32b041b575ab6c51658302770",
       "say": "775a34377aada8af947ed81ba43db5d0c360f0a11f21069bfa9bbe581d54d999",
       "serverinfo": "351cfffdbeb28e5b1bf6f70d72f06582483c351964977bf442336b9b9a0c49f0",
-      "splitbill": "0e8ccb01a12ff875663579480215484eeaad99f222f16f7847150b19233613cf",
+      "splitbill": "93d04a37f7380e7471afe6b6b48e413e365d415999a986ae9720a0c1063c4b9b",
       "splitbill-attach": "b333cd69ae9441601fa78e4bd557aaa4247144958b25f99553038943f0b9dc30",
-      "splitbill-quick": "f6c76f78ce18b458a5ea47eedadf8ff019bbd3b6e20a525731e5772b5e906506",
+      "splitbill-quick": "a68292989a9e36c18d1f315e686063cecad96eb15c87852b64e91a4e834632b1",
       "timeannounce": "4a36b0da2bd2c26df31c48e7efcd264ff7580250f2e591e72013cdfad688dfc6",
       "tts": "2b790133e03c55ea44480148bd476980807209b0b2596a37fb6fd9c70c642b47",
       "voice": "f0b5aaa5cdbb3ab6c2a35f3145d5541e1d35b0c76ed928878e830b8a39e7b9aa"

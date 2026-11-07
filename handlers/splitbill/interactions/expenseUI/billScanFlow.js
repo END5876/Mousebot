@@ -92,13 +92,13 @@ async function startBillScan(interaction, trip, cache) {
           new EmbedBuilder()
             .setColor(0xe74c3c)
             .setTitle('❌ 辨識失敗')
-            .setDescription('無法讀取您上傳的檔案，請上傳 JPG／PNG／WebP 圖片（iPhone 的 HEIC 照片請先轉成 JPG，或用截圖）。')
+            .setDescription('讀不到你上傳的檔案，請上傳 JPG、PNG 或 WebP 圖片（iPhone 的 HEIC 照片請先轉成 JPG，或改用截圖）。')
         ],
         components: [
           new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('exp_btn_scan_start').setLabel('🔄 重新掃描').setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId('exp_btn_add_start').setLabel('✏️ 改用手動輸入').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主控台').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主選單').setStyle(ButtonStyle.Secondary)
           )
         ]
       });
@@ -131,7 +131,7 @@ async function startBillScan(interaction, trip, cache) {
       try {
         const imageParts = await processAttachments(new Map([[imageAttachment.id, imageAttachment]]));
         if (!imageParts.length) {
-          throw new Error('無法讀取這張圖片，請確認是常見圖片格式 (png/jpg/webp)。');
+          throw new Error('讀不到這張圖片，請上傳 JPG、PNG 或 WebP 圖片。');
         }
 
         const result = await scanBillImage(imageParts, tripCurrencies, trip.baseCurrency, user.id);
@@ -172,7 +172,7 @@ async function startBillScan(interaction, trip, cache) {
         const retryRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('exp_btn_scan_start').setLabel('🔄 重新掃描').setStyle(ButtonStyle.Primary),
           new ButtonBuilder().setCustomId('exp_btn_add_start').setLabel('✏️ 改用手動輸入').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主控台').setStyle(ButtonStyle.Secondary)
+          new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主選單').setStyle(ButtonStyle.Secondary)
         );
 
         await deliverResult({ embeds: [errEmbed], components: [retryRow] });
@@ -223,11 +223,11 @@ async function startBillScan(interaction, trip, cache) {
     const timeoutEmbed = new EmbedBuilder()
       .setColor(0x95a5a6)
       .setTitle('⌛ 已逾時')
-      .setDescription('未在時間內收到帳單照片，本次掃描已自動取消。');
+      .setDescription('沒有在時間內收到帳單照片，這次掃描已取消。');
 
     const retryRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('exp_btn_scan_start').setLabel('🔄 重新掃描').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主控台').setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主選單').setStyle(ButtonStyle.Secondary)
     );
 
     // 跟收到圖片時一樣的處理原則：先刪掉舊面板，再用 followUp() 補一則新訊息，

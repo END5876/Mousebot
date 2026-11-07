@@ -123,7 +123,7 @@ const SCAN_CURRENCY_CUSTOM_VALUE = '__custom__';
 const SCAN_CONFIDENCE_META = {
   high: { color: 0x2ecc71, badge: '' },
   medium: { color: 0x2ecc71, badge: '🔎 AI 信心中等，建議再次核對金額與幣別。' },
-  low: { color: 0xe67e22, badge: '⚠️ AI 對這次辨識信心較低（或幾乎沒認出東西），請務必仔細核對，必要時直接手動輸入！' }
+  low: { color: 0xe67e22, badge: '⚠️ AI 對這次辨識沒什麼把握，請仔細核對，必要時直接手動輸入。' }
 };
 
 /**
@@ -187,7 +187,7 @@ function buildScanResultView(trip, scanResult, options = {}) {
   // （例如行程只設過 TWD/JPY，但這張帳單其實是歐元）——選了之後會跳一個小 Modal 讓使用者
   // 輸入代碼，並比照「行程設定」既有的新增幣別流程自動抓即時匯率或手動輸入匯率。
   const currencyOptions = tripCurrencies.slice(0, 24).map((c) => ({
-    label: c === trip.baseCurrency ? `${c}（本位幣）` : c,
+    label: c === trip.baseCurrency ? `${c}（基準幣別）` : c,
     value: c,
     default: c === scanResult.currency
   }));
@@ -209,7 +209,7 @@ function buildScanResultView(trip, scanResult, options = {}) {
   const btnRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`exp_btn_scan_confirm${idSuffix}`).setLabel('📝 開啟表單確認並送出').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId('exp_btn_scan_start').setLabel('🔄 重新掃描').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主控台').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主選單').setStyle(ButtonStyle.Secondary)
   );
 
   return { embeds: [resultEmbed], components: [currencySelectRow, btnRow] };

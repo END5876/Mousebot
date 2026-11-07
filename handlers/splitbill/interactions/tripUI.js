@@ -33,12 +33,12 @@ async function renderTripNav(interaction, alertMsg = null) {
   const embed = new EmbedBuilder()
     .setColor(0xe74c3c)
     .setTitle('🧳 行程與外幣設定')
-    .setDescription(`你目前的作用行程：${activeName}\n*(每人各自獨立，切換行程不會影響其他成員看到的行程)*\n\n請直接由下方選單切換行程，或使用按鈕建立/刪除行程、新增幣別匯率。\n\n🌐 在網頁上建立的行程，可以在網頁產生綁定碼後用 \`/splitbill-attach\` 綁定到這個伺服器。`);
+    .setDescription(`你目前使用的行程：${activeName}\n*(每人各自獨立，切換行程不會影響其他成員看到的行程)*\n\n請直接由下方選單切換行程，或使用按鈕建立/刪除行程、新增幣別匯率。\n\n🌐 在網頁上建立的行程，可以在網頁產生綁定碼後用 \`/splitbill-attach\` 綁定到這個伺服器。`);
 
   if (trip) {
     const rateLines = Object.entries(trip.rates)
       .map(([cur, rate]) => cur === trip.baseCurrency
-        ? `\`${cur}\`（本位幣）`
+        ? `\`${cur}\`（基準幣別）`
         : `\`${cur}\`：1 ${cur} = ${rate} ${trip.baseCurrency}`)
       .join('\n');
     embed.addFields({ name: '🪙 目前可用幣別 / 匯率', value: rateLines || '（尚無資料）' });
@@ -48,7 +48,7 @@ async function renderTripNav(interaction, alertMsg = null) {
     new ButtonBuilder().setCustomId('trip_btn_create_modal').setLabel('🆕 建立新行程').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('trip_btn_add_currency').setLabel('🪙 新增幣別').setStyle(ButtonStyle.Success).setDisabled(!trip),
     new ButtonBuilder().setCustomId('trip_btn_delete_ui').setLabel('❌ 刪除此行程').setStyle(ButtonStyle.Danger).setDisabled(!trip || !canDeleteTrip(trip, interaction.user.id)),
-    new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主控台').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主選單').setStyle(ButtonStyle.Secondary)
   );
 
   const components = [btnRow];
@@ -103,9 +103,9 @@ module.exports = {
     }
 
     if (customId === 'trip_btn_create_modal') {
-      const modal = new ModalBuilder().setCustomId('trip_modal_create').setTitle('建立全新行程');
+      const modal = new ModalBuilder().setCustomId('trip_modal_create').setTitle('建立新行程');
       const nameInput = new TextInputBuilder().setCustomId('name').setLabel('行程名稱').setStyle(TextInputStyle.Short).setRequired(true);
-      const curInput = new TextInputBuilder().setCustomId('baseCur').setLabel('基準本位幣別 (預設 TWD)').setStyle(TextInputStyle.Short).setValue('TWD').setRequired(false);
+      const curInput = new TextInputBuilder().setCustomId('baseCur').setLabel('基準幣別（預設 TWD，建立後不能更改）').setStyle(TextInputStyle.Short).setValue('TWD').setRequired(false);
 
       modal.addComponents(new ActionRowBuilder().addComponents(nameInput), new ActionRowBuilder().addComponents(curInput));
       return interaction.showModal(modal);
@@ -145,13 +145,13 @@ module.exports = {
 
       const embed = new EmbedBuilder()
         .setColor(0xd35400)
-        .setTitle(`⚠️ 警告：確定要刪除行程「${trip.name}」？`)
-        .setDescription('此操作將會清除所有歷史記帳與成員關聯，**無法復原**。確認刪除？');
+        .setTitle(`刪除行程「${trip.name}」？`)
+        .setDescription('這個行程的所有支出、轉帳、成員和紀錄都會被刪除，**無法復原**。');
 
       const btns = new ActionRowBuilder().addComponents(
         // 把要刪除的行程 ID 鎖進 customId：確認畫面開著的期間若切換了作用行程，仍只會刪除「畫面上寫的那一個」
-        new ButtonBuilder().setCustomId(`trip_btn_delete_confirm::${trip.id}`).setLabel('💥 確定全面刪除').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('trip_nav').setLabel('🛡️ 取消安全返回').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(`trip_btn_delete_confirm::${trip.id}`).setLabel('刪除行程').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('trip_nav').setLabel('取消').setStyle(ButtonStyle.Secondary)
       );
 
       return interaction.update({ embeds: [embed], components: [btns] });
@@ -172,7 +172,7 @@ module.exports = {
       // DELETE /api/trip/:guildId/:tripId 端點內部處理，這裡不需要再自己做。
       await splitbillClient.deleteTrip(guildId, trip.id, user.id);
 
-      return showMainMenu(interaction, `✅ 已徹底銷毀行程 \`${trip.name}\` 及其所有檔案。`);
+      return showMainMenu(interaction, `✅ 已刪除行程「${trip.name}」。`);
     }
   },
 
@@ -220,7 +220,7 @@ module.exports = {
       const ratesNote = hasBaselineRates
         ? '已自動帶入常用多國匯率'
         : `\`${baseCur}\` 沒有內建的參考匯率，其他幣別請到「🧳 行程設定 → 🪙 新增幣別」加入`;
-      return showMainMenu(interaction, `🎉 成功創立新行程！\n**名稱**：${name}\n**本位幣別**：${baseCur}\n${ratesNote}，並切換為你的作用行程！`);
+      return showMainMenu(interaction, `🎉 已建立行程！\n**名稱**：${name}\n**基準幣別**：${baseCur}\n${ratesNote}，並已切換到這個行程。`);
     }
 
     // 🪙 新增幣別：驗證格式 → 手動匯率優先，留空則嘗試即時匯率
@@ -285,13 +285,13 @@ module.exports = {
       const { trips } = await splitbillClient.getGuild(guildId);
       const selectedTripId = interaction.values[0];
 
-      if (!trips[selectedTripId]) return interaction.reply({ content: '⚠️ 選擇的行程不存在。', flags: MessageFlags.Ephemeral });
+      if (!trips[selectedTripId]) return interaction.reply({ content: '⚠️ 找不到這個行程，可能已經被刪除。', flags: MessageFlags.Ephemeral });
 
       // 🔒 [修正：切換行程影響全體] 只設定「這個使用者自己」的作用行程指標，
       // 伺服器裡其他人的畫面與正在進行中的操作完全不受影響。
       await splitbillClient.setUserActiveTrip(guildId, interaction.user.id, selectedTripId);
 
-      return showMainMenu(interaction, `🔄 已將你自己的作用行程切換至：**${trips[selectedTripId].name}**\n*(僅影響你自己，其他成員看到的行程不會被改變)*`);
+      return showMainMenu(interaction, `🔄 已切換到：**${trips[selectedTripId].name}**\n*（只影響你自己，其他成員看到的行程不變）*`);
     }
   }
 };

@@ -89,7 +89,7 @@ function resolvePeople(trip, ctx, me, names) {
 }
 
 async function resolveRate(trip, currency) {
-    if (currency === trip.baseCurrency) return { rate: 1, source: '本位幣' };
+    if (currency === trip.baseCurrency) return { rate: 1, source: '基準幣別' };
     const live = await fetchRealTimeRate(currency, trip.baseCurrency).catch(() => null);
     if (typeof live === 'number' && live > 0) return { rate: live, source: '網路即時' };
     const preset = trip.rates?.[currency];

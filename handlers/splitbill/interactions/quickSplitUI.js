@@ -86,7 +86,7 @@ function buildResultPayload(state) {
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('qs_start').setLabel('⚡ 再算一筆').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主控台').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主選單').setStyle(ButtonStyle.Secondary)
   );
 
   return { content: '', embeds: [embed], components: [row] };
@@ -224,7 +224,7 @@ module.exports = {
     if (customId === 'qs_payer_self_only') {
       const state = cache.get(guildId, user.id);
       if (!state || state.flow !== 'qs') {
-        return interaction.reply({ content: '⚠️ 這筆快速分帳的資料已逾時失效，請重新從主控台點擊「⚡ 快速分帳」再試一次。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 這筆快速分帳的資料已逾時失效，請從主選單重新點「⚡ 快速分帳」。', flags: MessageFlags.Ephemeral });
       }
 
       state.payers = [{ userId: user.id, amount: state.amount }];
@@ -237,7 +237,7 @@ module.exports = {
     if (customId === 'qs_split_equal') {
       const state = cache.get(guildId, user.id);
       if (!state || state.flow !== 'qs' || !state.participants) {
-        return interaction.reply({ content: '⚠️ 這筆快速分帳的資料已逾時失效，請重新從主控台點擊「⚡ 快速分帳」再試一次。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 這筆快速分帳的資料已逾時失效，請從主選單重新點「⚡ 快速分帳」。', flags: MessageFlags.Ephemeral });
       }
 
       state.shares = equalSplit(state.amount, state.participants.map(p => p.id));
@@ -250,7 +250,7 @@ module.exports = {
     if (customId === 'qs_split_custom') {
       const state = cache.get(guildId, user.id);
       if (!state || state.flow !== 'qs' || !state.participants) {
-        return interaction.reply({ content: '⚠️ 這筆快速分帳的資料已逾時失效，請重新從主控台點擊「⚡ 快速分帳」再試一次。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 這筆快速分帳的資料已逾時失效，請從主選單重新點「⚡ 快速分帳」。', flags: MessageFlags.Ephemeral });
       }
       if (state.participants.length > CUSTOM_SPLIT_MODAL_LIMIT) {
         return interaction.reply({ content: `⚠️ 分攤對象超過 ${CUSTOM_SPLIT_MODAL_LIMIT} 人時無法使用自訂金額，請改用平均分攤。`, flags: MessageFlags.Ephemeral });
@@ -297,7 +297,7 @@ module.exports = {
     if (customId === 'qs_modal_payer_amounts') {
       const state = cache.get(guildId, user.id);
       if (!state || state.flow !== 'qs' || !state.tempPayers) {
-        return interaction.reply({ content: '⚠️ 這筆快速分帳的資料已逾時失效，請重新從主控台點擊「⚡ 快速分帳」再試一次。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 這筆快速分帳的資料已逾時失效，請從主選單重新點「⚡ 快速分帳」。', flags: MessageFlags.Ephemeral });
       }
 
       const payers = [];
@@ -305,7 +305,7 @@ module.exports = {
         const raw = interaction.fields.getTextInputValue(`amt_${i}`);
         const val = parseMoneyInput(raw);
         if (isNaN(val) || val < 0) {
-          return interaction.reply({ content: '⚠️ 請輸入正確的數字（不可為負數）。', flags: MessageFlags.Ephemeral });
+          return interaction.reply({ content: '⚠️ 金額要是 0 或正數。', flags: MessageFlags.Ephemeral });
         }
         payers.push({ userId: state.tempPayers[i].id, amount: round2(val) });
       }
@@ -328,7 +328,7 @@ module.exports = {
     if (customId === 'qs_modal_custom_shares') {
       const state = cache.get(guildId, user.id);
       if (!state || state.flow !== 'qs' || !state.participants) {
-        return interaction.reply({ content: '⚠️ 這筆快速分帳的資料已逾時失效，請重新從主控台點擊「⚡ 快速分帳」再試一次。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 這筆快速分帳的資料已逾時失效，請從主選單重新點「⚡ 快速分帳」。', flags: MessageFlags.Ephemeral });
       }
 
       const shares = [];
@@ -336,7 +336,7 @@ module.exports = {
         const raw = interaction.fields.getTextInputValue(`share_${i}`);
         const val = parseMoneyInput(raw);
         if (isNaN(val) || val < 0) {
-          return interaction.reply({ content: '⚠️ 請輸入正確的數字（不可為負數，免費請填 0）。', flags: MessageFlags.Ephemeral });
+          return interaction.reply({ content: '⚠️ 金額要是 0 或正數（不用付的人填 0）。', flags: MessageFlags.Ephemeral });
         }
         shares.push({ userId: state.participants[i].id, share: round2(val) });
       }
@@ -362,7 +362,7 @@ module.exports = {
     if (customId === 'qs_select_payers') {
       const state = cache.get(guildId, user.id);
       if (!state || state.flow !== 'qs') {
-        return interaction.reply({ content: '⚠️ 這筆快速分帳的資料已逾時失效，請重新從主控台點擊「⚡ 快速分帳」再試一次。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 這筆快速分帳的資料已逾時失效，請從主選單重新點「⚡ 快速分帳」。', flags: MessageFlags.Ephemeral });
       }
 
       const payerIds = values;
@@ -396,7 +396,7 @@ module.exports = {
     if (customId === 'qs_select_participants') {
       const state = cache.get(guildId, user.id);
       if (!state || state.flow !== 'qs' || !state.payers) {
-        return interaction.reply({ content: '⚠️ 這筆快速分帳的資料已逾時失效，請重新從主控台點擊「⚡ 快速分帳」再試一次。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 這筆快速分帳的資料已逾時失效，請從主選單重新點「⚡ 快速分帳」。', flags: MessageFlags.Ephemeral });
       }
 
       state.participants = values.map(id => ({ id, name: displayNameOf(interaction, id) }));

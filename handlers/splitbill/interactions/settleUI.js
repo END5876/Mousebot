@@ -150,7 +150,7 @@ module.exports = {
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
         .setTitle('📊 結算與淨額中心')
-        .setDescription(`當前行程：**${trip.name}**\n請選擇結算檢視工具：`);
+        .setDescription(`目前行程：**${trip.name}**\n要看什麼？`);
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('set_btn_balance').setLabel('🟢 查看每人淨額').setStyle(ButtonStyle.Primary),
@@ -217,7 +217,7 @@ module.exports = {
       });
       if (blocks.length) blocks.push(tip);
 
-      const pages = blocks.length ? paginateBlocks(blocks, BALANCE_PAGE_MAX) : ['尚無成員數據。'];
+      const pages = blocks.length ? paginateBlocks(blocks, BALANCE_PAGE_MAX) : ['還沒有成員。'];
       const pageMatch = /^set_btn_balance_p_(\d+)$/.exec(customId);
       const page = Math.min(pageMatch ? Number(pageMatch[1]) : 0, pages.length - 1);
 
@@ -248,10 +248,10 @@ module.exports = {
 
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
-        .setTitle(`🚀 「${trip.name}」建議轉帳清單（基準幣 ${trip.baseCurrency}）`);
+        .setTitle(`🚀 「${trip.name}」建議轉帳清單（基準幣別 ${trip.baseCurrency}）`);
 
       if (!transactions.length) {
-        embed.setDescription('🎉 讚啦！當前所有人帳目皆完全兩清，無須進行任何轉帳！');
+        embed.setDescription('🎉 大家都結清了，不用再轉帳！');
       } else {
         const lines = transactions.map((t, idx) =>
           `**${idx + 1}.** ${memberMention(trip, t.from)} ➡️ ${memberMention(trip, t.to)}：**${round2(t.amount)} ${trip.baseCurrency}**`
@@ -272,7 +272,7 @@ module.exports = {
       const currencies = getUsedCurrencies(trip);
 
       if (!currencies.length) {
-        return interaction.reply({ content: '📭 目前尚無任何花費或訂金紀錄，無須換算結算。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '📭 還沒有任何帳目，不需要換算。', flags: MessageFlags.Ephemeral });
       }
 
       const embed = new EmbedBuilder()
@@ -312,7 +312,7 @@ module.exports = {
 
       const rateLines = Object.entries(rates)
         .filter(([currency]) => currency !== targetCurrency)
-        .map(([currency, rate]) => `1 ${currency} = ${rate === null ? '❌ 抓取失敗' : `${rate} ${targetCurrency}`}`)
+        .map(([currency, rate]) => `1 ${currency} = ${rate === null ? '❌ 查不到' : `${rate} ${targetCurrency}`}`)
         .join('\n');
 
       const transactions = simplifyDebts(converted);
@@ -324,8 +324,8 @@ module.exports = {
           (rateLines ? `**採用即時匯率：**\n${rateLines}\n\n` : '') +
           (transactions.length
             ? `**最精簡轉帳路線：**\n${transactions.map((t, idx) => `${idx + 1}. ${memberMention(trip, t.from)} ➡️ ${memberMention(trip, t.to)}：**${t.amount} ${targetCurrency}**`).join('\n')}`
-            : '🎉 讚啦！換算後所有人帳目皆完全兩清，無須進行任何轉帳！') +
-          (failedCurrencies.length ? `\n\n⚠️ 以下幣別即時匯率抓取失敗，已從換算結果中忽略：${failedCurrencies.join('、')}` : '')
+            : '🎉 換算後大家都結清了，不用再轉帳！') +
+          (failedCurrencies.length ? `\n\n⚠️ 查不到以下幣別的即時匯率，這些帳目**沒有算進上面的結果**：${failedCurrencies.join('、')}` : '')
         );
 
       const row = new ActionRowBuilder().addComponents(

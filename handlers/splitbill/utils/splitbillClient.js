@@ -53,7 +53,7 @@ function actorHeaders(actorId) {
 
 function assertConfigured() {
   if (!SERVICE_URL) {
-    throw new Error('尚未設定 SPLITBILL_SERVICE_URL，分帳功能無法使用，請確認環境變數。');
+    throw new Error('分帳功能目前沒有開放。');
   }
 }
 
@@ -190,7 +190,7 @@ async function saveTrip(guildId, tripId, trip, opts = {}) {
       throw err;
     }
   }
-  throw new Error('儲存失敗：版本衝突且重試次數已用完，請重新操作一次。');
+  throw new Error('其他人剛好同時在修改這個行程，這次沒有存到，請再操作一次。');
 }
 
 // actorId：實際按下刪除的 Discord 使用者。service 會再獨立驗證一次

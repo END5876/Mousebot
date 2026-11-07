@@ -78,7 +78,7 @@ function parseMoneyInput(raw) {
 function toBase(amount, currency, rates) {
   const rate = rates[currency];
   if (typeof rate !== 'number' || rate <= 0) {
-    throw new Error(`找不到幣別 ${currency} 的匯率，請先到「行程設定」確認匯率`);
+    throw new Error(`查不到 ${currency} 的匯率，請先到「🧳 行程設定 → 🪙 新增幣別」加入匯率`);
   }
   return round2(amount * rate);
 }
@@ -87,7 +87,7 @@ function toBase(amount, currency, rates) {
  * 平均分攤計算（無條件進位到整數）
  */
 function equalSplit(amount, participantIds) {
-  if (!participantIds.length) throw new Error('參與分攤的成員不可為空');
+  if (!participantIds.length) throw new Error('請至少選一位要分攤的成員');
   const n = participantIds.length;
   const baseShare = round2(amount / n);
 
@@ -108,7 +108,7 @@ function validateCustomSplit(amount, shares) {
   const sum = round2(shares.reduce((s, x) => s + x.share, 0));
   const diff = round2(Math.abs(sum - amount));
   if (diff > 0.01) {
-    throw new Error(`自訂金額總和 (${sum}) 與總花費 (${amount}) 不相符，差額 ${diff}`);
+    throw new Error(`各自應付的金額加起來是 ${sum}，跟總花費 ${amount} 差了 ${diff}`);
   }
 }
 
@@ -116,7 +116,7 @@ function validatePayers(amount, payers) {
   const sum = round2(payers.reduce((s, x) => s + x.amount, 0));
   const diff = round2(Math.abs(sum - amount));
   if (diff > 0.01) {
-    throw new Error(`代墊金額總和 (${sum}) 與總花費 (${amount}) 不相符，差額 ${diff}`);
+    throw new Error(`代墊金額加起來是 ${sum}，跟總花費 ${amount} 差了 ${diff}`);
   }
 }
 

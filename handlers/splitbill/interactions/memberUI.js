@@ -85,7 +85,7 @@ module.exports = {
       }
 
       const embed = new EmbedBuilder().setColor(0xe74c3c).setTitle('🗑️ 從行程移出成員').setDescription(
-        '請從下方選單選取欲退出的成員 (可多選)：\n*(至少需保留 1 位已連結 Discord 的成員)*' +
+        '請選擇要移出的成員（可多選）：\n*（至少要留下 1 位已連結 Discord 的成員）*' +
         (hiddenLinked ? `\n*(另有 ${hiddenLinked} 位已連結 Discord 的成員只有行程建立者可以移除，未列出)*` : '')
       );
 
@@ -98,7 +98,7 @@ module.exports = {
       const menuRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(`mem_select_remove::${trip.id}`)
-          .setPlaceholder('選取退出成員 (可多選)...')
+          .setPlaceholder('選擇要移出的成員（可多選）...')
           .setMinValues(1)
           .setMaxValues(maxRemovable)
           .addOptions(memberOptions)

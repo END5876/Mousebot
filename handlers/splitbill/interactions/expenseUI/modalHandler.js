@@ -22,7 +22,7 @@ async function handleModal(interaction, cache) {
       const state = cache.get(guildId, itemCacheUserId);
 
       if (!state || !state.scanResult) {
-        return interaction.reply({ content: '⚠️ 辨識結果已逾期失效，請重新掃描一次。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 這次辨識結果已經逾時，請重新掃描一次。', flags: MessageFlags.Ephemeral });
       }
 
       const currency = interaction.fields.getTextInputValue('currency').trim().toUpperCase();
@@ -80,7 +80,7 @@ async function handleModal(interaction, cache) {
       const state = cache.get(guildId, user.id);
 
       if (!state || !state.depositCurrency || !state.depositCollectorId || !state.depositPayerIds) {
-        return interaction.reply({ content: '⚠️ 快取失效，請重新操作。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 這個步驟已經逾時，請從面板重新開始。', flags: MessageFlags.Ephemeral });
       }
 
       // 🔒 [修正：race condition] 用流程一開始（選幣別那一步）鎖定的 tripId，
@@ -110,7 +110,7 @@ async function handleModal(interaction, cache) {
           const amount = parseMoneyInput(amountStr);
           
           if (isNaN(amount) || amount <= 0) {
-            throw new Error(`第 ${i + 1} 筆金額格式錯誤，必須大於 0。`);
+            throw new Error(`第 ${i + 1} 筆金額要是大於 0 的數字。`);
           }
 
           const deposit = addDeposit(trip, {
@@ -133,7 +133,7 @@ async function handleModal(interaction, cache) {
         
         return showMainMenu(interaction, msg);
       } catch (err) {
-        return interaction.reply({ content: `❌ 錯誤：${err.message}`, flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: `❌ 記錄失敗：${err.message}`, flags: MessageFlags.Ephemeral });
       }
     }
 
@@ -159,7 +159,7 @@ async function handleModal(interaction, cache) {
       const customRateStr = interaction.fields.getTextInputValue('custom_rate');
 
       if (isNaN(amount) || amount <= 0) {
-        return interaction.reply({ content: '⚠️ 請輸入正確的大於 0 的金額數字。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 金額要是大於 0 的數字。', flags: MessageFlags.Ephemeral });
       }
 
       await interaction.deferUpdate();
@@ -173,7 +173,7 @@ async function handleModal(interaction, cache) {
         rateSource = '手動自訂';
       } else if (currency === trip.baseCurrency) {
         actualRate = 1;
-        rateSource = '本位幣';
+        rateSource = '基準幣別';
       } else {
         const liveRate = await fetchRealTimeRate(currency, trip.baseCurrency);
         if (liveRate) {
@@ -229,7 +229,7 @@ async function handleModal(interaction, cache) {
       const draftKey = expenseDraftCacheUserId(user.id, draftId);
       const state = cache.get(guildId, draftKey);
       
-      if (!state || !state.tempPayerIds) return interaction.reply({ content: '⚠️ 快取過期，請重新開啟。', flags: MessageFlags.Ephemeral });
+      if (!state || !state.tempPayerIds) return interaction.reply({ content: '⚠️ 這個步驟已經逾時，請從面板重新開始。', flags: MessageFlags.Ephemeral });
 
       // 這一步只是彙整代墊金額、還不會寫入行程資料；
       // 實際寫入（completeExpenseLoggingWithShares／completeExpenseLogging）
@@ -250,7 +250,7 @@ async function handleModal(interaction, cache) {
 
       if (Math.abs(sum - state.amount) > 0.01) {
         cache.delete(guildId, draftKey);
-        return showMainMenu(interaction, `⚠️ **記帳已取消**：多人代墊金額加總 (**${sum}**) 不等於總花費 (**${state.amount}**)！請重新操作。`);
+        return showMainMenu(interaction, `⚠️ **記帳已取消**：代墊金額加起來是 **${sum}**，跟總花費 **${state.amount}** 不一樣，請重新記一次。`);
       }
 
       state.payers = payers;
@@ -268,7 +268,7 @@ async function handleModal(interaction, cache) {
       const state = cache.get(guildId, draftKey);
 
       if (!state || !state.tempCustomParticipantIds) {
-        return interaction.reply({ content: '⚠️ 快取過期，請重新開啟。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 這個步驟已經逾時，請從面板重新開始。', flags: MessageFlags.Ephemeral });
       }
 
       // 🔒 [修正：race condition] 沿用「新增花費」流程一開始鎖定的 tripId，
@@ -281,7 +281,7 @@ async function handleModal(interaction, cache) {
         const valStr = interaction.fields.getTextInputValue(`share_${i}`);
         const val = parseMoneyInput(valStr);
         if (isNaN(val) || val < 0) {
-          return interaction.reply({ content: '⚠️ 請輸入正確的數字（不可為負數，免費請填 0）。', flags: MessageFlags.Ephemeral });
+          return interaction.reply({ content: '⚠️ 金額要是 0 或正數（不用付的人填 0）。', flags: MessageFlags.Ephemeral });
         }
         shares.push({ userId: state.tempCustomParticipantIds[i], share: round2(val) });
       }

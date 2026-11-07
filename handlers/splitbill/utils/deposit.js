@@ -21,9 +21,9 @@ const { round2, toBase } = require('./calculator');
  * @returns {object} 新建立的 deposit 物件
  */
 function addDeposit(trip, { collectorId, payerId, amount, currency, note }) {
-  if (!collectorId || !payerId) throw new Error('必須指定收款人與付款人');
+  if (!collectorId || !payerId) throw new Error('請選擇收款人和付款人');
   if (collectorId === payerId) throw new Error('收款人與付款人不能是同一人');
-  if (!(amount > 0)) throw new Error('金額必須大於 0');
+  if (!(amount > 0)) throw new Error('金額要大於 0');
 
   const cur = (currency || trip.baseCurrency).toUpperCase();
   const amountInBase = round2(toBase(amount, cur, trip.rates));

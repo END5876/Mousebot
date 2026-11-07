@@ -38,8 +38,8 @@ test('formatMoneyDisplay 依幣別決定小數位數', () => {
 
 test('toBase 換算並在缺匯率時丟錯', () => {
   assert.equal(toBase(1000, 'JPY', { JPY: 0.215 }), 215);
-  assert.throws(() => toBase(1, 'USD', {}), /找不到幣別 USD/);
-  assert.throws(() => toBase(1, 'USD', { USD: 0 }), /找不到幣別 USD/);
+  assert.throws(() => toBase(1, 'USD', {}), /查不到 USD 的匯率/);
+  assert.throws(() => toBase(1, 'USD', { USD: 0 }), /查不到 USD 的匯率/);
 });
 
 test('equalSplit 分攤總和必等於原金額（餘數給最後一人）', () => {
@@ -49,14 +49,14 @@ test('equalSplit 分攤總和必等於原金額（餘數給最後一人）', () 
     assert.equal(shares.length, n);
     assert.equal(sum(shares.map(s => s.share)), round2(amount), `${amount} / ${n}`);
   }
-  assert.throws(() => equalSplit(100, []), /不可為空/);
+  assert.throws(() => equalSplit(100, []), /至少選一位/);
 });
 
 test('validateCustomSplit / validatePayers 容許 0.01 誤差', () => {
   assert.doesNotThrow(() => validateCustomSplit(100, [{ share: 33.33 }, { share: 33.33 }, { share: 33.34 }]));
-  assert.throws(() => validateCustomSplit(100, [{ share: 50 }, { share: 49 }]), /不相符/);
+  assert.throws(() => validateCustomSplit(100, [{ share: 50 }, { share: 49 }]), /加起來是/);
   assert.doesNotThrow(() => validatePayers(100, [{ amount: 60 }, { amount: 40 }]));
-  assert.throws(() => validatePayers(100, [{ amount: 60 }]), /不相符/);
+  assert.throws(() => validatePayers(100, [{ amount: 60 }]), /加起來是/);
 });
 
 test('calcNetBalances：淨額總和為 0，且含訂金抵銷', () => {

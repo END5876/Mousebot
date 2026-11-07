@@ -90,11 +90,11 @@ function buildPrompt(tripCurrencies, baseCurrency) {
  */
 async function scanBillImage(imageParts, tripCurrencies = [], baseCurrency = 'TWD', userId = null) {
   if (!imageParts || !imageParts.length) {
-    throw new Error('沒有可辨識的圖片內容，請確認上傳的是常見圖片格式 (png/jpg/webp)。');
+    throw new Error('讀不到圖片內容，請上傳 JPG、PNG 或 WebP 圖片。');
   }
 
   if (!process.env.GEMINI_API_KEY) {
-    throw new Error('尚未設定 GEMINI_API_KEY，帳單辨識功能無法使用。');
+    throw new Error('帳單辨識目前沒有開放，請改用手動輸入。');
   }
   try {
     consumeQuota(userId);
@@ -137,7 +137,7 @@ async function scanBillImage(imageParts, tripCurrencies = [], baseCurrency = 'TW
       throw new Error(`辨識逾時（超過 ${GEMINI_REQUEST_TIMEOUT_MS / 1000} 秒未回應），請稍後再試一次，或改用手動輸入。`);
     }
     logger.error('billScanner', `Gemini API 呼叫失敗: ${err.message}`);
-    throw new Error('辨識服務暫時發生問題，請稍後再試一次。');
+    throw new Error('帳單辨識暫時無法使用，請稍後再試一次，或改用手動輸入。');
   } finally {
     clearTimeout(timeoutId);
   }
@@ -147,7 +147,7 @@ async function scanBillImage(imageParts, tripCurrencies = [], baseCurrency = 'TW
     parsed = JSON.parse(response.text ?? '');
   } catch (err) {
     logger.error('billScanner', `JSON 解析失敗: ${err.message}`);
-    throw new Error('AI 回傳格式異常，無法解析帳單內容，請再試一次或改用手動輸入。');
+    throw new Error('這張帳單沒辦法辨識，請再試一次，或改用手動輸入。');
   }
 
   const amount = Number(parsed.amount);

@@ -29,7 +29,7 @@ module.exports = {
       return interaction.reply({ content: '⚠️ 請在要綁定的伺服器裡執行這個指令。', flags: MessageFlags.Ephemeral });
     }
     if (!splitbillClient.isConfigured()) {
-      return interaction.reply({ content: '⚠️ 分帳服務尚未設定（SPLITBILL_SERVICE_URL），無法綁定。', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: '⚠️ 分帳功能目前沒有開放，無法綁定。', flags: MessageFlags.Ephemeral });
     }
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -47,7 +47,7 @@ module.exports = {
         `👥 成員 ${trip.members.length} 人（其中 ${trip.members.filter(m => !m.discordId).length} 人尚未連結 Discord）`,
       ];
       if (result.joined) lines.push('🙋 你已自動加入為這個行程的成員。');
-      lines.push('', '已切換為你的作用行程，輸入 `/splitbill` 即可開始操作。');
+      lines.push('', '已切換到這個行程，輸入 `/splitbill` 就能開始記帳。');
       lines.push('尚未連結 Discord 的成員：本人可以用網頁的邀請連結認領，或由任何成員在「👥 成員管理 → 🔗 連結 Discord 帳號」替他連結。');
 
       const embed = new EmbedBuilder().setColor(0x2ecc71).setTitle('🔗 綁定成功').setDescription(lines.join('\n'));
