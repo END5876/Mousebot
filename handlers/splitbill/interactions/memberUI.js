@@ -254,7 +254,7 @@ module.exports = {
         return interaction.reply({ content: `⚠️「${member.name}」已經連結到 <@${member.discordId}> 了。`, flags: MessageFlags.Ephemeral });
       }
       if (member.lineId) {
-        return interaction.reply({ content: `⚠️「${member.name}」已經由本人用 LINE 帳號認領了。`, flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: `⚠️「${member.name}」已經由本人用 LINE 帳號認領，不能再連結到其他 Discord 帳號。`, flags: MessageFlags.Ephemeral });
       }
       const user = interaction.users && interaction.users.get(discordUserId);
       if (user && user.bot) {
