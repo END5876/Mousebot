@@ -67,6 +67,13 @@ async function runChild() {
     },
   });
 
+  // 現在時間固定成同一刻（格式仍走正式的 formatNow），快照才不會每分鐘都不一樣
+  const realTime = require(path.join(ROOT, 'handlers/ai/currentTime'));
+  stubModule('handlers/ai/currentTime', {
+    ...realTime,
+    currentTimePart: () => realTime.currentTimePart(new Date('2026-01-01T04:00:00Z')),
+  });
+
   let usage = [];
   stubModule('handlers/ai/tokenTracker', {
     recordUsage(kind, _response, { mode } = {}) { usage.push({ kind, mode: mode ?? null }); },
@@ -508,6 +515,9 @@ function runParent() {
 //   (3) 只 @ 沒打字（沒有引用）時也把 message 傳給 getGeminiResponse：多人格的標籤從「使用者」變成帳號名稱，
 //       提示文字改成 buildMessagePartsWithReference 的「（只 @ 了你，沒有說任何話）」（greetMulti、greetSingle）。
 //   假頻道的 send 改成接受 payload 物件（aiHandler 改用 memeStore.buildPayloads），記下的 content 和以前相同。
+// 2026-11-08 加入現在時間：
+//   (4) 每個請求的本次訊息最前面多一行【現在時間：…】（單一人格在 CURRENT_TURN_DIVIDER 之後）；
+//       子程序把時間固定成 2026-01-01T04:00Z，見各處註解。system instruction 不變。
 const EXPECTED = {
   "commands": {
     "order": [
@@ -816,6 +826,10 @@ const EXPECTED = {
             {
               "role": "user",
               "parts": [
+                // 現在時間（2026-11-08）：本次訊息最前面附上現在時間（handlers/ai/currentTime.js；快照固定成 2026-01-01T04:00Z）
+                {
+                  "text": "【現在時間：2026年1月1日（星期四）12:00，時區 Asia/Taipei】"
+                },
                 {
                   "text": "【發言者：ming】\n你今天心情如何"
                 }
@@ -881,6 +895,10 @@ const EXPECTED = {
                 {
                   "text": "【以上是你上次發言後群裡的其他聊天，只當背景，不用逐則回應】\n【下面這則才是你這次要回的】"
                 },
+                // 現在時間（2026-11-08）：本次訊息最前面附上現在時間（handlers/ai/currentTime.js；快照固定成 2026-01-01T04:00Z）
+                {
+                  "text": "【現在時間：2026年1月1日（星期四）12:00，時區 Asia/Taipei】"
+                },
                 {
                   "text": "【發言者：明明 (@ming)】\n你覺得呢"
                 }
@@ -921,6 +939,10 @@ const EXPECTED = {
             {
               "role": "user",
               "parts": [
+                // 現在時間（2026-11-08）：本次訊息最前面附上現在時間（handlers/ai/currentTime.js；快照固定成 2026-01-01T04:00Z）
+                {
+                  "text": "【現在時間：2026年1月1日（星期四）12:00，時區 Asia/Taipei】"
+                },
                 // P1 差異 (3)（MB-11）：只 @ 沒打字也把 message 傳進去（同 mousebot-lite），標籤是帳號名稱、提示改成「（只 @ 了你，沒有說任何話）」
                 {
                   "text": "【發言者：ming】\n（只 @ 了你，沒有說任何話）"
@@ -968,6 +990,10 @@ const EXPECTED = {
                 {
                   "text": "【以上是你上次發言後群裡的其他聊天，只當背景，不用逐則回應】\n【下面這則才是你這次要回的】"
                 },
+                // 現在時間（2026-11-08）：本次訊息最前面附上現在時間（handlers/ai/currentTime.js；快照固定成 2026-01-01T04:00Z）
+                {
+                  "text": "【現在時間：2026年1月1日（星期四）12:00，時區 Asia/Taipei】"
+                },
                 // P1 差異 (3)（MB-11）：只 @ 沒打字也把 message 傳進去（同 mousebot-lite），提示改成「（只 @ 了你，沒有說任何話）」
                 {
                   "text": "【發言者：明明 (@ming)】\n（只 @ 了你，沒有說任何話）"
@@ -1009,6 +1035,10 @@ const EXPECTED = {
             {
               "role": "user",
               "parts": [
+                // 現在時間（2026-11-08）：本次訊息最前面附上現在時間（handlers/ai/currentTime.js；快照固定成 2026-01-01T04:00Z）
+                {
+                  "text": "【現在時間：2026年1月1日（星期四）12:00，時區 Asia/Taipei】"
+                },
                 {
                   "text": "【ming 引用的舊訊息】\n說話的人：hua（另一位使用者，不是 ming）\n內容：「我昨天去爬山」"
                 },
@@ -1054,6 +1084,10 @@ const EXPECTED = {
             {
               "role": "user",
               "parts": [
+                // 現在時間（2026-11-08）：本次訊息最前面附上現在時間（handlers/ai/currentTime.js；快照固定成 2026-01-01T04:00Z）
+                {
+                  "text": "【現在時間：2026年1月1日（星期四）12:00，時區 Asia/Taipei】"
+                },
                 {
                   "text": "【發言者：ming】\n幫我播晴天"
                 }
@@ -1092,6 +1126,10 @@ const EXPECTED = {
             {
               "role": "user",
               "parts": [
+                // 現在時間（2026-11-08）：本次訊息最前面附上現在時間（handlers/ai/currentTime.js；快照固定成 2026-01-01T04:00Z）
+                {
+                  "text": "【現在時間：2026年1月1日（星期四）12:00，時區 Asia/Taipei】"
+                },
                 {
                   "text": "【發言者：ming】\n幫我播晴天"
                 }
@@ -1151,6 +1189,10 @@ const EXPECTED = {
             {
               "role": "user",
               "parts": [
+                // 現在時間（2026-11-08）：本次訊息最前面附上現在時間（handlers/ai/currentTime.js；快照固定成 2026-01-01T04:00Z）
+                {
+                  "text": "【現在時間：2026年1月1日（星期四）12:00，時區 Asia/Taipei】"
+                },
                 {
                   "text": "【發言者：明明 (@ming)】\n查一下今天的新聞"
                 }
@@ -1189,6 +1231,10 @@ const EXPECTED = {
             {
               "role": "user",
               "parts": [
+                // 現在時間（2026-11-08）：本次訊息最前面附上現在時間（handlers/ai/currentTime.js；快照固定成 2026-01-01T04:00Z）
+                {
+                  "text": "【現在時間：2026年1月1日（星期四）12:00，時區 Asia/Taipei】"
+                },
                 {
                   "text": "【發言者：明明 (@ming)】\n查一下今天的新聞"
                 }
@@ -1241,6 +1287,10 @@ const EXPECTED = {
             {
               "role": "user",
               "parts": [
+                // 現在時間（2026-11-08）：本次訊息最前面附上現在時間（handlers/ai/currentTime.js；快照固定成 2026-01-01T04:00Z）
+                {
+                  "text": "【現在時間：2026年1月1日（星期四）12:00，時區 Asia/Taipei】"
+                },
                 {
                   "text": "【發言者：使用者】\n今天天氣如何"
                 }
@@ -1290,6 +1340,10 @@ const EXPECTED = {
                 // P1 差異 (1)（MB-10）：單一人格把本次訊息併進最後的 user content 時，中間插入 CURRENT_TURN_DIVIDER（同 mousebot-lite）
                 {
                   "text": "【以上是你上次發言後群裡的其他聊天，只當背景，不用逐則回應】\n【下面這則才是你這次要回的】"
+                },
+                // 現在時間（2026-11-08）：本次訊息最前面附上現在時間（handlers/ai/currentTime.js；快照固定成 2026-01-01T04:00Z）
+                {
+                  "text": "【現在時間：2026年1月1日（星期四）12:00，時區 Asia/Taipei】"
                 },
                 {
                   "text": "【發言者：明明 (@ming)】\n今天天氣如何"
@@ -1344,6 +1398,10 @@ const EXPECTED = {
             {
               "role": "user",
               "parts": [
+                // 現在時間（2026-11-08）：本次訊息最前面附上現在時間（handlers/ai/currentTime.js；快照固定成 2026-01-01T04:00Z）
+                {
+                  "text": "【現在時間：2026年1月1日（星期四）12:00，時區 Asia/Taipei】"
+                },
                 {
                   "text": "【發言者：ming】\n今天好累喔"
                 }
@@ -1391,6 +1449,10 @@ const EXPECTED = {
                 // P1 差異 (1)（MB-10）：單一人格把本次訊息併進最後的 user content 時，中間插入 CURRENT_TURN_DIVIDER（同 mousebot-lite）
                 {
                   "text": "【以上是你上次發言後群裡的其他聊天，只當背景，不用逐則回應】\n【下面這則才是你這次要回的】"
+                },
+                // 現在時間（2026-11-08）：本次訊息最前面附上現在時間（handlers/ai/currentTime.js；快照固定成 2026-01-01T04:00Z）
+                {
+                  "text": "【現在時間：2026年1月1日（星期四）12:00，時區 Asia/Taipei】"
                 },
                 {
                   "text": "【發言者：明明 (@ming)】\n想睡一整天"

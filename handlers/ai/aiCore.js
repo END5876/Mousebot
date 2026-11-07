@@ -23,6 +23,7 @@ const {
     RESEARCH_PROMPT, RESEARCH_CONFIG, RESEARCH_NONE, FACTS_HEADER,
     isSearchEnabled, getGroundingInfo, stripSourcesLine,
 } = require('./searchGrounding');
+const { currentTimePart } = require('./currentTime');
 
 const {
     getMemoryClearTime, getBotMessageContext,
@@ -193,6 +194,8 @@ async function researchIfNeeded({ history, parts, guildId, userId, mode, mergeUs
  */
 async function sendWithHistory({ mode, isVoice = false, scope = null, history, parts, config, guildId = null, userId = null, toolCtx = null, toolText = '', roster = '' }) {
     let systemInstruction = buildSystemInstruction({ mode, isVoice, scope, roster });
+    // 現在時間放在本次訊息最前面（見 currentTime.js：放 system instruction 會讓隱式快取失效）
+    parts = [currentTimePart(), ...parts];
 
     // 單一人格的群組歷史很長：搜尋與工具判斷只需要理解指代，只帶精簡過的純文字歷史；
     // 本次訊息併進最後一個 user content，不出現連續兩個 user。多人格維持原本的寫法。

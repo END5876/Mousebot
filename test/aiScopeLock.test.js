@@ -46,6 +46,18 @@ function writeData(rel, content) {
 const geminiPath = require.resolve('../handlers/ai/geminiClient');
 const realGemini = require(geminiPath);
 const calls = [];
+// 本次訊息最前面的「現在時間」每分鐘都不同：記錄前抽掉，另外記下抽到的內容（test/currentTime.test.js 測格式）
+const TIME_PREFIX = '【現在時間：';
+const timeParts = [];
+function stripTimePart(contents) {
+  const last = contents.at(-1);
+  if (!last?.parts) return contents;
+  const parts = last.parts.filter(p => {
+    if (typeof p.text === 'string' && p.text.startsWith(TIME_PREFIX)) { timeParts.push(p.text); return false; }
+    return true;
+  });
+  return [...contents.slice(0, -1), { ...last, parts }];
+}
 let respond = () => 'OK';
 function response(text, extra = {}) {
   return {
@@ -57,6 +69,7 @@ function response(text, extra = {}) {
 require.cache[geminiPath].exports = {
   ...realGemini,
   async generate({ contents, systemInstruction, config = {} }) {
+    contents = stripTimePart(contents);
     calls.push(structuredClone({ systemInstruction, contents, config }));
     if (config.tools?.some(t => t.googleSearch)) return response('NONE', { groundingMetadata: {} });
     const out = respond({ contents, systemInstruction, config });
@@ -379,9 +392,13 @@ test('@ 提及：群組歷史帶分隔、system instruction 含表情包，回�
   respond = () => '當然要！\n[表情:開心]';
   const msg = userMsg(channel, U.ming, `<@${BOT_ID}> 你也來嗎`, { mentions: [BOT_USER] });
   const got = track();
+  const timeBefore = timeParts.length;
   await emitMessage(msg);
 
   assert.equal(got().length, 1);
+  // 本次訊息帶了一行現在時間（被 stripTimePart 抽掉，所以下面的 contents 看不到）
+  assert.equal(timeParts.length, timeBefore + 1);
+  assert.match(timeParts.at(-1), /^【現在時間：\d{4}年\d{1,2}月\d{1,2}日（星期[日一二三四五六]）\d{2}:\d{2}，時區 .+】$/);
   const [call] = got();
   assert.equal(call.systemInstruction, [
     '你是聊天鼠。', '一律用繁體中文。', '群聊規則。', memeStore.getMemePrompt('chat'),
