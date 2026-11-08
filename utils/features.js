@@ -101,7 +101,7 @@ const MODULES = [
   },
   {
     name: 'splitbill',
-    label: '分帳系統 (/splitbill, /splitbill-quick, /splitbill-attach)',
+    label: '分帳系統 (/splitbill panel / quick / attach)',
     entry: 'handlers/splitbill',
     setup: (m, client) => m.setupSplitbillCommands(client),
     // MessageContent：帳單辨識流程用 createMessageCollector 讀附件；GuildMembers：成員顯示名稱

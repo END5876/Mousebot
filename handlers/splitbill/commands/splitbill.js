@@ -4,14 +4,24 @@ const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, Butt
 const splitbillClient = require('../utils/splitbillClient');
 const { canViewTrip } = require('../utils/tripHelper');
 const { md } = require('../../../utils/markdown');
+const quickCmd = require('./splitbillQuick');
+const attachCmd = require('./splitbillAttach');
 
 module.exports = {
+  // 原本是 /splitbill、/splitbill-quick、/splitbill-attach 三條，合併成一條底下掛子指令
   data: new SlashCommandBuilder()
     .setName('splitbill')
-    .setDescription('開啟分帳主選單'),
+    .setDescription('分帳系統')
+    .addSubcommand(sub => sub.setName('panel').setDescription('開啟分帳主選單'))
+    .addSubcommand(quickCmd.data)
+    .addSubcommand(attachCmd.data),
 
   async execute(interaction) {
-    await this.showMainMenu(interaction);
+    switch (interaction.options.getSubcommand()) {
+      case 'quick':  return quickCmd.execute(interaction);
+      case 'attach': return attachCmd.execute(interaction);
+      default:       return this.showMainMenu(interaction);
+    }
   },
 
   /**

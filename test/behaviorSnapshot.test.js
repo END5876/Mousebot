@@ -518,6 +518,7 @@ function runParent() {
 // 2026-11-08 加入現在時間：
 //   (4) 每個請求的本次訊息最前面多一行【現在時間：…】（單一人格在 CURRENT_TURN_DIVIDER 之後）；
 //       子程序把時間固定成 2026-01-01T04:00Z，見各處註解。system instruction 不變。
+// 2026-11-08 使用者要求：/music local list 改為 /music list；/splitbill-quick、/splitbill-attach 併入 /splitbill 子指令（panel／quick／attach）
 const EXPECTED = {
   "commands": {
     "order": [
@@ -533,16 +534,14 @@ const EXPECTED = {
       "notify",
       "timeannounce",
       "splitbill",
-      "splitbill-quick",
-      "splitbill-attach",
       "play",
       "music"
     ],
-    "hash": "54e53199e0b411af969211508d9e5bb4fdb8dcdb415b0a6c7f41c2122c787831",
+    "hash": "4761d35f9b177a372c2d4e0cc8a34923b25169b757afef9969c902f4ef41a8b2",
     "perCommand": {
       "ai": "87328ef894fcd4ce0366a01fcfed1ca54e416bfd165ba046bccbb6ebec6dacdf",
       "autojoin": "3ac54ee7c6a6b7c7a0b4d98716ce2bb880d87c8a46f726b4b3e7846489426141",
-      "music": "f686ad7076c4898e6e6218c138023006412a3ee81ae234197fc9467b1390a28d",
+      "music": "da9faa26ca06492352190d96cf32b8cac037c5b8a3bc4db24cd088216c890a8c",
       "nh": "2ac77d917b93d75311bf6338e4971d199c92b3b323154ad1c62b45c431e5b94c",
       "notify": "f62c8eb19c08f5e189157b8459c10fad6352a5504c9e4837784e524365c7d66b",
       "ping": "b449edfcb32695a478ad802cf05f36888e51737afd0f85b7cf5751167616df56",
@@ -550,12 +549,10 @@ const EXPECTED = {
       "response": "cd5b787723643e981f1845e2896d2b9c804bbff32b041b575ab6c51658302770",
       "say": "775a34377aada8af947ed81ba43db5d0c360f0a11f21069bfa9bbe581d54d999",
       "serverinfo": "351cfffdbeb28e5b1bf6f70d72f06582483c351964977bf442336b9b9a0c49f0",
-      "splitbill": "93d04a37f7380e7471afe6b6b48e413e365d415999a986ae9720a0c1063c4b9b",
-      "splitbill-attach": "b333cd69ae9441601fa78e4bd557aaa4247144958b25f99553038943f0b9dc30",
-      "splitbill-quick": "a68292989a9e36c18d1f315e686063cecad96eb15c87852b64e91a4e834632b1",
+      "splitbill": "53d6c7c2331216af2f6f50c8e691a92e95c9ed3c1f9a160dd6bb4dc8bcb261d6",
       "timeannounce": "4a36b0da2bd2c26df31c48e7efcd264ff7580250f2e591e72013cdfad688dfc6",
       "tts": "2b790133e03c55ea44480148bd476980807209b0b2596a37fb6fd9c70c642b47",
-      "voice": "f0b5aaa5cdbb3ab6c2a35f3145d5541e1d35b0c76ed928878e830b8a39e7b9aa"
+      "voice": "14194d4c788830e1e057817b8d40ec654339d2c4c1757a7b56c72254d2e4ea8e"
     }
   },
   "aiJson": {
@@ -765,22 +762,22 @@ const EXPECTED = {
         "description": "查看 Bot 目前的語音頻道狀態",
         "options": []
       },
+      // /voice stt 的開／關由 start、stop 兩個子指令合併成一條 action 選項（2026-11-08 使用者要求）
       {
-        "type": 2,
+        "type": 1,
         "name": "stt",
-        "description": "STT 語音辨識功能",
+        "description": "喚醒詞語音辨識：開啟／關閉，留空則查看目前狀態",
         "options": [
           {
-            "type": 1,
-            "name": "start",
-            "description": "啟動 STT 語音辨識監聽（喚醒詞）",
-            "options": []
-          },
-          {
-            "type": 1,
-            "name": "stop",
-            "description": "停止 STT 語音辨識監聽",
-            "options": []
+            "type": 3,
+            "choices": [
+              { "name": "開啟", "value": "start" },
+              { "name": "關閉", "value": "stop" },
+              { "name": "查看狀態", "value": "status" }
+            ],
+            "name": "action",
+            "description": "選擇操作，留空則查看目前狀態",
+            "required": false
           }
         ]
       },

@@ -25,7 +25,7 @@ const ALL_WORDS = new Set(['全部', '全體', '大家', '所有人', 'all', 'ev
 async function resolveMyTrip(ctx) {
     if (!splitbillClient.isConfigured()) fail('分帳服務沒有設定，這台 Bot 不能用分帳功能');
     const { trip } = await splitbillClient.resolveTrip(ctx.guild.id, null, ctx.userId);
-    if (!trip) fail('使用者還沒有選擇行程，請先用 /splitbill 建立或選一個行程');
+    if (!trip) fail('使用者還沒有選擇行程，請先用 /splitbill panel 建立或選一個行程');
     const me = findMemberByDiscordId(trip, ctx.userId);
     if (!me) fail(`使用者不是行程「${trip.name}」的成員（或 Discord 帳號還沒連結到成員）`);
     return { trip, me };
@@ -94,7 +94,7 @@ async function resolveRate(trip, currency) {
     if (typeof live === 'number' && live > 0) return { rate: live, source: '網路即時' };
     const preset = trip.rates?.[currency];
     if (typeof preset === 'number' && preset > 0) return { rate: preset, source: '行程預設' };
-    fail(`查不到 ${currency} 對 ${trip.baseCurrency} 的匯率，請改用 /splitbill 手動輸入匯率`);
+    fail(`查不到 ${currency} 對 ${trip.baseCurrency} 的匯率，請改用 /splitbill panel 手動輸入匯率`);
 }
 
 /** 與 completeExpenseLogging 相同：平分有進位差額時補到第一位代墊人，總額跟著調整 */
@@ -128,7 +128,7 @@ function summarize(trip, exp) {
 }
 
 async function addExpense(ctx, args) {
-    if (!ctx.textChannel?.send) fail('這裡沒辦法顯示確認按鈕，請改用 /splitbill 記帳');
+    if (!ctx.textChannel?.send) fail('這裡沒辦法顯示確認按鈕，請改用 /splitbill panel 記帳');
     const description = String(args.description || '').trim().slice(0, MAX_DESCRIPTION);
     if (!description) fail('沒有說這筆花費是什麼');
     const amount = round2(Number(args.amount));

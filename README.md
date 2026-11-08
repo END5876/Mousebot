@@ -13,7 +13,7 @@
 | **語音轉文字（STT）** | 搭配 OpenWakeWord 喚醒詞偵測 + Groq Whisper，支援語音指令觸發與手動錄音按鈕 |
 | **線上音樂播放** | 支援 YouTube / Bilibili 串流播放、搜尋與播放清單匯入，含循環模式、佇列管理、隨機連播、響度正規化、閒置自動停止 |
 | **本地音樂播放** | 播放 `data/music` 內的音訊檔案（mp3/wav/ogg/flac/m4a/aac），附播放次數統計與排序；可選擇接上**共用音樂庫服務**（`MUSIC_LIB_URL`），讓多個 Bot 共享音檔與播放次數 |
-| **分帳系統（Splitbill）** | 多行程、多幣別記帳與結算，支援面板／快速指令／**免建行程的⚡快速分帳**三種操作方式，並可用 `/splitbill-attach` 將網頁建立的行程綁定到伺服器，內建預收訂金抵銷與交叉債務簡化演算法，**並附一個獨立的網頁記帳介面** |
+| **分帳系統（Splitbill）** | 多行程、多幣別記帳與結算，支援面板／快速指令／**免建行程的⚡快速分帳**三種操作方式，並可用 `/splitbill attach` 將網頁建立的行程綁定到伺服器，內建預收訂金抵銷與交叉債務簡化演算法，**並附一個獨立的網頁記帳介面** |
 | **分帳網頁介面（Web UI）** | 已拆成獨立部署的 **splitbill-service**（Bot 透過內部網路呼叫它讀寫資料），支援**即時同步（SSE）**、**可設定唯讀／可編輯權限與到期時間的分享連結**、**AI 帳單照片辨識自動記帳（含多人協作認領進度同步）**、即時匯率換算 |
 | **遊戲限免通知** | 每 30 分鐘輪詢並推播 Steam / Epic Games 限時免費遊戲資訊 |
 | **整點報時** | 整點播放對應的語音音效（24 小時制，需自備 .wav 音效檔） |
@@ -273,8 +273,7 @@ Mousebot/
 | `/voice join` | 讓 Bot 加入你目前所在的語音頻道 |
 | `/voice leave` | 讓 Bot 離開語音頻道 |
 | `/voice status` | 查看 Bot 目前的語音頻道狀態 |
-| `/voice stt start` | 啟動喚醒詞語音辨識監聽 |
-| `/voice stt stop` | 停止喚醒詞語音辨識監聽 |
+| `/voice stt [action]` | 喚醒詞語音辨識：開啟／關閉，留空查看目前狀態 |
 | `/voice silence` | 管理靜音防踢功能（選單操作） |
 | `/voice record-button` | 在頻道發送手動觸發錄音的按鈕 |
 
@@ -295,7 +294,7 @@ Mousebot/
 | `/music clear` | 清空播放佇列 |
 | `/music nowplaying` | 查看目前播放的詳細資訊 |
 | `/music randomplay [continuous]` | 開啟隨機連播模式（`continuous` 播完繼續隨機） |
-| `/music local list` | 列出 `data/music` 內所有可播放的音訊檔案 |
+| `/music list` | 列出 `data/music` 內所有可播放的音訊檔案 |
 | `/music idle <action>` | 管理閒置自動停止功能（限管理員） |
 
 ### `/ai` — AI 對話
@@ -340,9 +339,9 @@ Mousebot/
 
 | 指令 | 說明 |
 |---|---|
-| `/splitbill` | 召喚分帳主控台面板（行程建立、成員管理、記帳〔含帳單照片辨識〕、預收訂金、結算皆透過按鈕與選單操作；也可從面板取得網頁介面的分享連結） |
-| `/splitbill-attach <code>` | 將網頁上建立的行程綁定到目前伺服器（綁定碼由網頁「設定 → Discord 綁定」產生；權限由 splitbill-service 判斷，限行程建立者或 `OWNER_USER_ID`） |
-| `/splitbill-quick` | 一行快速記帳，免開面板（支援單一/多人代墊、全體平分、部分成員分攤、自訂金額語法） |
+| `/splitbill panel` | 召喚分帳主控台面板（行程建立、成員管理、記帳〔含帳單照片辨識〕、預收訂金、結算皆透過按鈕與選單操作；也可從面板取得網頁介面的分享連結） |
+| `/splitbill attach <code>` | 將網頁上建立的行程綁定到目前伺服器（綁定碼由網頁「設定 → Discord 綁定」產生；權限由 splitbill-service 判斷，限行程建立者或 `OWNER_USER_ID`） |
+| `/splitbill quick` | 一行快速記帳，免開面板（支援單一/多人代墊、全體平分、部分成員分攤、自訂金額語法） |
 
 > 面板中還有「⚡ 快速分帳」按鈕：完全不綑綁任何行程、不寫入持久化資料，適合臨時一筆帳單快速算完即丟的情境。
 
@@ -442,7 +441,7 @@ Discord 面板 ──→ splitbillClient.js ──(內部網路 HTTP)──┐
 - Bilibili / YouTube 認證資訊請透過環境變數提供，**請勿直接提交任何 Token 或 `cookies.txt` 至版本庫**。
 - 喚醒詞預設使用 openWakeWord 內建的 `hey_jarvis`（`OWW_BUILTIN_MODEL` 可換成其他內建模型）；`oww-server/models/hey_taffy.onnx` 是範例自訂模型，設 `OWW_MODEL_PATH=./models/hey_taffy.onnx` 使用，自己的模型也一樣放進這個資料夾。
   - `OWW_PROB_THRESHOLD`（預設 0.65）、`OWW_MIN_CONSECUTIVE`（預設 3）是針對 hey_taffy 調的，換成 hey_jarvis 或其他模型時可能要調整（例如門檻 0.5）。
-  - 已知不一致：`/voice stt start` 的提示文字與管理面板的提示仍寫「hey taffy」，用預設模型時實際要說「hey jarvis」才叫得醒。
+  - 已知不一致：`/voice stt` 開啟時的提示文字與管理面板的提示仍寫「hey taffy」，用預設模型時實際要說「hey jarvis」才叫得醒。
 - Discord intents 依啟用的模組決定（`utils/features.js` 的 `intents()`）。只要 `basic` 開著就需要 MessageContent（它會監聽訊息內容），記得在 Discord Developer Portal 開啟 Message Content Intent；用到 GuildMembers 的模組也要開 Server Members Intent。
 
   | FEATURES | intents |

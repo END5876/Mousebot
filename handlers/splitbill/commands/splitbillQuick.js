@@ -1,6 +1,6 @@
 'use strict';
 
-const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
+const { SlashCommandSubcommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const splitbillClient = require('../utils/splitbillClient');
 const logger = require('../../../utils/logger');
 const { memberDisplay, isTripMember, toMemberIds } = require('../utils/tripHelper');
@@ -8,16 +8,16 @@ const { equalSplit, fetchRealTimeRate, round2 } = require('../utils/calculator')
 const { parsePayerField, parseSplitField } = require('../utils/parse');
 
 /**
- * ⚡ /splitbill-quick —— 免開面板的一行記帳指令。
+ * ⚡ /splitbill quick —— 免開面板的一行記帳指令（/splitbill 的子指令）。
  * 給熟悉語法的重度使用者：常見情境（單一代墊人 + 全體或部分成員平分）
  * 一行打完就能記一筆帳；複雜情境（多人不等額代墊、自訂分攤金額）
  * 也支援用 <@id1>=金額,<@id2>=金額 語法直接輸入，不必跳 4 層按鈕。
  *
- * 想要完整的引導式操作（含收訂金、結算、成員管理），還是請用 /splitbill 開面板。
+ * 想要完整的引導式操作（含收訂金、結算、成員管理），還是請用 /splitbill panel 開面板。
  */
 module.exports = {
-  data: new SlashCommandBuilder()
-    .setName('splitbill-quick')
+  data: new SlashCommandSubcommandBuilder()
+    .setName('quick')
     .setDescription('快速新增一筆花費（免開面板，適合單一代墊人的簡單情境）')
     .addStringOption(opt =>
       opt.setName('item').setDescription('項目名稱（例如：計程車、晚餐）').setRequired(true))
@@ -39,7 +39,7 @@ module.exports = {
 
     if (!trip) {
       return interaction.reply({
-        content: `⚠️ ${error || '尚未指定行程，請先用 /splitbill 面板建立或選擇行程。'}`,
+        content: `⚠️ ${error || '尚未指定行程，請先用 /splitbill panel 建立或選擇行程。'}`,
         flags: MessageFlags.Ephemeral
       });
     }
@@ -47,7 +47,7 @@ module.exports = {
     // 🔒 只有行程內的成員才能對此行程記帳，避免非相關人士誤操作或惡意灌帳
     if (!isTripMember(trip, user.id)) {
       return interaction.reply({
-        content: `❌ 你不是行程「${trip.name}」的成員（或你的 Discord 帳號尚未連結到行程裡的成員），無法對此行程記帳。請行程內的成員從 \`/splitbill\` 面板「👥 成員管理」把你加入或連結。`,
+        content: `❌ 你不是行程「${trip.name}」的成員（或你的 Discord 帳號尚未連結到行程裡的成員），無法對此行程記帳。請行程內的成員從 \`/splitbill panel\`「👥 成員管理」把你加入或連結。`,
         flags: MessageFlags.Ephemeral
       });
     }
@@ -65,7 +65,7 @@ module.exports = {
 
     if (!trip.rates[currency]) {
       return interaction.reply({
-        content: `⚠️ 此行程尚未設定幣別 \`${currency}\` 的匯率。請先到 \`/splitbill\` 面板「🧳 行程設定 → 🪙 新增幣別」加入這個幣別後再試一次。`,
+        content: `⚠️ 此行程尚未設定幣別 \`${currency}\` 的匯率。請先到 \`/splitbill panel\`「🧳 行程設定 → 🪙 新增幣別」加入這個幣別後再試一次。`,
         flags: MessageFlags.Ephemeral
       });
     }
@@ -161,9 +161,9 @@ module.exports = {
     } catch (err) {
       // 金額加總不符這類輸入錯誤是一般的 Error，只回覆使用者；分帳服務的錯誤與程式錯誤（TypeError 等）才記錄
       if (err && err.status) {
-        logger.error('Splitbill', `/splitbill-quick 記帳失敗（guild=${interaction.guildId}）：${splitbillClient.describeError(err)}`);
+        logger.error('Splitbill', `/splitbill quick 記帳失敗（guild=${interaction.guildId}）：${splitbillClient.describeError(err)}`);
       } else if (!(err instanceof Error) || err.name !== 'Error') {
-        logger.error('Splitbill', `/splitbill-quick 發生錯誤（guild=${interaction.guildId}）:`, err);
+        logger.error('Splitbill', `/splitbill quick 發生錯誤（guild=${interaction.guildId}）:`, err);
       }
       return interaction.editReply({ content: `❌ 記帳失敗：${err.message}` });
     }

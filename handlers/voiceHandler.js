@@ -113,7 +113,7 @@ function buildSilenceMenu(guildId) {
 
 /**
  * 連線不論被誰 destroy（播放器自己的斷線處理、autojoin 重建…）都要清掉 STT 狀態，
- * 否則監聽器留在死連線上，重新加入後 /voice stt start 卻回「已在運行中」
+ * 否則監聽器留在死連線上，重新加入後 /voice stt 開啟卻回「已在運行中」
  */
 function watchConnectionDestroyed(connection, guildId) {
   if (watchedConnections.has(connection)) return;
@@ -229,7 +229,7 @@ function findTranscriptChannel(guild) {
 }
 
 /**
- * 語音對話的 AI 工具（點歌、分帳…）只在 STT 語音辨識（喚醒詞，/voice stt start）開啟時啟用；
+ * 語音對話的 AI 工具（點歌、分帳…）只在 STT 語音辨識（喚醒詞，/voice stt 開啟）開啟時啟用；
  * 只用錄音按鈕（/voice record-button）而沒開 STT 時不帶工具，語音只聊天不動作。
  */
 function voiceToolCtx(guildId, opts) {
@@ -303,7 +303,7 @@ function stopWakeWord(guildId) {
 
 // ════════════════════════════════════════════════════════
 //  /voice 單一指令，底下掛 join / leave / status /
-//  stt(group: start/stop) / silence / record-button
+//  stt(action: start/stop/status) / silence / record-button
 //  STT 沒有啟用時不註冊 stt 群組和 record-button
 // ════════════════════════════════════════════════════════
 
@@ -319,11 +319,19 @@ function buildVoiceCommand(sttOn) {
     .addSubcommand(sub => sub.setName('leave').setDescription('讓 Bot 離開語音頻道'))
     .addSubcommand(sub => sub.setName('status').setDescription('查看 Bot 目前的語音頻道狀態'));
   if (sttOn) {
-    builder.addSubcommandGroup(group =>
-      group.setName('stt')
-        .setDescription('STT 語音辨識功能')
-        .addSubcommand(sub => sub.setName('start').setDescription('啟動 STT 語音辨識監聽（喚醒詞）'))
-        .addSubcommand(sub => sub.setName('stop').setDescription('停止 STT 語音辨識監聽'))
+    // 開／關合併成一條，留空查看狀態（和 /music idle、/timeannounce 一致）
+    builder.addSubcommand(sub =>
+      sub.setName('stt')
+        .setDescription('喚醒詞語音辨識：開啟／關閉，留空則查看目前狀態')
+        .addStringOption(opt =>
+          opt.setName('action')
+            .setDescription('選擇操作，留空則查看目前狀態')
+            .addChoices(
+              { name: '開啟', value: 'start' },
+              { name: '關閉', value: 'stop' },
+              { name: '查看狀態', value: 'status' },
+            )
+        )
     );
   }
   builder.addSubcommand(sub => sub.setName('silence').setDescription('管理靜音防踢功能'));
@@ -338,14 +346,10 @@ const voiceCommand = {
   data: null,
 
   async execute(interaction) {
-    const sub   = interaction.options.getSubcommand();
-    const group = interaction.options.getSubcommandGroup(false);
-
-    if (group === 'stt') {
-      return handleStt(interaction, sub);
-    }
+    const sub = interaction.options.getSubcommand();
 
     switch (sub) {
+      case 'stt':            return handleStt(interaction, interaction.options.getString('action') ?? 'status');
       case 'join':           return handleJoin(interaction);
       case 'leave':          return handleLeave(interaction);
       case 'status':         return handleStatus(interaction);
@@ -374,7 +378,7 @@ async function handleJoin(interaction) {
 
         // STT 沒有啟用時 /voice stt、/voice record-button 都沒有註冊，不提示
         await interaction.editReply(features.isEnabled('stt')
-          ? `✅ 已加入語音頻道：**${voiceChannel.name}**\n💡 可用 \`/voice stt start\`（喚醒詞）或 \`/voice record-button\`（按鈕手動錄音）`
+          ? `✅ 已加入語音頻道：**${voiceChannel.name}**\n💡 可用 \`/voice stt action:開啟\`（喚醒詞）或 \`/voice record-button\`（按鈕手動錄音）`
           : `✅ 已加入語音頻道：**${voiceChannel.name}**`
         );
 
@@ -435,9 +439,21 @@ async function handleStatus(interaction) {
       ]});
 }
 
-// ── /voice stt start / stop ──────────────────────────────
+// ── /voice stt [action]（開啟／關閉／查看狀態） ──────────
 async function handleStt(interaction, sub) {
       const guildId = interaction.guildId;
+
+      if (sub === 'status') {
+        if (!features.isEnabled('stt')) {
+          return interaction.reply({ content: STT_UNAVAILABLE_MESSAGE, flags: MessageFlags.Ephemeral });
+        }
+        return interaction.reply({
+          content: sttActiveGuilds.has(guildId)
+            ? '🎙️ 喚醒詞語音辨識：**開啟中**\n用 `/voice stt action:關閉` 停止'
+            : '⏸️ 喚醒詞語音辨識：**關閉**\n用 `/voice stt action:開啟` 啟動（Bot 要先在語音頻道）',
+          flags: MessageFlags.Ephemeral
+        });
+      }
 
       if (sub === 'start') {
         const sttTextChannel = findTranscriptChannel(interaction.guild) || interaction.channel;

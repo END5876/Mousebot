@@ -343,8 +343,8 @@ async function playStream(guildId, item, player, { silent = false, countPlay = t
 
 // ════════════════════════════════════════════════════════
 //  buildLocalListReply：組出「本地音樂清單」的回覆內容
-//  供 unifiedQueue/commands.js 的 /music local list 呼叫
-//  （/locallist 已合併進 /music local list）
+//  供 unifiedQueue/commands.js 的 /music list 呼叫
+//  （/locallist 已合併進 /music list）
 // ════════════════════════════════════════════════════════
 function buildLocalListReply() {
   const musicFiles = getMusicFiles();
@@ -396,7 +396,7 @@ function setupLocalMusicEngine(client) {
   // /play 的 Autocomplete 由 unifiedQueue/commands.js 統一處理，這裡不再重複監聽
   // （原本兩邊都會處理，每次按鍵掃兩次清單、回應兩次，第二次必定失敗被吞掉）。
 
-  logger.debug('LocalMusic', '引擎已載入（清單功能已合併進 /music local list，並依播放次數排序）');
+  logger.debug('LocalMusic', '引擎已載入（清單功能已合併進 /music list，並依播放次數排序）');
 }
 
 module.exports = {

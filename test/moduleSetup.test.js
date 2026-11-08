@@ -76,7 +76,7 @@ test('FEATURES=music,autojoin：只註冊 autojoin、music、play，intents 只�
     off.map(row => row.name),
     ['語音頻道 (/voice)', '語音辨識 STT', '基本指令', '自訂回應 (/response)', 'AI 對話 (/ai)',
       '文字轉語音 (/tts)', '限免通知 (/notify)', '整點報時 (/timeannounce)',
-      '分帳系統 (/splitbill, /splitbill-quick, /splitbill-attach)'],
+      '分帳系統 (/splitbill panel / quick / attach)'],
   );
   for (const row of off) assert.equal(row.detail, 'FEATURES 未包含');
   assert.equal(r.rows.some(row => row.state === 'warn'), false);
@@ -94,14 +94,12 @@ test('沒有 GEMINI_API_KEY：不註冊 /ai，STT 因為缺 ai 一起停用', ()
     { name: '語音辨識 STT', state: 'off', detail: '需要先啟用 ai（未設定 GEMINI_API_KEY，AI 功能停用）' });
 });
 
-test('沒有 SPLITBILL_SERVICE_URL：三個分帳指令都不註冊', () => {
+test('沒有 SPLITBILL_SERVICE_URL：/splitbill 不註冊', () => {
   const r = setup({ SPLITBILL_SERVICE_URL: undefined });
-  for (const name of ['splitbill', 'splitbill-quick', 'splitbill-attach']) {
-    assert.equal(r.commands.includes(name), false, name);
-  }
+  assert.equal(r.commands.some(name => name.startsWith('splitbill')), false);
   assert.ok(r.commands.includes('ai'));
   assert.deepEqual(r.rows, [{
-    name: '分帳系統 (/splitbill, /splitbill-quick, /splitbill-attach)',
+    name: '分帳系統 (/splitbill panel / quick / attach)',
     state: 'off',
     detail: '未設定 SPLITBILL_SERVICE_URL，分帳指令未註冊',
   }]);
@@ -115,7 +113,7 @@ test('全開：所有模組都 setup，沒有 off／warn 列，intents 和以前
   assert.deepEqual(r.intents, ALL_INTENTS);
   assert.deepEqual(r.commands, [
     'ai', 'autojoin', 'music', 'nh', 'notify', 'ping', 'play', 'response', 'say', 'serverinfo',
-    'splitbill', 'splitbill-attach', 'splitbill-quick', 'timeannounce', 'tts', 'voice',
+    'splitbill', 'timeannounce', 'tts', 'voice',
   ]);
 });
 

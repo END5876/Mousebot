@@ -4,8 +4,6 @@ const { MessageFlags } = require('discord.js');
 const logger = require('../../utils/logger');
 const bootSummary = require('../../utils/bootSummary');
 const splitbillCmd = require('./commands/splitbill');
-const splitbillQuickCmd = require('./commands/splitbillQuick');
-const splitbillAttachCmd = require('./commands/splitbillAttach');
 const expenseUI = require('./interactions/expenseUI');
 const memberUI = require('./interactions/memberUI');
 const settleUI = require('./interactions/settleUI');
@@ -113,10 +111,8 @@ const stateCache = new StateCache();
  * 初始化分帳模組面板版
  */
 function setupSplitbillCommands(client) {
-  // 註冊面板進入點指令，以及給熟手用的免面板快速記帳指令
+  // /splitbill 底下掛 panel／quick／attach 三個子指令
   client.commands.set(splitbillCmd.data.name, splitbillCmd);
-  client.commands.set(splitbillQuickCmd.data.name, splitbillQuickCmd);
-  client.commands.set(splitbillAttachCmd.data.name, splitbillAttachCmd);
 
   // 攔截所有元件互動事件
   client.on('interactionCreate', async (interaction) => {
@@ -148,7 +144,7 @@ function setupSplitbillCommands(client) {
   });
 
   // 沒有 SPLITBILL_SERVICE_URL 時 utils/features.js 不會呼叫這裡（開機摘要由它回報 off）
-  bootSummary.report('分帳系統 (/splitbill, /splitbill-quick, /splitbill-attach)', 'ok', '資料來自獨立的 splitbill-service（SPLITBILL_SERVICE_URL）');
+  bootSummary.report('分帳系統 (/splitbill panel / quick / attach)', 'ok', '資料來自獨立的 splitbill-service（SPLITBILL_SERVICE_URL）');
 }
 
 /**

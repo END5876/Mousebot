@@ -268,7 +268,7 @@ const playCommand = {
 // ════════════════════════════════════════════════════════
 //  /music 單一指令，底下掛 stop / skip / loop / queue /
 //  clear / nowplaying / randomplay /
-//  local(group: list) / idle（★ 已從 group 合併為單一 subcommand）
+//  list / idle（★ 已從 group 合併為單一 subcommand）
 //  （play 已依需求拆回獨立的 /play 指令）
 // ════════════════════════════════════════════════════════
 const musicCommand = {
@@ -306,12 +306,9 @@ const musicCommand = {
             )
         )
     )
-    .addSubcommandGroup(group =>
-      group.setName('local')
-        .setDescription('本地音樂功能')
-        .addSubcommand(sub =>
-          sub.setName('list').setDescription('列出 data/music 資料夾內所有可播放的音訊檔案')
-        )
+    // 原本是 local 群組底下只有 list 一個子指令，拿掉多餘的一層
+    .addSubcommand(sub =>
+      sub.setName('list').setDescription('列出 data/music 資料夾內所有可播放的音訊檔案')
     )
     // ★ 修改：idle 從 addSubcommandGroup（3個獨立子指令）
     //   合併為單一 addSubcommand + 可選 action 參數，
@@ -332,12 +329,10 @@ const musicCommand = {
     ),
 
   async execute(interaction) {
-    const sub   = interaction.options.getSubcommand();
-    const group = interaction.options.getSubcommandGroup(false);
-
-    if (group === 'local')  return handleMusicLocal(interaction, sub);
+    const sub = interaction.options.getSubcommand();
 
     switch (sub) {
+      case 'list':         return handleMusicList(interaction);
       case 'stop':         return handleMusicStop(interaction);
       case 'skip':         return handleMusicSkip(interaction);
       case 'pause':        return handleMusicPause(interaction);
@@ -602,13 +597,11 @@ async function handleMusicRandomPlay(interaction) {
   await updateControlPanel(guildId, interaction.channel);
 }
 
-// ── /music local list ─────────────────────────────────────
+// ── /music list ───────────────────────────────────────────
 // 延遲 require 避免與 localMusicHandler.js → unifiedQueue/index.js 形成循環依賴
-async function handleMusicLocal(interaction, sub) {
-  if (sub === 'list') {
-    const { buildLocalListReply } = require('../localMusicHandler');
-    await interaction.reply(buildLocalListReply());
-  }
+async function handleMusicList(interaction) {
+  const { buildLocalListReply } = require('../localMusicHandler');
+  await interaction.reply(buildLocalListReply());
 }
 
 // ── /music idle（單一指令版）：enable / disable / status（管理員專用） ──
