@@ -16,7 +16,7 @@ const {
   ButtonStyle,
 } = require('discord.js');
 
-const { setMusicPlayer, stopMusicLayer, startSilenceLayer, restoreActiveLayer } = require('../../audioManager');
+const { setMusicPlayer, stopMusicLayer, startSilenceLayer, restoreActiveLayer, isTTSActive } = require('../../audioManager');
 const voiceMonitor = require('../voiceActivityMonitor');
 
 const {
@@ -89,10 +89,11 @@ function _buildEmbed(guildId) {
   if (isRandomPlay) loopText = '🎲 隨機連播';
 
   const { item } = np;
+  const paused = np.player?.state?.status === AudioPlayerStatus.Paused;
 
   const embed = new EmbedBuilder()
-    .setColor(isRandomPlay ? 0xFF8C00 : 0x1DB954)
-    .setTitle('🎵 正在播放')
+    .setColor(paused ? 0x95A5A6 : isRandomPlay ? 0xFF8C00 : 0x1DB954)
+    .setTitle(paused ? '⏸️ 已暫停' : '🎵 正在播放')
     .setTimestamp()
     .setFooter({ text: '📋 使用下方按鈕控制播放' });
 
@@ -118,10 +119,15 @@ function _buildEmbed(guildId) {
   return embed;
 }
 
+// 一列最多 5 個按鈕：第一列放播放控制（暫停／繼續、跳過、停止），第二列放模式切換
 function _buildButtons(guildId) {
   const loopMode = loopSettings.get(guildId) || 'off';
   const isRandomPlay = randomPlaySettings.get(guildId) || false;
-  return new ActionRowBuilder().addComponents(
+  const paused = nowPlaying.get(guildId)?.player?.state?.status === AudioPlayerStatus.Paused;
+  const controls = new ActionRowBuilder().addComponents(
+    paused
+      ? new ButtonBuilder().setCustomId('uq_resume').setLabel('繼續').setEmoji('▶️').setStyle(ButtonStyle.Success)
+      : new ButtonBuilder().setCustomId('uq_pause').setLabel('暫停').setEmoji('⏸️').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId('uq_skip')
       .setLabel('跳過')
@@ -132,6 +138,8 @@ function _buildButtons(guildId) {
       .setLabel('停止')
       .setEmoji('⏹️')
       .setStyle(ButtonStyle.Danger),
+  );
+  const modes = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('uq_loop_one')
       .setLabel('單曲循環')
@@ -148,6 +156,15 @@ function _buildButtons(guildId) {
       .setEmoji('🎲')
       .setStyle(isRandomPlay ? ButtonStyle.Success : ButtonStyle.Secondary),
   );
+  return [controls, modes];
+}
+
+// 就地更新現有的控制面板（暫停／繼續時用）：不像 updateControlPanel 會刪掉重發、把面板移到最底下
+async function refreshControlPanel(guildId) {
+  const msg = controlMsgs.get(guildId);
+  const embed = _buildEmbed(guildId);
+  if (!msg || !embed) return;
+  await msg.edit({ embeds: [embed], components: _buildButtons(guildId) }).catch(() => {});
 }
 
 // guildId → 進行中的面板更新（同一個 guild 的更新排隊執行）
@@ -171,7 +188,7 @@ async function updateControlPanel(guildId, channel) {
 async function _doUpdateControlPanel(guildId, channel) {
   const embed = _buildEmbed(guildId);
   if (!embed) return;
-  const row = _buildButtons(guildId);
+  const rows = _buildButtons(guildId);
 
   const targetChannel = _getNotifyChannel(guildId, channel);
 
@@ -185,7 +202,7 @@ async function _doUpdateControlPanel(guildId, channel) {
       }
     }
 
-    const newMsg = await targetChannel.send({ embeds: [embed], components: [row] });
+    const newMsg = await targetChannel.send({ embeds: [embed], components: rows });
     controlMsgs.set(guildId, newMsg);
   } catch (err) {
     logger.error('UnifiedQueue', '更新控制面板失敗:', err);
@@ -582,6 +599,28 @@ function skipCurrent(guildId) {
 }
 
 // ════════════════════════════════════════════════════════
+//  暫停 / 繼續（使用者手動）
+//  回傳 'ok' | 'none'（沒在播）| 'already'（已是該狀態）| 'busy'（TTS／報時插播中或還在載入）
+// ════════════════════════════════════════════════════════
+function pauseCurrent(guildId) {
+  const np = nowPlaying.get(guildId);
+  if (!np) return 'none';
+  const status = np.player.state.status;
+  if (status === AudioPlayerStatus.Paused) return 'already';
+  if (isTTSActive(guildId) || status !== AudioPlayerStatus.Playing) return 'busy';
+  return np.player.pause() ? 'ok' : 'busy';
+}
+
+function resumeCurrent(guildId) {
+  const np = nowPlaying.get(guildId);
+  if (!np) return 'none';
+  const status = np.player.state.status;
+  if (status === AudioPlayerStatus.Playing) return 'already';
+  if (isTTSActive(guildId) || status !== AudioPlayerStatus.Paused) return 'busy';
+  return np.player.unpause() ? 'ok' : 'busy';
+}
+
+// ════════════════════════════════════════════════════════
 //  閒置自動「停止播放但不離開頻道」的共用 onStop callback 產生器
 // ════════════════════════════════════════════════════════
 function _createPersistentIdleHandler(guildId, fallbackChannel) {
@@ -590,7 +629,7 @@ function _createPersistentIdleHandler(guildId, fallbackChannel) {
     const targetChannel = _getNotifyChannel(gId, fallbackChannel);
 
     if (!wasPlaying) {
-      logger.info('UnifiedQueue', `⏭️ 常駐模式閒置觸發 (${gId})：${reason}（原本未在播放，直接略過）`);
+      logger.debug('UnifiedQueue', `⏭️ 常駐模式閒置觸發 (${gId})：${reason}（原本未在播放，直接略過）`);
       return;
     }
 
@@ -851,6 +890,8 @@ function getNowPlaying(guildId) { return nowPlaying.get(guildId)?.item ?? null; 
 
 module.exports = {
   _buildEmbed,
+  _buildButtons,
+  refreshControlPanel,
   updateControlPanel,
   stopAll,
   _createPersistentIdleHandler,
@@ -866,4 +907,6 @@ module.exports = {
   adoptExistingConnection,
   rebindConnection,
   skipCurrent,
+  pauseCurrent,
+  resumeCurrent,
 };

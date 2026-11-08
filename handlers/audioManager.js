@@ -24,6 +24,9 @@ function getState(guildId) {
       players: {},
       onTTSEnd: null,
       musicPaused: false,
+      // TTS 插播時由我們主動 pause 的音樂 player；結束後只有這顆才會被 unpause，
+      // 使用者自己用 /music pause 暫停的歌不會被 TTS 結束順手「恢復」
+      ttsPausedMusic: null,
     });
   }
   return guildStates.get(guildId);
@@ -136,6 +139,7 @@ function stopMusicLayer(guildId) {
     delete state.players.music;
   }
   state.musicPaused = false;
+  state.ttsPausedMusic = null;
   if (state.activeLayer === 'music') {
     _fallbackToSilence(guildId);
   }
@@ -182,6 +186,9 @@ function enterTTSLayer(guildId) {
   if (state.activeLayer === 'music' && state.players.music) {
     logger.debug('AudioManager', `⏸️ 音樂暫停，TTS 插播 (${guildId})`);
     state.musicPaused = true;
+    // 明確 pause（而不是只拔掉訂閱讓它自動暫停）；已被使用者暫停的不動
+    const mp = state.players.music;
+    if (mp.state.status === AudioPlayerStatus.Playing && mp.pause()) state.ttsPausedMusic = mp;
   }
 
   const player = _ensureTTSPlayer(guildId);
@@ -239,9 +246,12 @@ function exitTTSLayer(guildId) {
 function _restoreAfterTTS(guildId) {
   const state = getState(guildId);
   if (state.players.music && state.musicPaused) {
-    _subscribe(guildId, state.players.music);
+    const mp = state.players.music;
+    _subscribe(guildId, mp);
     state.activeLayer = 'music';
     state.musicPaused = false;
+    if (state.ttsPausedMusic === mp) mp.unpause();
+    state.ttsPausedMusic = null;
     logger.debug('AudioManager', `▶️ 恢復音樂播放 (${guildId})`);
   } else {
     _fallbackToSilence(guildId);
@@ -303,6 +313,11 @@ function getActiveLayer(guildId) {
   return guildStates.get(guildId)?.activeLayer ?? null;
 }
 
+/** TTS 是否正在插播（此時音樂被暫停，不能讓使用者的 resume 搶回） */
+function isTTSActive(guildId) {
+  return guildStates.get(guildId)?.activeLayer === 'tts';
+}
+
 function hasMusicPlaying(guildId) {
   const s = guildStates.get(guildId);
   return !!(s?.players.music);
@@ -320,5 +335,6 @@ module.exports = {
   cleanupGuild,
   restoreActiveLayer,
   getActiveLayer,
+  isTTSActive,
   hasMusicPlaying,
 };

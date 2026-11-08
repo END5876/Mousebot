@@ -209,7 +209,8 @@ function _trigger(guildId, reason) {
   const state = monitors.get(guildId);
   if (!state) return;
 
-  logger.info('VoiceMonitor', `⏹️ 觸發自動停止 (${guildId})：${reason}`);
+  // 沒在播放時 onStop 會直接略過，這行只是雜訊；真的停止播放時 playback.js 會另外記 info
+  logger.debug('VoiceMonitor', `⏹️ 觸發自動停止 (${guildId})：${reason}`);
   const cb = state.onStop;
 
   // ── 常駐模式（目前唯一使用的模式）────────────────────────

@@ -19,7 +19,7 @@ const BASELINE_RATES = {
  * 渲染或更新「行程與外幣設定」畫面。抽成共用函式，讓按鈕與 Modal 提交後
  * 都能重複呼叫、附帶操作結果提示，不必各自重寫一份畫面組裝邏輯。
  */
-async function renderTripNav(interaction, alertMsg = null) {
+async function renderTripNav(interaction, alertMsg = null, page = 0) {
   const guildId = interaction.guildId;
   // 🔒 [修正：切換行程影響全體] 這裡一律代入 interaction.user.id，
   // 讓畫面顯示的「目前作用行程」永遠是「這個使用者自己的」，不受其他人切換影響。
@@ -55,23 +55,31 @@ async function renderTripNav(interaction, alertMsg = null) {
 
   if (trips.length > 0) {
     // 下拉選單最多 25 個選項，超過時 addOptions 會丟錯讓整個設定頁打不開（Bot 擁有者看得到伺服器所有行程）：
-    // 只列出目前作用行程 + 最近更新的行程
+    // 依最近更新排序、每頁 25 個，超過時下方出現 ◀ ▶ 翻頁按鈕
     let options = trips;
+    const totalPages = Math.max(1, Math.ceil(trips.length / SWITCH_OPTIONS_MAX));
+    const safePage = Math.min(Math.max(0, page), totalPages - 1);
     if (trips.length > SWITCH_OPTIONS_MAX) {
       options = [...trips]
-        .sort((a, b) => ((trip && b.id === trip.id) - (trip && a.id === trip.id)) || ((b.updatedAt || 0) - (a.updatedAt || 0)))
-        .slice(0, SWITCH_OPTIONS_MAX);
+        .sort((a, b) => ((b.updatedAt || 0) - (a.updatedAt || 0)) || String(a.id).localeCompare(String(b.id)))
+        .slice(safePage * SWITCH_OPTIONS_MAX, (safePage + 1) * SWITCH_OPTIONS_MAX);
     }
     const selectRow = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId('trip_select_switch')
         .setPlaceholder(trips.length > SWITCH_OPTIONS_MAX
-          ? `🔄 快速切換其他行程（只列出最近 ${SWITCH_OPTIONS_MAX} 個，只影響你自己）...`
+          ? `🔄 切換行程（第 ${safePage + 1}/${totalPages} 頁，只影響你自己）...`
           : '🔄 快速切換其他行程（只影響你自己）...')
         // 選項標籤上限 100 字，網頁建立的行程名稱可能更長
         .addOptions(options.map(t => ({ label: String(t.name).slice(0, 100), value: t.id, description: `基準幣別: ${t.baseCurrency}` })))
     );
     components.push(selectRow);
+    if (totalPages > 1) {
+      components.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`trip_page_${safePage - 1}`).setLabel('◀ 上一頁').setStyle(ButtonStyle.Secondary).setDisabled(safePage === 0),
+        new ButtonBuilder().setCustomId(`trip_page_${safePage + 1}`).setLabel('下一頁 ▶').setStyle(ButtonStyle.Secondary).setDisabled(safePage >= totalPages - 1),
+      ));
+    }
   }
 
   const payload = { embeds: [embed], components, content: typeof alertMsg === 'string' ? alertMsg : '' };
@@ -100,6 +108,11 @@ module.exports = {
 
     if (customId === 'trip_nav') {
       return renderTripNav(interaction);
+    }
+
+    if (customId.startsWith('trip_page_')) {
+      const page = Number.parseInt(customId.slice('trip_page_'.length), 10);
+      return renderTripNav(interaction, null, Number.isInteger(page) ? page : 0);
     }
 
     if (customId === 'trip_btn_create_modal') {

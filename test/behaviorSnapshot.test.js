@@ -538,11 +538,11 @@ const EXPECTED = {
       "play",
       "music"
     ],
-    "hash": "7f8294b82c63d609f759ed782a9d7b22ab12248662eb6cbaa7a8fd1627ceafb6",
+    "hash": "54e53199e0b411af969211508d9e5bb4fdb8dcdb415b0a6c7f41c2122c787831",
     "perCommand": {
       "ai": "87328ef894fcd4ce0366a01fcfed1ca54e416bfd165ba046bccbb6ebec6dacdf",
       "autojoin": "3ac54ee7c6a6b7c7a0b4d98716ce2bb880d87c8a46f726b4b3e7846489426141",
-      "music": "7d166ef867c054d47d07ad6445681faed3602e80fd79389a0f2e72a81f22f5c2",
+      "music": "f686ad7076c4898e6e6218c138023006412a3ee81ae234197fc9467b1390a28d",
       "nh": "2ac77d917b93d75311bf6338e4971d199c92b3b323154ad1c62b45c431e5b94c",
       "notify": "f62c8eb19c08f5e189157b8459c10fad6352a5504c9e4837784e524365c7d66b",
       "ping": "b449edfcb32695a478ad802cf05f36888e51737afd0f85b7cf5751167616df56",

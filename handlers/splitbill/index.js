@@ -44,6 +44,7 @@ function isTripScopedCustomId(customId) {
   if (!customId) return false;
   if (TRIP_PERMISSION_EXEMPT_IDS.has(customId)) return false;
   if (customId.startsWith('qs_')) return false;
+  if (customId.startsWith('trip_page_')) return false; // 只是翻頁瀏覽，不動任何行程
   return TRIP_SCOPED_PREFIXES.some((prefix) => customId.startsWith(prefix));
 }
 

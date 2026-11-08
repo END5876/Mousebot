@@ -23,10 +23,16 @@ const {
   playRandomLocal,
   resetShuffleBag, // ★ 新增：開啟隨機連播時用來重置洗牌袋，確保是全新一輪
   skipCurrent,
+  pauseCurrent,
+  resumeCurrent,
+  prefetchUpcoming,
+  refreshControlPanel,
+  _buildButtons,
 } = require('./playback');
 const { handlePlay, handleAutocomplete } = require('./search');
 const bootSummary = require('../../../utils/bootSummary');
 const session = require('./session');
+const webSync = require('./webSync');
 const { md } = require('../../../utils/markdown');
 
 // ════════════════════════════════════════════════════════
@@ -100,6 +106,21 @@ function setupUnifiedCommands(client) {
             skipCurrent(guildId);
             await interaction.reply({ content: '⏭️ 跳過當前歌曲', flags: MessageFlags.Ephemeral });
           }
+          break;
+        }
+
+        case 'uq_pause':
+        case 'uq_resume': {
+          const isPause = interaction.customId === 'uq_pause';
+          const r = isPause ? pauseCurrent(guildId) : resumeCurrent(guildId);
+          if (r === 'busy') {
+            await interaction.reply({ content: PAUSE_REPLIES.busy, flags: MessageFlags.Ephemeral });
+            break;
+          }
+          // 成功或本來就是該狀態：都把這則面板就地換成最新的按鈕（面板可能是舊的）
+          const embed = _buildEmbed(guildId);
+          await interaction.update({ embeds: embed ? [embed] : [], components: _buildButtons(guildId) });
+          webSync.notifyChange();
           break;
         }
 
@@ -256,6 +277,18 @@ const musicCommand = {
     .setDescription('音樂播放相關功能')
     .addSubcommand(sub => sub.setName('stop').setDescription('停止播放並清空佇列'))
     .addSubcommand(sub => sub.setName('skip').setDescription('跳過當前歌曲'))
+    .addSubcommand(sub => sub.setName('pause').setDescription('暫停播放（用 /music resume 繼續）'))
+    .addSubcommand(sub => sub.setName('resume').setDescription('繼續播放'))
+    .addSubcommand(sub =>
+      sub.setName('remove')
+        .setDescription('從佇列移除指定的一首歌')
+        .addIntegerOption(opt =>
+          opt.setName('position')
+            .setDescription('要移除的佇列編號（用 /music queue 查看）')
+            .setMinValue(1)
+            .setRequired(true)
+        )
+    )
     .addSubcommand(sub => sub.setName('loop').setDescription('切換循環模式（關閉 → 單曲 → 列表）'))
     .addSubcommand(sub => sub.setName('queue').setDescription('查看播放佇列'))
     .addSubcommand(sub => sub.setName('clear').setDescription('清空播放佇列'))
@@ -307,6 +340,9 @@ const musicCommand = {
     switch (sub) {
       case 'stop':         return handleMusicStop(interaction);
       case 'skip':         return handleMusicSkip(interaction);
+      case 'pause':        return handleMusicPause(interaction);
+      case 'resume':       return handleMusicResume(interaction);
+      case 'remove':       return handleMusicRemove(interaction);
       case 'loop':         return handleMusicLoop(interaction);
       case 'queue':        return handleMusicQueue(interaction);
       case 'clear':        return handleMusicClear(interaction);
@@ -361,6 +397,54 @@ async function handleMusicSkip(interaction) {
   }
   skipCurrent(interaction.guildId);
   await interaction.reply({ content: '⏭️ 跳過當前歌曲' });
+}
+
+// ── /music pause / resume ─────────────────────────────────
+const PAUSE_REPLIES = {
+  none:    '❌ 目前沒有播放音樂',
+  busy:    '⏳ 現在正在播報語音或載入歌曲，請稍後再試',
+};
+async function handleMusicPause(interaction) {
+  const r = pauseCurrent(interaction.guildId);
+  if (r === 'ok') {
+    voiceMonitor.touchActivity(interaction.guildId);
+    refreshControlPanel(interaction.guildId);
+    webSync.notifyChange();
+    return interaction.reply({ content: '⏸️ 已暫停，輸入 /music resume 繼續播放' });
+  }
+  const msg = r === 'already' ? 'ℹ️ 已經是暫停狀態，輸入 /music resume 繼續播放' : PAUSE_REPLIES[r];
+  return interaction.reply({ content: msg, flags: MessageFlags.Ephemeral });
+}
+
+async function handleMusicResume(interaction) {
+  const r = resumeCurrent(interaction.guildId);
+  if (r === 'ok') {
+    voiceMonitor.touchActivity(interaction.guildId);
+    refreshControlPanel(interaction.guildId);
+    webSync.notifyChange();
+    return interaction.reply({ content: '▶️ 繼續播放' });
+  }
+  const msg = r === 'already' ? 'ℹ️ 目前正在播放，沒有暫停' : PAUSE_REPLIES[r];
+  return interaction.reply({ content: msg, flags: MessageFlags.Ephemeral });
+}
+
+// ── /music remove ─────────────────────────────────────────
+async function handleMusicRemove(interaction) {
+  const queue = queues.get(interaction.guildId) || [];
+  if (queue.length === 0) {
+    return interaction.reply({ content: '❌ 佇列是空的，沒有可移除的歌', flags: MessageFlags.Ephemeral });
+  }
+  const pos = interaction.options.getInteger('position', true);
+  if (pos > queue.length) {
+    return interaction.reply({
+      content: `❌ 佇列只有 ${queue.length} 首，請輸入 1～${queue.length} 的編號（用 /music queue 查看）`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+  const [removed] = queue.splice(pos - 1, 1);
+  session.schedule();
+  if (pos <= 2) prefetchUpcoming(interaction.guildId); // 前兩首會預先下載，移除後換新的補上
+  await interaction.reply({ content: `🗑️ 已從佇列移除第 ${pos} 首：**${md(removed.title)}**` });
 }
 
 // ── /music loop ───────────────────────────────────────────

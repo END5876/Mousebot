@@ -12,7 +12,7 @@
 //   協定細節見 music-library-service 的 botSync/routes.js。
 //
 // 網頁可以做的事（都只限 Bot 目前在語音頻道裡的伺服器）：
-//   skip / stop / loop{mode} / randomPlay{on} / clearQueue / removeQueue{index,key} / enqueue{item,next}
+//   skip / stop / pause / resume / loop{mode} / randomPlay{on} / clearQueue / removeQueue{index,key} / enqueue{item,next}
 //   enqueueMany{items,next,skipped}：一次加入多首（網頁的多選、整份播放清單）。線上歌曲直接用網頁帶來的
 //     標題／作者／長度，不逐首跑 yt-dlp（同 /play 匯入播放清單：避免短時間大量請求觸發平台反爬蟲），播放時才取得完整資訊
 //   邏輯與控制面板按鈕（commands.js 的 uq_*）一致；每個操作都會在該伺服器最近點歌的文字頻道留一行紀錄，
@@ -42,7 +42,7 @@ const {
   randomPlaySettings,
   resetLoopAllCycle,
 } = require('./state');
-const { stopAll, enqueue, prefetchUpcoming, updateControlPanel, resetShuffleBag, getRequestChannel, adoptExistingConnection, skipCurrent } = require('./playback');
+const { stopAll, enqueue, prefetchUpcoming, updateControlPanel, resetShuffleBag, getRequestChannel, adoptExistingConnection, skipCurrent, pauseCurrent, resumeCurrent, refreshControlPanel } = require('./playback');
 const processGuards = require('../../../utils/processGuards');
 const bootSummary = require('../../../utils/bootSummary');
 const logger = require('../../../utils/logger');
@@ -315,6 +315,17 @@ async function execute(cmd) {
       return '已跳過';
     }
 
+    case 'pause':
+    case 'resume': {
+      needPlaying();
+      const r = action === 'pause' ? pauseCurrent(guildId) : resumeCurrent(guildId);
+      if (r === 'busy') fail('Bot 正在播報語音或載入歌曲，請稍後再試');
+      if (r === 'already') return action === 'pause' ? '已經是暫停狀態' : '目前正在播放，沒有暫停';
+      refreshControlPanel(guildId);
+      announce(guildId, action === 'pause' ? `⏸️ 暫停「${md(np.item.title)}」` : `▶️ 繼續播放「${md(np.item.title)}」`);
+      return action === 'pause' ? '已暫停' : '已繼續播放';
+    }
+
     case 'stop':
       needPlaying();
       stopAll(guildId);
@@ -540,6 +551,8 @@ function stop() {
 module.exports = {
   start,
   stop,
+  // Discord 端暫停／繼續等不會觸發連線事件的變動，主動通知網頁更新
+  notifyChange: schedulePush,
   // 測試用
   _toWebItem: toWebItem,
   _buildState: buildState,
