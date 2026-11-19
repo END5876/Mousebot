@@ -9,6 +9,9 @@
 // 等級由環境變數 LOG_LEVEL 控制：debug | info（預設）| warn | error。
 // 舊的 DEBUG_STARTUP=true 仍然有效，等同 LOG_LEVEL=debug。
 //
+// 每行前面加上「2026-11-20 14:03:05」格式的時間（Dockge／docker logs 本身不顯示時間）。
+// 時區用 TZ，沒設定就用 Asia/Taipei；LOG_TIMESTAMPS=0 可關閉（部署平台已經會加時間時）。
+//
 // 除了模組名稱之外的參數會原樣交給 console，所以可以直接把 Error 物件傳進來（會印出 stack）：
 //   logger.success('TTS', 'edge-tts 已就緒（作為 fallback）');
 //   logger.warn('YouTube', '未設定 Cookies，使用無帳號模式');
@@ -68,6 +71,29 @@ function getLatestSeq() {
   return seq;
 }
 
+// ── 時間戳 ────────────────────────────────────────────────
+const STAMP_ENABLED = process.env.LOG_TIMESTAMPS !== '0';
+function makeStampFormat() {
+  const opts = { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' };
+  try {
+    return new Intl.DateTimeFormat('en-US', { ...opts, timeZone: process.env.TZ || 'Asia/Taipei' });
+  } catch {
+    return new Intl.DateTimeFormat('en-US', opts); // TZ 寫錯就退回系統時區
+  }
+}
+const stampFmt = makeStampFormat();
+
+/** 「YYYY-MM-DD HH:mm:ss」（不依賴語系格式，自己拼） */
+function formatStamp(date = new Date()) {
+  const p = {};
+  for (const { type, value } of stampFmt.formatToParts(date)) p[type] = value;
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
+}
+
+function stamp() {
+  return STAMP_ENABLED ? `${C.gray}${formatStamp()}${C.reset} ` : '';
+}
+
 function tag(mod) {
   return `${C.cyan}[${mod}]${C.reset}`;
 }
@@ -87,35 +113,35 @@ const cleanArgs = (args) => args.map((a) => (typeof a === 'string' ? escapeContr
 function success(mod, ...args) {
   if (!enabled('info')) return;
   args = cleanArgs(args);
-  console.log(`${C.green}✅${C.reset} ${tag(mod)}`, ...args);
+  console.log(`${stamp()}${C.green}✅${C.reset} ${tag(mod)}`, ...args);
   remember('success', mod, args);
 }
 
 function info(mod, ...args) {
   if (!enabled('info')) return;
   args = cleanArgs(args);
-  console.log(`${C.gray}·${C.reset}  ${tag(mod)}`, ...args);
+  console.log(`${stamp()}${C.gray}·${C.reset}  ${tag(mod)}`, ...args);
   remember('info', mod, args);
 }
 
 function warn(mod, ...args) {
   if (!enabled('warn')) return;
   args = cleanArgs(args);
-  console.error(`${C.yellow}⚠️${C.reset}  ${tag(mod)}`, ...args);
+  console.error(`${stamp()}${C.yellow}⚠️${C.reset}  ${tag(mod)}`, ...args);
   remember('warn', mod, args);
 }
 
 function error(mod, ...args) {
   if (!enabled('error')) return;
   args = cleanArgs(args);
-  console.error(`${C.red}❌${C.reset} ${tag(mod)}`, ...args);
+  console.error(`${stamp()}${C.red}❌${C.reset} ${tag(mod)}`, ...args);
   remember('error', mod, args);
 }
 
 function debug(mod, ...args) {
   if (!enabled('debug')) return;
   args = cleanArgs(args);
-  console.log(`${C.gray}   · [${mod}]${C.reset}`, ...args);
+  console.log(`${stamp()}${C.gray}   · [${mod}]${C.reset}`, ...args);
   remember('debug', mod, args);
 }
 
@@ -132,4 +158,4 @@ function getLevel() {
   return Object.keys(LEVELS).find(k => LEVELS[k] === threshold) ?? 'info';
 }
 
-module.exports = { success, warn, error, info, debug, section, isDebugEnabled, getRecent, getLatestSeq, getLevel, escapeControlChars };
+module.exports = { success, warn, error, info, debug, section, isDebugEnabled, getRecent, getLatestSeq, getLevel, escapeControlChars, formatStamp };
