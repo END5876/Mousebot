@@ -1,16 +1,23 @@
 'use strict';
-// 禁言辱罵者的名單（moderation.js 用）：環境變數＋管理面板兩個來源合併。
+// 禁言辱罵者的名單與禁言時長（moderation.js 用）：環境變數＋管理面板兩個來源。
 //
 //   AI_TIMEOUT_USERS=id1,id2     環境變數的名單，唯讀（面板只顯示，改了要重啟）
 //   data/aiTimeoutUsers.json     管理面板新增／移除的名單（["id", ...]），立即生效
+//   兩邊都沒有任何人＝功能關閉。
 //
-// 兩邊都沒有任何人＝功能關閉。
+//   AI_TIMEOUT_SECONDS=60        禁言時長的預設值（秒；10 秒～28 天，不合法時用 60）
+//   data/aiTimeoutSettings.json  管理面板設定的時長（{ seconds }），優先於環境變數，立即生效
 
 const logger = require('../../../utils/logger');
 const { readJson, writeJsonAtomic } = require('../../../utils/jsonStore');
 const { dataPath } = require('../../../utils/dataDir');
 
 const FILE = dataPath('aiTimeoutUsers.json');
+const SETTINGS_FILE = dataPath('aiTimeoutSettings.json');
+
+const DEFAULT_SECONDS = 60;
+const MIN_SECONDS = 10;
+const MAX_SECONDS = 28 * 24 * 60 * 60; // Discord timeout 的上限
 const SNOWFLAKE_RE = /^\d{17,20}$/;
 
 /** @type {Set<string>|null} 面板名單；第一次用到才讀檔 */
@@ -66,4 +73,66 @@ function remove(userId) {
     return true;
 }
 
-module.exports = { has, isEmpty, list, add, remove, _reset: () => { panelIds = null; } };
+// ── 禁言時長 ─────────────────────────────────────────────
+const validSeconds = (n) => Number.isInteger(n) && n >= MIN_SECONDS && n <= MAX_SECONDS;
+
+/** @type {number|null|undefined} 面板設定的秒數；undefined＝還沒讀檔、null＝沒設定 */
+let panelSeconds;
+
+function panelDuration() {
+    if (panelSeconds === undefined) {
+        const n = readJson(SETTINGS_FILE, {})?.seconds;
+        panelSeconds = validSeconds(n) ? n : null;
+    }
+    return panelSeconds;
+}
+
+/** 環境變數的秒數；沒設定或不合法時是 null */
+function envDuration() {
+    const raw = process.env.AI_TIMEOUT_SECONDS;
+    if (raw == null || raw.trim() === '') return null;
+    const n = Number(raw);
+    return validSeconds(n) ? n : null;
+}
+
+/** 目前生效的時長：{ seconds, source: 'panel'|'env'|'default' } */
+function getDuration() {
+    const p = panelDuration();
+    if (p != null) return { seconds: p, source: 'panel' };
+    const e = envDuration();
+    if (e != null) return { seconds: e, source: 'env' };
+    return { seconds: DEFAULT_SECONDS, source: 'default' };
+}
+
+/** 面板設定時長；null＝清掉面板設定（回到環境變數或預設） */
+function setDuration(seconds) {
+    if (seconds !== null && !validSeconds(seconds)) {
+        throw new Error(`禁言時長要是 ${MIN_SECONDS} 秒到 28 天之間的整數秒數`);
+    }
+    try {
+        writeJsonAtomic(SETTINGS_FILE, seconds === null ? {} : { seconds });
+    } catch (err) {
+        logger.error('AITimeout', `時長儲存失敗：${err.message}`);
+        throw err;
+    }
+    panelSeconds = seconds;
+    return getDuration();
+}
+
+/** 秒數 → 「1 分鐘」「1 小時 30 分鐘」「2 天」 */
+function formatDuration(seconds) {
+    const units = [[86400, '天'], [3600, '小時'], [60, '分鐘'], [1, '秒']];
+    const parts = [];
+    let rest = seconds;
+    for (const [size, name] of units) {
+        const n = Math.floor(rest / size);
+        if (n) { parts.push(`${n} ${name}`); rest -= n * size; }
+    }
+    return parts.join(' ') || '0 秒';
+}
+
+module.exports = {
+    has, isEmpty, list, add, remove,
+    getDuration, setDuration, formatDuration, DEFAULT_SECONDS, MIN_SECONDS, MAX_SECONDS,
+    _reset: () => { panelIds = null; panelSeconds = undefined; },
+};

@@ -285,6 +285,28 @@ test('禁言：只禁言發言者本人 1 分鐘，結果要求人格嗆回去',
   });
 });
 
+test('禁言：時長跟著 AI_TIMEOUT_SECONDS，不合法時用 60 秒', async () => {
+  await withList('u1', async () => {
+    for (const [env, ms, label] of [['7200', 7_200_000, '2 小時'], ['5', 60_000, '1 分鐘'], ['abc', 60_000, '1 分鐘']]) {
+      process.env.AI_TIMEOUT_SECONDS = env;
+      try {
+        const member = modMember();
+        const r = await tools._execute({ name: 'timeout_insulter', args: { reason: 'x' } }, ctxOf({ guild: modGuild(true), member }));
+        assert.equal(member.timeouts[0].ms, ms, env);
+        assert.match(r.text, new RegExp(`禁言 ${label}`), env);
+      } finally { delete process.env.AI_TIMEOUT_SECONDS; }
+    }
+  });
+});
+
+test('禁言：formatDuration', () => {
+  const { formatDuration } = tools.timeoutList;
+  assert.equal(formatDuration(45), '45 秒');
+  assert.equal(formatDuration(60), '1 分鐘');
+  assert.equal(formatDuration(5400), '1 小時 30 分鐘');
+  assert.equal(formatDuration(28 * 86400), '28 天');
+});
+
 test('禁言：不在名單、管理員、已在禁言中的人不會被禁言', async () => {
   const call = { name: 'timeout_insulter', args: { reason: 'x' } };
   const g = modGuild(true);

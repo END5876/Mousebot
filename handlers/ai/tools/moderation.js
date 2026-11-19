@@ -1,5 +1,5 @@
 'use strict';
-// AI 工具：名單上的使用者辱罵 Bot 時，把他禁言（Discord timeout）一分鐘，人格再嗆回去。
+// AI 工具：名單上的使用者辱罵 Bot 時，把他禁言（Discord timeout）一段時間（預設 1 分鐘，可在面板或 AI_TIMEOUT_SECONDS 調整），人格再嗆回去。
 //
 // 預設關閉：只有手動加進名單（環境變數 AI_TIMEOUT_USERS 或管理面板，見 timeoutList.js）的使用者才可能被禁言。
 //
@@ -16,7 +16,6 @@ const { PermissionFlagsBits } = require('discord.js');
 const { fail } = require('./toolError');
 const timeoutList = require('./timeoutList');
 
-const TIMEOUT_MS = 60_000;
 const MAX_REASON_LENGTH = 100;
 
 const COMEBACK_HINT = '回覆時用一句話嗆回去，簡短有力，不要說教、不要道歉。';
@@ -31,19 +30,21 @@ async function timeoutInsulter(ctx, { reason }) {
     if (!isListed(ctx.userId)) fail(`對方不在可以禁言的名單上。${COMEBACK_HINT}`);
     if (member.isCommunicationDisabled?.()) fail(`對方本來就在禁言中。${COMEBACK_HINT}`);
     if (!member.moderatable) fail(`對方權限比 Bot 高（例如管理員），禁言不了。${COMEBACK_HINT}`);
+    const { seconds } = timeoutList.getDuration();
+    const duration = timeoutList.formatDuration(seconds);
     try {
-        await member.timeout(TIMEOUT_MS, `AI 判定辱罵 Bot：${reason}`);
+        await member.timeout(seconds * 1000, `AI 判定辱罵 Bot：${reason}`);
     } catch {
         fail(`禁言時發生錯誤，沒有禁言成功。${COMEBACK_HINT}`);
     }
-    return `已把 ${member.displayName ?? '對方'} 禁言 1 分鐘（原因：${reason}）。${COMEBACK_HINT}`;
+    return `已把 ${member.displayName ?? '對方'} 禁言 ${duration}（原因：${reason}）。${COMEBACK_HINT}`;
 }
 
 const tools = [
     {
         declaration: {
             name: 'timeout_insulter',
-            description: '把正在辱罵機器人的發言者本人禁言 1 分鐘。只能處罰發言者自己，不能指定別人。',
+            description: '把正在辱罵機器人的發言者本人禁言一段時間。只能處罰發言者自己，不能指定別人。',
             parameters: {
                 type: Type.OBJECT,
                 properties: {
@@ -70,4 +71,4 @@ const keywords = [
     'fuck', 'shit', 'stfu', 'idiot', 'bitch', 'stupid', 'trash', 'retard',
 ];
 
-module.exports = { tools, keywords, hasList, TIMEOUT_MS };
+module.exports = { tools, keywords, hasList };

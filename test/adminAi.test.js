@@ -246,3 +246,29 @@ test('禁言名單：面板新增／移除，環境變數的人移除不了', { 
     delete process.env.AI_TIMEOUT_USERS;
   }
 });
+
+test('禁言時長：預設 60 秒、環境變數、面板設定優先、恢復預設', { skip: !HAS_TOOLS }, async () => {
+  let { result } = await call('GET', '/api/ai/settings');
+  assert.deepEqual(result.timeoutUsers.duration, { seconds: 60, source: 'default', default: 60, min: 10, max: 28 * 86400 });
+
+  process.env.AI_TIMEOUT_SECONDS = '300';
+  try {
+    ({ result } = await call('GET', '/api/ai/settings'));
+    assert.deepEqual([result.timeoutUsers.duration.seconds, result.timeoutUsers.duration.source], [300, 'env']);
+
+    const r = await call('PUT', '/api/ai/timeout-duration', { seconds: 5400 });
+    assert.deepEqual(r.result, { seconds: 5400, source: 'panel' });
+    assert.match(r.actions[0], /1 小時 30 分鐘/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(TMP, 'aiTimeoutSettings.json'), 'utf8')), { seconds: 5400 });
+
+    for (const seconds of [5, 28 * 86400 + 1, 1.5, '60']) {
+      await assert.rejects(call('PUT', '/api/ai/timeout-duration', { seconds }), (err) => err.status === 400, String(seconds));
+    }
+
+    const d = await call('DELETE', '/api/ai/timeout-duration');
+    assert.deepEqual(d.result, { seconds: 300, source: 'env' }, '清掉面板設定後回到環境變數');
+    assert.match(d.actions[0], /恢復預設（5 分鐘）/);
+  } finally {
+    delete process.env.AI_TIMEOUT_SECONDS;
+  }
+});

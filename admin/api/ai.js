@@ -104,6 +104,8 @@ async function timeoutSection(client) {
         ...env.map((id) => ({ user: users[id], source: 'env' })),
         ...panel.map((id) => ({ user: users[id], source: 'panel' })),
       ],
+      // 禁言時長：source 'panel'（面板設定）／'env'（AI_TIMEOUT_SECONDS）／'default'
+      duration: { ...list.getDuration(), default: list.DEFAULT_SECONDS, min: list.MIN_SECONDS, max: list.MAX_SECONDS },
       // AI_TOOLS=0 時整個 AI 工具關閉，名單也不會生效
       toolsEnabled: process.env.AI_TOOLS !== '0',
       // Bot 沒有「禁言成員」權限的伺服器：名單上的人在那裡不會被禁言
@@ -188,6 +190,24 @@ module.exports = function registerAi(router, client) {
       const userId = snowflake(params.userId, '使用者');
       if (!timeoutList().add(userId)) throw new HttpError(409, '這個人已經在禁言名單上了');
       audit(`把 ${await userName(userId)} 加入 AI 禁言名單`);
+    });
+
+    router.put('/api/ai/timeout-duration', ({ body, audit }) => {
+      const list = timeoutList();
+      const seconds = body.seconds;
+      if (!Number.isInteger(seconds) || seconds < list.MIN_SECONDS || seconds > list.MAX_SECONDS) {
+        throw new HttpError(400, `禁言時長要介於 ${list.formatDuration(list.MIN_SECONDS)}到 28 天之間`);
+      }
+      const duration = list.setDuration(seconds);
+      audit(`把 AI 禁言時長設為 ${list.formatDuration(seconds)}`);
+      return duration;
+    });
+
+    router.delete('/api/ai/timeout-duration', ({ audit }) => {
+      const list = timeoutList();
+      const duration = list.setDuration(null);
+      audit(`把 AI 禁言時長恢復預設（${list.formatDuration(duration.seconds)}）`);
+      return duration;
     });
 
     router.delete('/api/ai/timeout-users/:userId', async ({ params, audit }) => {
