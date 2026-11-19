@@ -221,6 +221,89 @@ test('判斷階段只帶最近 3 輪對話，而且從使用者開始', async ()
   assert.deepEqual(tools._recentTurns([], 3), []);
 });
 
+// ── 禁言辱罵者（只對 AI_TIMEOUT_USERS 名單上的人）──────────
+const { PermissionFlagsBits } = require('discord.js');
+const modGuild = (canModerate) => ({
+  id: 'g1',
+  members: { me: { voice: { channelId: null }, permissions: { has: (p) => canModerate && p === PermissionFlagsBits.ModerateMembers } }, cache: new Map() },
+});
+const modMember = (overrides = {}) => {
+  const m = { id: 'u1', displayName: 'tester', voice: { channel: null, channelId: null }, moderatable: true, timeouts: [],
+    isCommunicationDisabled: () => false, timeout: async (ms, reason) => { m.timeouts.push({ ms, reason }); }, ...overrides };
+  return m;
+};
+const declaredNames = () => generateCalls[0].config.tools[0].functionDeclarations.map(d => d.name);
+const withList = async (list, fn) => {
+  if (list == null) delete process.env.AI_TIMEOUT_USERS; else process.env.AI_TIMEOUT_USERS = list;
+  try { await fn(); } finally { delete process.env.AI_TIMEOUT_USERS; }
+};
+
+test('禁言：名單是空的（預設）時完全關閉，罵人的字眼也不命中預篩', async () => {
+  await withList(null, async () => {
+    assert.equal(tools.needsTools('你這垃圾 bot'), false);
+    await tools.runToolStage({ history: [], parts: userParts('放晴天'), text: '放晴天', ctx: ctxOf({ guild: modGuild(true), member: modMember() }) });
+    assert.ok(!declaredNames().includes('timeout_insulter'));
+    assert.equal(generateCalls[0].systemInstruction, tools._ROUTER_PROMPT);
+  });
+});
+
+test('禁言：有名單時罵人的字眼命中預篩，「幹嘛」不會', async () => {
+  await withList('u1', async () => {
+    for (const s of ['你這垃圾 bot', '白痴喔', '去死啦', 'fuck you']) assert.equal(tools.needsTools(s), true, s);
+    assert.equal(tools.needsTools('你在幹嘛'), false);
+  });
+});
+
+test('禁言：只對名單上的發言者宣告，並附上額外判斷規則；不在名單、Bot 沒權限、語音時都不宣告', async () => {
+  await withList(' u9 , u1 ', async () => {
+    await tools.runToolStage({ history: [], parts: userParts('你這垃圾'), text: '你這垃圾', ctx: ctxOf({ guild: modGuild(true), member: modMember() }) });
+    assert.ok(declaredNames().includes('timeout_insulter'));
+    assert.ok(generateCalls[0].systemInstruction.startsWith(tools._ROUTER_PROMPT + '\n例外：'));
+
+    for (const ctx of [
+      ctxOf({ guild: modGuild(true), member: modMember({ id: 'u2' }), userId: 'u2' }),
+      ctxOf({ guild: modGuild(false), member: modMember() }),
+      ctxOf({ guild: modGuild(true), member: modMember(), source: 'voice' }),
+    ]) {
+      generateCalls.length = 0;
+      await tools.runToolStage({ history: [], parts: userParts('垃圾 放晴天'), text: '垃圾 放晴天', ctx });
+      assert.ok(!declaredNames().includes('timeout_insulter'));
+      assert.equal(generateCalls[0].systemInstruction, tools._ROUTER_PROMPT);
+    }
+  });
+});
+
+test('禁言：只禁言發言者本人 1 分鐘，結果要求人格嗆回去', async () => {
+  await withList('u1', async () => {
+    const member = modMember();
+    nextResponse = { functionCalls: [{ name: 'timeout_insulter', args: { reason: '罵 Bot 垃圾' } }] };
+    const { text } = await tools.runToolStage({ history: [], parts: userParts('你這垃圾'), text: '你這垃圾', ctx: ctxOf({ guild: modGuild(true), member }) });
+    assert.equal(member.timeouts.length, 1);
+    assert.equal(member.timeouts[0].ms, 60_000);
+    assert.match(text, /禁言辱罵者：成功。已把 tester 禁言 1 分鐘/);
+    assert.match(text, /嗆回去/);
+  });
+});
+
+test('禁言：不在名單、管理員、已在禁言中的人不會被禁言', async () => {
+  const call = { name: 'timeout_insulter', args: { reason: 'x' } };
+  const g = modGuild(true);
+  await withList('u1', async () => {
+    const outsider = modMember({ id: 'u2' });
+    let r = await tools._execute(call, ctxOf({ guild: g, member: outsider, userId: 'u2' }));
+    assert.equal(r.ok, false); assert.equal(outsider.timeouts.length, 0);
+
+    const admin = modMember({ moderatable: false });
+    r = await tools._execute(call, ctxOf({ guild: g, member: admin }));
+    assert.equal(r.ok, false); assert.equal(admin.timeouts.length, 0);
+
+    const muted = modMember({ isCommunicationDisabled: () => true });
+    r = await tools._execute(call, ctxOf({ guild: g, member: muted }));
+    assert.equal(r.ok, false); assert.equal(muted.timeouts.length, 0);
+  });
+});
+
+
 // ── 依模組決定可用的工具（子程序：FEATURES 在載入時以外也會重新判斷，但每個情境用乾淨的 env 比較清楚）──
 const TOOLS_SCRIPT = `
 const stub = (rel, exports) => { const p = require.resolve(rel); require.cache[p] = { id: p, filename: p, loaded: true, exports }; };

@@ -58,7 +58,7 @@ singleScope: off       # 選填：只有擁有者能把它設成單一人格模�
 - 固定人格：`AI_USER_MODE_OVERRIDES=使用者ID:模式代號,…` 指定某些人的預設人格（需有對應模式檔，不存在時改用預設模式並在開機摘要警告）；`/ai mode` 的設定優先。
 - **多人格／單一人格**：預設是多人格（每個人用自己的人格）。管理員可用 `/ai scope set kind:single persona:<模式>` 把整個伺服器（或加 `channel:true` 只限目前頻道）改成單一人格：大家共用同一個人格，`/ai mode` 與固定人格在那裡不生效，並額外接上 `_group.md`；對話歷史改成整個頻道的群組對話（30 分鐘內最多 24 則，可用 `AI_GROUP_MSG_LIMIT` 調小；標出每則是誰說的）。解析順序是頻道 > 父頻道（討論串）> 伺服器 > 預設，設定存在 `data/aiScope.json`。
 - 使用者的模式設定持久化儲存於 `data/userModes.json`。
-- **AI 工具（function calling）**：使用者主動找 Bot 時（@提及、`/ai ask`、語音喚醒），AI 可以替人點歌／控制音樂、記帳、查免費遊戲、操作語音（`handlers/ai/tools/`）。隨機插話一律不帶工具；音樂控制要求使用者與 Bot 在同一個語音頻道，記帳要本人按確認卡。`AI_TOOLS=0` 可整個關閉。各組工具跟著對應的模組：音樂、分帳（含沒設 `SPLITBILL_SERVICE_URL`）、限免通知、語音沒啟用時，那組工具不會給 AI（見「模組開關」）。
+- **AI 工具（function calling）**：使用者主動找 Bot 時（@提及、`/ai ask`、語音喚醒），AI 可以替人點歌／控制音樂、記帳、查免費遊戲、操作語音（`handlers/ai/tools/`）。隨機插話一律不帶工具；音樂控制要求使用者與 Bot 在同一個語音頻道，記帳要本人按確認卡。`AI_TOOLS=0` 可整個關閉。另有「禁言辱罵者」：只對禁言名單上的人生效（管理面板「AI 設定」或 `AI_TIMEOUT_USERS`；預設空＝關閉），AI 判定他認真辱罵 Bot 時禁言 1 分鐘並回嗆一句；Bot 需要「禁言成員」權限。各組工具跟著對應的模組：音樂、分帳（含沒設 `SPLITBILL_SERVICE_URL`）、限免通知、語音沒啟用時，那組工具不會給 AI（見「模組開關」）。
 - **範圍鎖定（`AI_SCOPE_LOCK`，選填）**：預設 `off`，範圍與人格照上面由 `/ai scope`、`/ai mode` 決定。設 `single` 時所有伺服器、頻道都跟同一個人格群聊（人格是 `AI_PERSONA`，沒設定時用 `AI_DEFAULT_MODE`），`single:<代號>` 則直接指定人格。鎖定時不讀寫 `aiScope.json`、`userModes.json`，`/ai` 只剩 `ask`、`clear`、`tts`、`chance`、`gugu`，而且只能在伺服器裡使用；人格檔不存在時改用內建的通用人格。
 
 ### 表情包

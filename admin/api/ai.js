@@ -7,6 +7,8 @@
 //   - 不註冊範圍（/ai scope）、使用者人格（/ai mode）、清除個人記憶、成員搜尋的路由
 // 不鎖定時才 lazy require aiScope、modeSelector（鎖定時不會讀寫 aiScope.json 與 userModes.json）。
 // 插話機率、頻道開關、清除頻道記憶、用量統計兩種情況都有。
+// 禁言名單（timeoutUsers 欄位、/api/ai/timeout-users）只在有 AI 工具模組（features 'aiTools'）時才有，
+// 兩種情況都有；鎖定時成員搜尋也跟著註冊（面板新增名單要搜尋成員）。
 
 const aiChance = require('../../handlers/ai/aiChance');
 const aiMemoryState = require('../../handlers/ai/aiMemoryState');
@@ -21,6 +23,8 @@ const {
   TEXT_TYPES, VOICE_TYPES, guildSummary, guildChannels, describeChannel, resolveUsers, searchMembers,
 } = require('../discordInfo');
 const { HttpError, str, bool, oneOf, snowflake, requireReady } = require('../http');
+const features = require('../../utils/features');
+const { PermissionFlagsBits } = require('discord.js');
 
 const MAX_USAGE_DAYS = 90;
 
@@ -85,6 +89,31 @@ function guildRows(client, extra = () => ({})) {
     });
 }
 
+/** 禁言名單模組；沒有 AI 工具模組（例如 lite）時為 null */
+const timeoutList = () => features.get('aiTools')?.timeoutList ?? null;
+
+/** 設定總覽裡的禁言名單區塊；沒有 AI 工具模組時回傳 {}（不加欄位） */
+async function timeoutSection(client) {
+  const list = timeoutList();
+  if (!list) return {};
+  const { env, panel } = list.list();
+  const users = await resolveUsers(client, [...env, ...panel]);
+  return {
+    timeoutUsers: {
+      users: [
+        ...env.map((id) => ({ user: users[id], source: 'env' })),
+        ...panel.map((id) => ({ user: users[id], source: 'panel' })),
+      ],
+      // AI_TOOLS=0 時整個 AI 工具關閉，名單也不會生效
+      toolsEnabled: process.env.AI_TOOLS !== '0',
+      // Bot 沒有「禁言成員」權限的伺服器：名單上的人在那裡不會被禁言
+      guildsWithoutPermission: [...client.guilds.cache.values()]
+        .filter((g) => !g.members?.me?.permissions?.has?.(PermissionFlagsBits.ModerateMembers))
+        .map((g) => ({ id: g.id, name: g.name })),
+    },
+  };
+}
+
 const searchGuilds = (client) => [...ENABLED_GUILD_IDS].map((id) => ({ id, name: client.guilds.cache.get(id)?.name ?? null }));
 
 module.exports = function registerAi(router, client) {
@@ -93,7 +122,7 @@ module.exports = function registerAi(router, client) {
 
   if (lock) {
     // ── 鎖定：單一人格（對話記憶以頻道為單位）─────────────────
-    router.get('/api/ai/settings', () => {
+    router.get('/api/ai/settings', async () => {
       requireReady(client);
       return {
         model: MODEL_NAME,
@@ -107,8 +136,10 @@ module.exports = function registerAi(router, client) {
         },
         memoryScope: 'channel',
         replyChance: { default: aiChance.DEFAULT_CHANCE, guilds: guildRows(client) },
+        ...await timeoutSection(client),
       };
     });
+    if (timeoutList()) registerMemberSearch(router, client);
   } else {
     registerMulti(router, client, guildName);
   }
@@ -145,6 +176,28 @@ module.exports = function registerAi(router, client) {
     aiMemoryState.clearChannelMemory(channelId);
     audit(`清除「${ch.guildName ?? '?'} › #${ch.name ?? channelId}」的 AI 對話記憶`);
   });
+
+  // ── 禁言名單（辱罵 Bot 時禁言 1 分鐘；只有面板加入的人可以從這裡移除）──
+  if (timeoutList()) {
+    const userName = async (id) => {
+      const user = client.isReady() ? (await resolveUsers(client, [id]))[id] : null;
+      return user && !user.missing ? user.name : id;
+    };
+
+    router.put('/api/ai/timeout-users/:userId', async ({ params, audit }) => {
+      const userId = snowflake(params.userId, '使用者');
+      if (!timeoutList().add(userId)) throw new HttpError(409, '這個人已經在禁言名單上了');
+      audit(`把 ${await userName(userId)} 加入 AI 禁言名單`);
+    });
+
+    router.delete('/api/ai/timeout-users/:userId', async ({ params, audit }) => {
+      const userId = snowflake(params.userId, '使用者');
+      const result = timeoutList().remove(userId);
+      if (result === 'env') throw new HttpError(400, '這個人是環境變數 AI_TIMEOUT_USERS 指定的，要改環境變數並重啟 Bot 才能移除');
+      if (!result) throw new HttpError(404, '這個人不在禁言名單上');
+      audit(`把 ${await userName(userId)} 移出 AI 禁言名單`);
+    });
+  }
 
   // ── 用量統計 ─────────────────────────────────────────────
   router.get('/api/ai/usage', async ({ query }) => {
@@ -207,6 +260,7 @@ function registerMulti(router, client, guildName) {
         overridden: !!overrides[userId],   // 被 /ai mode 蓋過，目前不生效
       })),
       replyChance: { default: aiChance.DEFAULT_CHANCE, guilds },
+      ...await timeoutSection(client),
     };
   });
 
@@ -278,6 +332,10 @@ function registerMulti(router, client, guildName) {
     audit(`清除 ${await userName(userId)} 的 AI 對話記憶`);
   });
 
+  registerMemberSearch(router, client);
+}
+
+function registerMemberSearch(router, client) {
   router.get('/api/members/search', async ({ query }) => {
     requireReady(client);
     const q = str(query.get('q'), '搜尋文字', { max: 100 });

@@ -1,6 +1,6 @@
 'use strict';
 // handlers/ai/tools/index.js
-// AI 聊天的 function calling（音樂、分帳、免費遊戲、語音）。
+// AI 聊天的 function calling（音樂、分帳、免費遊戲、語音、禁言辱罵者）。
 //
 // 做法比照 searchGrounding 的兩段式：
 //   1. 判斷階段：不帶人格 prompt 的中性請求 + functionDeclarations，由模型決定要不要呼叫工具、呼叫哪些。
@@ -14,8 +14,11 @@
 //   - 判斷 prompt 規定「只有明確要求 Bot 去做」才呼叫，單純提到、聊天、過去式都不算
 //   - 有副作用的工具：音樂控制要求跟 Bot 在同一個語音頻道；記帳要本人按確認卡
 //
+// 例外：禁言辱罵者（moderation.js）不是使用者要求的動作，判斷規則由該工具的 routerRule 另外附上。
+//
 // 環境變數：
 //   AI_TOOLS=0   關閉整個功能（預設開啟）
+//   AI_TIMEOUT_USERS=id1,id2  禁言辱罵者的名單（也可在管理面板設定；兩邊都空＝關閉，見 timeoutList.js）
 //
 // 依模組決定可用的工具群組（utils/features.js）：音樂←music、分帳←splitbill、免費遊戲←notice、
 // 語音←voice 或 tts。停用的群組不載入、不宣告，預篩關鍵字也不收；全部停用時預篩一律不命中。
@@ -40,6 +43,9 @@ const GROUPS = [
     { key: 'splitbill', file: './splitbill', available: () => features.isEnabled('splitbill'), noAction: '記帳' },
     { key: 'freeGames', file: './freeGames', available: () => features.isEnabled('notice'),    noAction: '查遊戲' },
     { key: 'voice',     file: './voice',     available: () => features.isEnabled('voice') || features.isEnabled('tts'), noAction: '進出語音頻道' },
+    // 禁言辱罵者：不是使用者要求的動作，所以不列進「這次沒有替使用者…」的提醒（沒有 noAction）
+    // 名單（AI_TIMEOUT_USERS）是空的就整組停用：不宣告、預篩也不收罵人的關鍵字，預設零成本
+    { key: 'moderation', file: './moderation', available: () => require('./moderation').hasList() },
 ];
 const loadedGroups = new Map(); // key → { tools, keywords }
 
@@ -89,8 +95,14 @@ function allTools(groups = availableGroups()) {
     return groups.flatMap(g => loadGroup(g).tools);
 }
 
-function availableTools(source) {
-    return allTools().filter(t => !t.skipSources?.includes(source) && (t.isAvailable?.() ?? true));
+function availableTools(ctx) {
+    return allTools().filter(t => !t.skipSources?.includes(ctx.source) && (t.isAvailable?.(ctx) ?? true));
+}
+
+/** 判斷 prompt：基本規則＋本次有宣告的工具自帶的額外規則（例如禁言）；沒有額外規則時和原本逐字相同 */
+function routerPrompt(tools) {
+    const extra = tools.map(t => t.routerRule).filter(Boolean);
+    return extra.length ? [ROUTER_PROMPT, ...extra].join('\n') : ROUTER_PROMPT;
 }
 
 /** 取最近 turns 輪；切完開頭若是 Bot 的話就丟掉，對話一律從使用者開始 */
@@ -144,7 +156,7 @@ const RESULT_RULE = '請用你原本的人格語氣，自然地告訴使用者�
 // 預篩命中但最後沒有執行任何動作時附上，避免人格嘴上說「好喔幫你放了」實際上什麼都沒做
 // 依可用群組組出「播放音樂、記帳、查遊戲或進出語音頻道」；全開時和原本的字串逐字相同
 function noActionRule(groups = availableGroups()) {
-    const items = groups.map(g => g.noAction);
+    const items = groups.map(g => g.noAction).filter(Boolean);
     const list = items.length > 1 ? `${items.slice(0, -1).join('、')}或${items.at(-1)}` : (items[0] ?? '');
     return `【注意】這次沒有替使用者${list}。`
         + '只有在使用者明顯是要你做這些事時才需要理會這段：不要假裝已經做了，可以請他把要求說清楚（例如要放哪首歌）。'
@@ -168,14 +180,14 @@ function noActionRule(groups = availableGroups()) {
 async function runToolStage({ history, parts, text, ctx, mode = null, mergeUser = false }) {
     if (!isEnabled() || !ctx?.guild || !ctx.member || !needsTools(text)) return null;
 
-    const tools = availableTools(ctx.source);
+    const tools = availableTools(ctx);
     // 例如只剩語音群組、而這次是語音對話（voice_say 不提供）：沒有可宣告的工具就不跑判斷
     if (!tools.length) return null;
     const NO_ACTION_RULE = noActionRule();
     let response;
     try {
         response = await generate({
-            systemInstruction: ROUTER_PROMPT,
+            systemInstruction: routerPrompt(tools),
             contents: textOnly(withCurrent(recentTurns(history, ROUTER_HISTORY_TURNS), parts, mergeUser)),
             config: {
                 tools: [{ functionDeclarations: tools.map(t => t.declaration) }],
@@ -215,8 +227,10 @@ module.exports = {
     runToolStage,
     contextFrom,
     needsTools,
+    timeoutList: require('./timeoutList'),
     isEnabled,
     _ROUTER_PROMPT: ROUTER_PROMPT,
+    _routerPrompt: routerPrompt,
     _allTools: () => allTools(),
     _noActionRule: () => noActionRule(),
     _textOnly: textOnly,

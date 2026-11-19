@@ -25,6 +25,9 @@ const aiChance = require('../handlers/ai/aiChance');
 const aiMemoryState = require('../handlers/ai/aiMemoryState');
 const persona = require('../handlers/ai/persona');
 const { ChannelType } = require('discord.js');
+const features = require('../utils/features');
+// 禁言名單只有 MB 有（AI 工具模組）；lite 共用這個測試檔，沒有時檢查「完全不出現」
+const HAS_TOOLS = features.isEnabled('aiTools');
 
 const GUILD = '111111111111111111';
 const TEXT = '222222222222222222';
@@ -133,12 +136,13 @@ test('鎖定：清除頻道記憶（等同 /ai clear all:true）', async () => {
   await assert.rejects(call('POST', '/api/ai/memory/channel/999999999999999999'), (err) => err.status === 404);
 });
 
-test('鎖定：不註冊範圍、使用者人格、清除個人記憶、成員搜尋，也不載入 aiScope、modeSelector', () => {
+test('鎖定：不註冊範圍、使用者人格、清除個人記憶，也不載入 aiScope、modeSelector；成員搜尋只在有禁言名單時註冊', () => {
   assert.equal(hasRoute(lockedRouter, 'PUT', `/api/ai/scope/${GUILD}`), false);
   assert.equal(hasRoute(lockedRouter, 'PUT', `/api/ai/scope/channel/${TEXT}`), false);
   assert.equal(hasRoute(lockedRouter, 'PUT', `/api/ai/user-modes/${USER}`), false);
   assert.equal(hasRoute(lockedRouter, 'POST', `/api/ai/memory/${USER}`), false);
-  assert.equal(hasRoute(lockedRouter, 'GET', '/api/members/search'), false);
+  assert.equal(hasRoute(lockedRouter, 'GET', '/api/members/search'), HAS_TOOLS);
+  assert.equal(hasRoute(lockedRouter, 'PUT', `/api/ai/timeout-users/${USER}`), HAS_TOOLS);
   assert.equal(hasRoute(lockedRouter, 'GET', '/api/ai/usage'), true);
   assert.equal(isCached('handlers/ai/aiScope.js'), false);
   assert.equal(isCached('handlers/ai/modeSelector.js'), false);
@@ -210,4 +214,35 @@ test('不鎖定：清除個人記憶與頻道記憶都有效', async () => {
   const ch = aiMemoryState.getChannelClearTime(VOICE);
   await callMulti('POST', `/api/ai/memory/channel/${VOICE}`);
   assert.ok(aiMemoryState.getChannelClearTime(VOICE) > ch);
+});
+
+// ── 禁言名單（只有 AI 工具模組存在時）──────────────────────
+test('禁言名單：沒有 AI 工具模組時設定總覽沒有 timeoutUsers', { skip: HAS_TOOLS }, async () => {
+  const { result } = await call('GET', '/api/ai/settings');
+  assert.equal(result.timeoutUsers, undefined);
+});
+
+test('禁言名單：面板新增／移除，環境變數的人移除不了', { skip: !HAS_TOOLS }, async () => {
+  const ENV_USER = '555555555555555555';
+  process.env.AI_TIMEOUT_USERS = ENV_USER;
+  try {
+    let { result } = await call('GET', '/api/ai/settings');
+    assert.deepEqual(result.timeoutUsers.users.map((e) => [e.user.id, e.source]), [[ENV_USER, 'env']]);
+    assert.equal(result.timeoutUsers.toolsEnabled, true);
+    assert.deepEqual(result.timeoutUsers.guildsWithoutPermission.map((g) => g.id), [GUILD], '假伺服器沒有禁言成員權限');
+
+    const r = await call('PUT', `/api/ai/timeout-users/${USER}`);
+    assert.match(r.actions[0], /加入 AI 禁言名單/);
+    await assert.rejects(call('PUT', `/api/ai/timeout-users/${USER}`), (err) => err.status === 409);
+    ({ result } = await callMulti('GET', '/api/ai/settings'));
+    assert.deepEqual(result.timeoutUsers.users.map((e) => [e.user.id, e.source]), [[ENV_USER, 'env'], [USER, 'panel']]);
+    assert.ok(fs.readFileSync(path.join(TMP, 'aiTimeoutUsers.json'), 'utf8').includes(USER));
+
+    await assert.rejects(call('DELETE', `/api/ai/timeout-users/${ENV_USER}`), (err) => err.status === 400);
+    const d = await call('DELETE', `/api/ai/timeout-users/${USER}`);
+    assert.match(d.actions[0], /移出 AI 禁言名單/);
+    await assert.rejects(call('DELETE', `/api/ai/timeout-users/${USER}`), (err) => err.status === 404);
+  } finally {
+    delete process.env.AI_TIMEOUT_USERS;
+  }
 });
