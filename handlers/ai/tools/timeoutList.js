@@ -5,8 +5,9 @@
 //   data/aiTimeoutUsers.json     管理面板新增／移除的名單（["id", ...]），立即生效
 //   兩邊都沒有任何人＝功能關閉。
 //
-//   AI_TIMEOUT_SECONDS=60        禁言時長的預設值（秒；10 秒～28 天，不合法時用 60）
-//   data/aiTimeoutSettings.json  管理面板設定的時長（{ seconds }），優先於環境變數，立即生效
+//   AI_TIMEOUT_SECONDS=60        「最長」禁言時長的預設值（秒；10 秒～28 天，不合法時用 60）
+//   data/aiTimeoutSettings.json  管理面板設定的最長時長（{ seconds }），優先於環境變數，立即生效
+//   實際時長由 AI 依嚴重度決定（不超過最長），見 moderation.js 的 severityDuration
 
 const logger = require('../../../utils/logger');
 const { readJson, writeJsonAtomic } = require('../../../utils/jsonStore');

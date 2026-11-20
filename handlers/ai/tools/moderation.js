@@ -1,5 +1,8 @@
 'use strict';
-// AI 工具：名單上的使用者辱罵 Bot 時，把他禁言（Discord timeout）一段時間（預設 1 分鐘，可在面板或 AI_TIMEOUT_SECONDS 調整），人格再嗆回去。
+// AI 工具：名單上的使用者辱罵 Bot 時，把他禁言（Discord timeout）一段時間，人格再嗆回去。
+//
+// 禁言時長：面板或 AI_TIMEOUT_SECONDS 設定的是「最長」時長（預設 1 分鐘，見 timeoutList.js）。
+// 判斷階段的模型依辱罵的嚴重程度給 severity 1～5，實際時長＝最長 × severity / 5（見 severityDuration）。
 //
 // 預設關閉：只有手動加進名單（環境變數 AI_TIMEOUT_USERS 或管理面板，見 timeoutList.js）的使用者才可能被禁言。
 //
@@ -17,26 +20,51 @@ const { fail } = require('./toolError');
 const timeoutList = require('./timeoutList');
 
 const MAX_REASON_LENGTH = 100;
+const MAX_SEVERITY = 5;
+// 模型沒給或給了不合法的值時用中間值
+const DEFAULT_SEVERITY = 3;
 
-const COMEBACK_HINT = '回覆時用一句話嗆回去，簡短有力，不要說教、不要道歉。';
+const SEVERITY_GUIDE = '1=不客氣、輕微的罵（「閉嘴啦」「滾」）；2=一般髒話罵機器人；3=明顯羞辱、人身攻擊；'
+    + '4=很惡毒、連續辱罵、叫它去死；5=極度惡劣（歧視、性羞辱、威脅）。之前幾則也在罵機器人的話可以往上加一級';
+
+function parseSeverity(value) {
+    const n = Math.round(Number(value));
+    return Number.isFinite(n) && n >= 1 && n <= MAX_SEVERITY ? n : DEFAULT_SEVERITY;
+}
+
+/**
+ * 嚴重度 → 實際秒數：最長 × severity / 5，不低於 timeoutList.MIN_SECONDS、不超過最長。
+ * 最長 5 分鐘以上時取整到分鐘，避免出現「禁言 7 分鐘 12 秒」
+ */
+function severityDuration(severity, maxSeconds) {
+    let s = Math.round(maxSeconds * severity / MAX_SEVERITY);
+    if (maxSeconds >= 300) s = Math.round(s / 60) * 60;
+    return Math.min(maxSeconds, Math.max(timeoutList.MIN_SECONDS, s));
+}
+
+const COMEBACK_HINT = '回覆時嗆回去，簡短有力，不要說教、不要道歉。';
 
 const hasList = () => !timeoutList.isEmpty();
 const isListed = (userId) => timeoutList.has(userId);
 
-async function timeoutInsulter(ctx, { reason }) {
+async function timeoutInsulter(ctx, { reason, severity }) {
     const member = ctx.member;
     reason = String(reason || '').trim().slice(0, MAX_REASON_LENGTH) || '辱罵 Bot';
     // 宣告時已經檢查過，這裡再擋一次，避免名單外的人被禁言
     if (!isListed(ctx.userId)) fail(`對方不在可以禁言的名單上。${COMEBACK_HINT}`);
     if (member.isCommunicationDisabled?.()) fail(`對方本來就在禁言中。${COMEBACK_HINT}`);
     if (!member.moderatable) fail(`對方權限比 Bot 高（例如管理員），禁言不了。${COMEBACK_HINT}`);
-    const { seconds } = timeoutList.getDuration();
+    const level = parseSeverity(severity);
+    const { seconds: maxSeconds } = timeoutList.getDuration();
+    const seconds = severityDuration(level, maxSeconds);
     const duration = timeoutList.formatDuration(seconds);
     try {
-        await member.timeout(seconds * 1000, `AI 判定辱罵 Bot：${reason}`);
+        // Discord 審核日誌的原因：只放模型寫的原因
+        await member.timeout(seconds * 1000, reason);
     } catch {
         fail(`禁言時發生錯誤，沒有禁言成功。${COMEBACK_HINT}`);
     }
+    // 嚴重度不放進結果：人格看不到就不會說出來（只用來決定時長）
     return `已把 ${member.displayName ?? '對方'} 禁言 ${duration}（原因：${reason}）。${COMEBACK_HINT}`;
 }
 
@@ -49,8 +77,12 @@ const tools = [
                 type: Type.OBJECT,
                 properties: {
                     reason: { type: Type.STRING, description: `禁言原因，簡短描述對方罵了什麼（${MAX_REASON_LENGTH} 字以內）` },
+                    severity: {
+                        type: Type.INTEGER,
+                        description: `辱罵的嚴重程度 1～${MAX_SEVERITY}，越嚴重禁言越久：${SEVERITY_GUIDE}`,
+                    },
                 },
-                required: ['reason'],
+                required: ['reason', 'severity'],
             },
         },
         label: '禁言辱罵者',
@@ -71,4 +103,4 @@ const keywords = [
     'fuck', 'shit', 'stfu', 'idiot', 'bitch', 'stupid', 'trash', 'retard',
 ];
 
-module.exports = { tools, keywords, hasList };
+module.exports = { tools, keywords, hasList, _severityDuration: severityDuration, _parseSeverity: parseSeverity };

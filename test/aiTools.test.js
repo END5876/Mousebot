@@ -273,30 +273,43 @@ test('禁言：只對名單上的發言者宣告，並附上額外判斷規則�
   });
 });
 
-test('禁言：只禁言發言者本人 1 分鐘，結果要求人格嗆回去', async () => {
+test('禁言：只禁言發言者本人，嚴重度 5 時用滿最長時長，結果要求人格嗆回去', async () => {
   await withList('u1', async () => {
     const member = modMember();
-    nextResponse = { functionCalls: [{ name: 'timeout_insulter', args: { reason: '罵 Bot 垃圾' } }] };
+    nextResponse = { functionCalls: [{ name: 'timeout_insulter', args: { reason: '罵 Bot 垃圾', severity: 5 } }] };
     const { text } = await tools.runToolStage({ history: [], parts: userParts('你這垃圾'), text: '你這垃圾', ctx: ctxOf({ guild: modGuild(true), member }) });
     assert.equal(member.timeouts.length, 1);
     assert.equal(member.timeouts[0].ms, 60_000);
-    assert.match(text, /禁言辱罵者：成功。已把 tester 禁言 1 分鐘/);
+    assert.match(text, /禁言辱罵者：成功。已把 tester 禁言 1 分鐘（原因：罵 Bot 垃圾）/);
+    assert.doesNotMatch(text, /嚴重度/, '人格看不到嚴重度，就不會說出來');
+    assert.equal(member.timeouts[0].reason, '罵 Bot 垃圾', '審核日誌只寫 AI 寫的原因');
     assert.match(text, /嗆回去/);
   });
 });
 
-test('禁言：時長跟著 AI_TIMEOUT_SECONDS，不合法時用 60 秒', async () => {
+test('禁言：最長時長跟著 AI_TIMEOUT_SECONDS（不合法時 60 秒），實際時長依嚴重度', async () => {
   await withList('u1', async () => {
-    for (const [env, ms, label] of [['7200', 7_200_000, '2 小時'], ['5', 60_000, '1 分鐘'], ['abc', 60_000, '1 分鐘']]) {
+    for (const [env, severity, ms, label] of [
+      ['7200', 5, 7_200_000, '2 小時'], ['7200', 1, 1_440_000, '24 分鐘'], ['5', 5, 60_000, '1 分鐘'], ['abc', 5, 60_000, '1 分鐘'],
+    ]) {
       process.env.AI_TIMEOUT_SECONDS = env;
       try {
         const member = modMember();
-        const r = await tools._execute({ name: 'timeout_insulter', args: { reason: 'x' } }, ctxOf({ guild: modGuild(true), member }));
+        const r = await tools._execute({ name: 'timeout_insulter', args: { reason: 'x', severity } }, ctxOf({ guild: modGuild(true), member }));
         assert.equal(member.timeouts[0].ms, ms, env);
         assert.match(r.text, new RegExp(`禁言 ${label}`), env);
       } finally { delete process.env.AI_TIMEOUT_SECONDS; }
     }
   });
+});
+
+test('禁言：嚴重度換算時長', () => {
+  const { _severityDuration: dur, _parseSeverity: parse } = require('../handlers/ai/tools/moderation');
+  assert.deepEqual([1, 2, 3, 4, 5].map((n) => dur(n, 60)), [12, 24, 36, 48, 60]);
+  assert.deepEqual([1, 3, 5].map((n) => dur(n, 30)), [10, 18, 30], '不低於 10 秒');
+  assert.deepEqual([1, 2, 5].map((n) => dur(n, 3600)), [720, 1440, 3600], '5 分鐘以上取整到分鐘');
+  assert.equal(dur(1, 10), 10);
+  assert.deepEqual([undefined, 0, 6, 'x', '4', 2.4].map(parse), [3, 3, 3, 3, 4, 2], '不合法時用 3');
 });
 
 test('禁言：formatDuration', () => {

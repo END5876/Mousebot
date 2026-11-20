@@ -104,7 +104,7 @@ async function timeoutSection(client) {
         ...env.map((id) => ({ user: users[id], source: 'env' })),
         ...panel.map((id) => ({ user: users[id], source: 'panel' })),
       ],
-      // 禁言時長：source 'panel'（面板設定）／'env'（AI_TIMEOUT_SECONDS）／'default'
+      // 最長禁言時長（實際時長由 AI 依嚴重度決定）：source 'panel'（面板設定）／'env'（AI_TIMEOUT_SECONDS）／'default'
       duration: { ...list.getDuration(), default: list.DEFAULT_SECONDS, min: list.MIN_SECONDS, max: list.MAX_SECONDS },
       // AI_TOOLS=0 時整個 AI 工具關閉，名單也不會生效
       toolsEnabled: process.env.AI_TOOLS !== '0',
@@ -196,17 +196,17 @@ module.exports = function registerAi(router, client) {
       const list = timeoutList();
       const seconds = body.seconds;
       if (!Number.isInteger(seconds) || seconds < list.MIN_SECONDS || seconds > list.MAX_SECONDS) {
-        throw new HttpError(400, `禁言時長要介於 ${list.formatDuration(list.MIN_SECONDS)}到 28 天之間`);
+        throw new HttpError(400, `最長禁言時長要介於 ${list.formatDuration(list.MIN_SECONDS)}到 28 天之間`);
       }
       const duration = list.setDuration(seconds);
-      audit(`把 AI 禁言時長設為 ${list.formatDuration(seconds)}`);
+      audit(`把 AI 最長禁言時長設為 ${list.formatDuration(seconds)}`);
       return duration;
     });
 
     router.delete('/api/ai/timeout-duration', ({ audit }) => {
       const list = timeoutList();
       const duration = list.setDuration(null);
-      audit(`把 AI 禁言時長恢復預設（${list.formatDuration(duration.seconds)}）`);
+      audit(`把 AI 最長禁言時長恢復預設（${list.formatDuration(duration.seconds)}）`);
       return duration;
     });
 
