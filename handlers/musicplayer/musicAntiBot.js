@@ -124,6 +124,10 @@ function isBilibiliUrl(url) {
   return !!host && (_matchesDomain(host, 'bilibili.com') || host === 'b23.tv');
 }
 
+function isBilibiliLiveUrl(url) {
+  return _hostOf(url) === 'live.bilibili.com';
+}
+
 // 只接受 YouTube / Bilibili：其他網址交給 yt-dlp 的 generic extractor 會讓 Bot 去連任意主機
 // （內網服務、攻擊者的網站），而且非 YouTube 的網址過去會帶上 Bilibili 的登入 Cookie
 function isSupportedMediaUrl(url) {
@@ -416,10 +420,16 @@ function buildInfoArgs(url) {
       '--add-header', `Origin:${BILIBILI_HEADERS['Origin']}`,
       '--extractor-args', 'bilibili:getcomments=false',
       '--extractor-args', 'bilibili:getdanmaku=false',
-      '--sleep-requests',     '2',
-      '--sleep-interval',     '2',
-      '--max-sleep-interval', '5'
     );
+    // B 站直播間取資訊要發 8～9 個請求（每種畫質各查一次），每個請求停 2 秒會累積到 16 秒以上，
+    // 超過 getInfo 的 15 秒時限 → 直播網址一律「取得影片資訊逾時」。直播不停頓；一般影片維持原本的節流。
+    if (!isBilibiliLiveUrl(url)) {
+      base.push(
+        '--sleep-requests',     '2',
+        '--sleep-interval',     '2',
+        '--max-sleep-interval', '5'
+      );
+    }
   }
 
   base.push(url);
