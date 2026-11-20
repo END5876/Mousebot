@@ -642,9 +642,12 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
     ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     ytdlp.stdout.pipe(transcoder.stdin);
     transcoder.stdin.on('error', () => {}); // 轉碼器先結束時 yt-dlp 還在寫：忽略 EPIPE
+    // 換歌／停止時 Discord 不再讀取，ffmpeg 會印一串 Broken pipe：屬正常收尾，不記錄
+    const benignTc = /Broken pipe|Last message repeated|Error writing trailer|Error closing file/;
     transcoder.stderr.on('data', d => {
-      const msg = d.toString().trim();
-      if (msg && !silent) logger.warn(platform, `直播轉碼 ffmpeg: ${msg}`);
+      for (const line of d.toString().split(/\r?\n/)) {
+        if (line.trim() && !benignTc.test(line) && !silent) logger.warn(platform, `直播轉碼 ffmpeg: ${line.trim()}`);
+      }
     });
     transcoder.on('error', err => logger.error(platform, `直播轉碼 ffmpeg 無法啟動: ${err.message}`));
     // 轉碼器結束（換歌後沒人讀、或轉碼失敗）→ 一併停掉 yt-dlp，不讓它在背景繼續抓直播
