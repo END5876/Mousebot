@@ -515,6 +515,7 @@ module.exports = {
   initCookies,
   isYouTubeUrl,
   isBilibiliUrl,
+  isBilibiliLiveUrl,
   isSupportedMediaUrl,
   YT_CLIENT_STRATEGIES,
   getYtClientStrategy,

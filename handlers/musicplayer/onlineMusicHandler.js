@@ -95,16 +95,26 @@ function _isCurrentPlayer(guildId, player) {
   return nowPlaying.get(guildId)?.player === player;
 }
 
+// 串流用的 yt-dlp 在直播時會自己再開 ffmpeg（孫行程）；只砍 yt-dlp 的話 ffmpeg 會變孤兒繼續抓直播。
+// 非 Windows 時讓 yt-dlp 自成一個 process group，清理時整組一起砍（同 music-library-service 的 procTree）
+const USE_PROC_GROUP = process.platform !== 'win32';
+const _isAlive = (proc) => !!proc && proc.exitCode === null && proc.signalCode === null;
+function _killTree(proc, signal = 'SIGTERM') {
+  if (!_isAlive(proc)) return;
+  if (USE_PROC_GROUP && proc.pid) {
+    try { process.kill(-proc.pid, signal); return; } catch {}
+  }
+  try { proc.kill(signal); } catch {}
+}
+
 function cleanupProcess(guildId) {
   const old = activeProcesses.get(guildId);
-  if (old && !old.killed) {
+  if (_isAlive(old)) {
     logger.info('OnlineMusic', '🧹 清理舊的 yt-dlp 進程');
-    try {
-      old.kill('SIGTERM');
-      setTimeout(() => { if (!old.killed) old.kill('SIGKILL'); }, 1000);
-    } catch {}
-    activeProcesses.delete(guildId);
+    _killTree(old, 'SIGTERM');
+    setTimeout(() => _killTree(old, 'SIGKILL'), 1000);
   }
+  activeProcesses.delete(guildId);
 }
 
 // ════════════════════════════════════════════════════════
@@ -562,6 +572,7 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
   const ytdlp = spawn(ytdlpPath, streamArgs, {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
+    detached: USE_PROC_GROUP,
   });
   activeProcesses.set(guildId, ytdlp);
 
@@ -615,8 +626,35 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
     }
   });
 
-  const resource = createAudioResource(ytdlp.stdout, {
-    inputType:    StreamType.Arbitrary,
+  // B 站直播：yt-dlp 只能輸出 MPEG-TS，而 @discordjs/voice 預設用的 ffmpeg-static 7.0.2（Linux 版）
+  // 解 MPEG-TS 會 Segmentation fault → 寫入 EPIPE、播放失敗。改由系統 ffmpeg 先轉成 Ogg Opus，
+  // Discord 端只需拆封裝、不再經過 ffmpeg-static。
+  let audioStream = ytdlp.stdout;
+  let inputType   = StreamType.Arbitrary;
+  if (antiBot.isBilibiliLiveUrl(item.url)) {
+    const transcoder = spawn('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error',
+      // 限制探測量：影片軌是 AV1 的直播間，ffmpeg 5.1 會一直分析串流、遲遲不輸出（實測 25 秒都沒聲音）
+      '-probesize', '256k', '-analyzeduration', '2000000',
+      '-i', 'pipe:0', '-vn',
+      '-c:a', 'libopus', '-b:a', '128k', '-ar', '48000', '-ac', '2',
+      '-f', 'ogg', 'pipe:1',
+    ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    ytdlp.stdout.pipe(transcoder.stdin);
+    transcoder.stdin.on('error', () => {}); // 轉碼器先結束時 yt-dlp 還在寫：忽略 EPIPE
+    transcoder.stderr.on('data', d => {
+      const msg = d.toString().trim();
+      if (msg && !silent) logger.warn(platform, `直播轉碼 ffmpeg: ${msg}`);
+    });
+    transcoder.on('error', err => logger.error(platform, `直播轉碼 ffmpeg 無法啟動: ${err.message}`));
+    // 轉碼器結束（換歌後沒人讀、或轉碼失敗）→ 一併停掉 yt-dlp，不讓它在背景繼續抓直播
+    transcoder.on('close', () => _killTree(ytdlp));
+    audioStream = transcoder.stdout;
+    inputType   = StreamType.OggOpus;
+  }
+
+  const resource = createAudioResource(audioStream, {
+    inputType,
     inlineVolume: false,
   });
 
@@ -703,13 +741,7 @@ async function setupOnlineMusicEngine() {
 //  防殭屍進程保護 (Zombie Process Protection)
 // ════════════════════════════════════════════════════════
 process.on('exit', () => {
-  for (const childProcess of activeProcesses.values()) {
-    if (!childProcess.killed) {
-      try {
-        childProcess.kill('SIGKILL');
-      } catch (e) {}
-    }
-  }
+  for (const childProcess of activeProcesses.values()) _killTree(childProcess, 'SIGKILL');
 });
 
 // ════════════════════════════════════════════════════════
