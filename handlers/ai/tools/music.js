@@ -210,7 +210,7 @@ async function random(ctx, { continuous = false }) {
     await connect(ctx);
     const { playback, state } = uq();
     const guildId = ctx.guild.id;
-    if (state.nowPlaying.has(guildId)) playback.stopAll(guildId);
+    if (state.nowPlaying.has(guildId)) playback.stopAll(guildId, { reason: 'restart' });
 
     const track = await playback.playRandomLocal(guildId, channelOf(ctx), { enableContinuous: !!continuous });
     if (!track) fail('本地音樂庫裡沒有歌');
@@ -241,6 +241,12 @@ async function control(ctx, { action }) {
             if (queue.length === 0 && loopMode === 'off') {
                 playback.stopAll(guildId);
                 return `已跳過「${np.item.title}」，佇列空了所以停止播放`;
+            }
+            // 單曲循環：跳到佇列下一首（單曲循環保持開著），佇列空了才重播目前這首
+            if (loopMode === 'one') {
+                const next = queue[0];
+                playback.skipCurrent(guildId);
+                return next ? `已跳到「${next.title}」，單曲循環還開著` : `佇列裡沒有下一首，從頭重播「${np.item.title}」，單曲循環還開著`;
             }
             playback.skipCurrent(guildId);
             return `已跳過「${np.item.title}」`;

@@ -42,7 +42,7 @@ const {
   randomPlaySettings,
   resetLoopAllCycle,
 } = require('./state');
-const { stopAll, enqueue, prefetchUpcoming, updateControlPanel, resetShuffleBag, getRequestChannel, adoptExistingConnection, skipCurrent, pauseCurrent, resumeCurrent, refreshControlPanel } = require('./playback');
+const { stopAll, enqueue, prefetchUpcoming, updateControlPanel, resetShuffleBag, getRequestChannel, adoptExistingConnection, skipCurrent, loopOneSkipText, pauseCurrent, resumeCurrent, refreshControlPanel } = require('./playback');
 const processGuards = require('../../../utils/processGuards');
 const bootSummary = require('../../../utils/bootSummary');
 const logger = require('../../../utils/logger');
@@ -309,6 +309,13 @@ async function execute(cmd) {
         stopAll(guildId);
         announce(guildId, `⏭️ 跳過「${md(np.item.title)}」，佇列為空，停止播放`);
         return '已跳過，佇列為空，停止播放';
+      }
+      // 單曲循環：跳到佇列下一首（單曲循環保持開著），佇列空了才重播目前這首
+      if (loopMode === 'one') {
+        const next = queue[0];
+        announce(guildId, loopOneSkipText(guildId));
+        skipCurrent(guildId);
+        return next ? `已跳到「${next.title}」，單曲循環還開著` : `佇列裡沒有下一首，從頭重播「${np.item.title}」`;
       }
       skipCurrent(guildId);
       announce(guildId, `⏭️ 跳過「${md(np.item.title)}」`);

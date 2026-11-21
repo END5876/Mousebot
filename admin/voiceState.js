@@ -107,15 +107,22 @@ async function musicAction(guildId, cmd) {
       const queue = state.queues.get(guildId) || [];
       const loopMode = state.loopSettings.get(guildId) || 'off';
       // 隨機連播：交給 Idle 事件挑下一首；佇列空且不循環才整組停止，其餘交給循環邏輯
+      // 用 skipCurrent：還在下載的那首 player 仍是 Idle，直接 stop() 不會生效；單曲循環也靠它才會換下一首
       if (state.randomPlaySettings.get(guildId)) {
-        np.player.stop();
+        playback.skipCurrent(guildId);
         return '已跳過，隨機連播下一首';
       }
       if (queue.length === 0 && loopMode === 'off') {
         playback.stopAll(guildId);
         return '已跳過，佇列為空，停止播放';
       }
-      np.player.stop();
+      // 單曲循環：跳到佇列下一首（單曲循環保持開著），佇列空了才重播目前這首
+      if (loopMode === 'one') {
+        const next = queue[0];
+        playback.skipCurrent(guildId);
+        return next ? `已跳到「${next.title}」，單曲循環還開著` : `佇列裡沒有下一首，從頭重播「${np.item.title}」`;
+      }
+      playback.skipCurrent(guildId);
       return '已跳過';
     }
 

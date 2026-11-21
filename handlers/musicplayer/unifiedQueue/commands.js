@@ -23,6 +23,7 @@ const {
   playRandomLocal,
   resetShuffleBag, // ★ 新增：開啟隨機連播時用來重置洗牌袋，確保是全新一輪
   skipCurrent,
+  loopOneSkipText,
   pauseCurrent,
   resumeCurrent,
   prefetchUpcoming,
@@ -102,6 +103,10 @@ function setupUnifiedCommands(client) {
           if (queue.length === 0 && loopMode === 'off') {
             stopAll(guildId);
             await interaction.reply({ content: '⏭️ 已跳過，佇列為空，停止播放', flags: MessageFlags.Ephemeral });
+          } else if (loopMode === 'one') {
+            const text = loopOneSkipText(guildId);
+            skipCurrent(guildId);
+            await interaction.reply({ content: text, flags: MessageFlags.Ephemeral });
           } else {
             skipCurrent(guildId);
             await interaction.reply({ content: '⏭️ 跳過當前歌曲', flags: MessageFlags.Ephemeral });
@@ -390,6 +395,11 @@ async function handleMusicSkip(interaction) {
     stopAll(interaction.guildId);
     return interaction.reply({ content: '⏭️ 已跳過，佇列為空，停止播放' });
   }
+  if (loopMode === 'one') {
+    const text = loopOneSkipText(interaction.guildId);
+    skipCurrent(interaction.guildId);
+    return interaction.reply({ content: text });
+  }
   skipCurrent(interaction.guildId);
   await interaction.reply({ content: '⏭️ 跳過當前歌曲' });
 }
@@ -568,7 +578,7 @@ async function handleMusicRandomPlay(interaction) {
 
   // 若目前正在播放，先停止（隨機播放視為全新開始）
   if (nowPlaying.has(guildId)) {
-    stopAll(guildId);
+    stopAll(guildId, { reason: 'restart' });
   }
 
   const track = await playRandomLocal(guildId, interaction.channel, { enableContinuous });

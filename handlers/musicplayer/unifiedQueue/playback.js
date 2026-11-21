@@ -373,8 +373,12 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
     const isRandomPlay = randomPlaySettings.get(guildId) || false;
     const sendTo = _getNotifyChannel(guildId, channel);
 
-    // 單曲循環
-    if (loopMode === 'one' && !failed) {
+    // 單曲循環：自然播完就重播同一首。
+    // 使用者按了「跳過」（skipCurrent）時改播下一首，單曲循環保持開著、套用到新歌；
+    // 只有沒有下一首可播（不是隨機連播、佇列也空了）時才重播目前這首
+    const skipped = !!current.skipped;
+    const nothingNext = !isRandomPlay && (queues.get(guildId) || []).length === 0;
+    if (loopMode === 'one' && !failed && (!skipped || nothingNext)) {
       await _playItem(guildId, item, channel, { silent: true, countPlay: false });
       return;
     }
@@ -468,7 +472,7 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
       await updateControlPanel(guildId, channel);
     } else {
       logger.success('UnifiedQueue', '播放完畢，佇列為空');
-      stopAll(guildId);
+      stopAll(guildId, { reason: failed ? 'stopped' : 'finished' });
       if (!failed) sendTo.send('✅ 所有歌曲播放完畢').catch(() => {});
     }
   };
@@ -555,8 +559,11 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
 // ════════════════════════════════════════════════════════
 //  停止
 // ════════════════════════════════════════════════════════
-function stopAll(guildId) {
+// reason：'stopped'（停止鍵、閒置停播、連續失敗）| 'finished'（佇列播完）
+//        | 'restart'（停掉後馬上重新開始播，例如 /music random：舊面板直接刪掉，不留「已停止」）
+function stopAll(guildId, { reason = 'stopped' } = {}) {
   const np = nowPlaying.get(guildId);
+  const panel = controlMsgs.get(guildId);
 
   // ⚠️ 順序很重要：必須先清空 nowPlaying（以及其他狀態），
   // 再呼叫 player.stop(true)。
@@ -587,7 +594,36 @@ function stopAll(guildId) {
   }
   session.schedule();
 
+  _endControlPanel(guildId, panel, np?.item, reason);
+
   logger.info('UnifiedQueue', `⏹️ 停止播放 (${guildId})`);
+}
+
+// 停止或播完後，把頻道裡的控制面板就地改成「已結束」並拿掉按鈕，
+// 不然面板會一直寫「正在播放」，按鈕按了只回「目前沒有播放音樂」。
+// 排在進行中的面板更新之後：那次更新可能剛送出新面板（舊的已刪），也要一起改掉
+function _endControlPanel(guildId, panel, lastItem, reason) {
+  const embed = new EmbedBuilder()
+    .setColor(0x4F545C)
+    .setTitle(reason === 'finished' ? '✅ 佇列播完了' : '⏹️ 已停止播放')
+    .setDescription(lastItem?.title
+      ? `最後播的是「${md(lastItem.title)}」。用 /play 再點歌。`
+      : '用 /play 再點歌。')
+    .setTimestamp();
+  const end = reason === 'restart'
+    ? (msg) => msg?.delete().catch(() => {})
+    : (msg) => msg?.edit({ embeds: [embed], components: [] }).catch(() => {});
+  const pending = _panelUpdates.get(guildId);
+  if (!pending) { end(panel); return; }
+  pending.catch(() => {}).then(() => {
+    const late = controlMsgs.get(guildId);
+    // 更新期間又開始播放（有新的 nowPlaying）就不要動新面板
+    if (late && late !== panel && !nowPlaying.has(guildId)) {
+      controlMsgs.delete(guildId);
+      end(late);
+    }
+    end(panel);
+  });
 }
 
 // ════════════════════════════════════════════════════════
@@ -596,9 +632,20 @@ function stopAll(guildId) {
 function skipCurrent(guildId) {
   const np = nowPlaying.get(guildId);
   if (!np) return false;
+  // 使用者主動跳過：單曲循環時 _advance 要換下一首，而不是重播這首
+  np.skipped = true;
   // 還在載入（下載中）的 player 仍是 Idle，stop() 沒有作用：先記下來，載入完成後 _playItem 再跳過
   if (!np.player.stop()) np.skipRequested = true;
   return true;
+}
+
+// 單曲循環時按「跳過」的回覆（面板按鈕、/music skip、網頁遙控共用），要在 skipCurrent 之前呼叫：
+// 佇列有歌 → 跳到下一首，單曲循環保持開著；佇列空了 → 從頭重播目前這首
+function loopOneSkipText(guildId) {
+  const next = (queues.get(guildId) || [])[0];
+  if (next) return `⏭️ 跳到「${md(next.title)}」，單曲循環還開著。`;
+  const title = nowPlaying.get(guildId)?.item?.title ?? '';
+  return `🔂 佇列裡沒有下一首，從頭重播「${md(title)}」。單曲循環還開著。`;
 }
 
 // ════════════════════════════════════════════════════════
@@ -892,6 +939,7 @@ function isPlaying(guildId) { return nowPlaying.has(guildId); }
 function getNowPlaying(guildId) { return nowPlaying.get(guildId)?.item ?? null; }
 
 module.exports = {
+  loopOneSkipText,
   _buildEmbed,
   _buildButtons,
   refreshControlPanel,
