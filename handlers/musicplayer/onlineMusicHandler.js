@@ -15,6 +15,7 @@ const { nowPlaying } = require('./unifiedQueue/state');
 
 const cache   = require('./musicCache');
 const antiBot = require('./musicAntiBot');
+const { TARGET_LUFS, TARGET_LRA, TARGET_TP } = require('./musicNormalizer');
 const logger  = require('../../utils/logger');
 const bootSummary = require('../../utils/bootSummary');
 
@@ -626,38 +627,33 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
     }
   });
 
-  // B 站直播：yt-dlp 只能輸出 MPEG-TS，而 @discordjs/voice 預設用的 ffmpeg-static 7.0.2（Linux 版）
-  // 解 MPEG-TS 會 Segmentation fault → 寫入 EPIPE、播放失敗。改由系統 ffmpeg 先轉成 Ogg Opus，
-  // Discord 端只需拆封裝、不再經過 ffmpeg-static。
-  let audioStream = ytdlp.stdout;
-  let inputType   = StreamType.Arbitrary;
-  if (antiBot.isBilibiliLiveUrl(item.url)) {
-    const transcoder = spawn('ffmpeg', [
-      '-hide_banner', '-loglevel', 'error',
-      // 限制探測量：影片軌是 AV1 的直播間，ffmpeg 5.1 會一直分析串流、遲遲不輸出（實測 25 秒都沒聲音）
-      '-probesize', '256k', '-analyzeduration', '2000000',
-      '-i', 'pipe:0', '-vn',
-      '-c:a', 'libopus', '-b:a', '128k', '-ar', '48000', '-ac', '2',
-      '-f', 'ogg', 'pipe:1',
-    ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
-    ytdlp.stdout.pipe(transcoder.stdin);
-    transcoder.stdin.on('error', () => {}); // 轉碼器先結束時 yt-dlp 還在寫：忽略 EPIPE
-    // 換歌／停止時 Discord 不再讀取，ffmpeg 會印一串 Broken pipe：屬正常收尾，不記錄
-    const benignTc = /Broken pipe|Last message repeated|Error writing trailer|Error closing file/;
-    transcoder.stderr.on('data', d => {
-      for (const line of d.toString().split(/\r?\n/)) {
-        if (line.trim() && !benignTc.test(line) && !silent) logger.warn(platform, `直播轉碼 ffmpeg: ${line.trim()}`);
-      }
-    });
-    transcoder.on('error', err => logger.error(platform, `直播轉碼 ffmpeg 無法啟動: ${err.message}`));
-    // 轉碼器結束（換歌後沒人讀、或轉碼失敗）→ 一併停掉 yt-dlp，不讓它在背景繼續抓直播
-    transcoder.on('close', () => _killTree(ytdlp));
-    audioStream = transcoder.stdout;
-    inputType   = StreamType.OggOpus;
-  }
+  // 所有串流都先經過系統 ffmpeg：即時音量正規化（與快取檔同目標）＋轉成 Ogg Opus 交給 Discord。
+  //  - 快取檔是兩次分析的精準正規化；串流只能單次即時調整（開頭幾秒可能略偏），播完下載進快取後下次就是精準版
+  //  - 也避開 @discordjs/voice 預設用的 ffmpeg-static 7.0.2（Linux 版）：它解 MPEG-TS（B 站直播）會 Segmentation fault
+  const transcoder = spawn('ffmpeg', [
+    '-hide_banner', '-loglevel', 'error',
+    // 限制探測量：影片軌是 AV1 的 B 站直播間，ffmpeg 5.1 會一直分析串流、遲遲不輸出（實測 25 秒都沒聲音）
+    ...(antiBot.isBilibiliLiveUrl(item.url) ? ['-probesize', '256k', '-analyzeduration', '2000000'] : []),
+    '-i', 'pipe:0', '-vn',
+    '-af', `loudnorm=I=${TARGET_LUFS}:LRA=${TARGET_LRA}:TP=${TARGET_TP}`,
+    '-c:a', 'libopus', '-b:a', '128k', '-ar', '48000', '-ac', '2',
+    '-f', 'ogg', 'pipe:1',
+  ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  ytdlp.stdout.pipe(transcoder.stdin);
+  transcoder.stdin.on('error', () => {}); // 轉碼器先結束時 yt-dlp 還在寫：忽略 EPIPE
+  // 換歌／停止時 Discord 不再讀取，ffmpeg 會印一串 Broken pipe：屬正常收尾，不記錄
+  const benignTc = /Broken pipe|Last message repeated|Error writing trailer|Error closing file/;
+  transcoder.stderr.on('data', d => {
+    for (const line of d.toString().split(/\r?\n/)) {
+      if (line.trim() && !benignTc.test(line) && !silent) logger.warn(platform, `串流轉碼 ffmpeg: ${line.trim()}`);
+    }
+  });
+  transcoder.on('error', err => logger.error(platform, `串流轉碼 ffmpeg 無法啟動: ${err.message}`));
+  // 轉碼器結束（換歌後沒人讀、或轉碼失敗）→ 一併停掉 yt-dlp，不讓它在背景繼續下載
+  transcoder.on('close', () => _killTree(ytdlp));
 
-  const resource = createAudioResource(audioStream, {
-    inputType,
+  const resource = createAudioResource(transcoder.stdout, {
+    inputType:    StreamType.OggOpus,
     inlineVolume: false,
   });
 
