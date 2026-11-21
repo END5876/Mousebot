@@ -9,6 +9,7 @@ const {
 const { spawn, exec } = require('child_process');
 const { promisify }   = require('util');
 const path = require('path');
+const { PassThrough } = require('stream');
 
 const { registerEngine, stopAll } = require('./unifiedQueue');
 const { nowPlaying } = require('./unifiedQueue/state');
@@ -106,6 +107,42 @@ function _killTree(proc, signal = 'SIGTERM') {
     try { process.kill(-proc.pid, signal); return; } catch {}
   }
   try { proc.kill(signal); } catch {}
+}
+
+// ── 直播預先緩衝 ─────────────────────────────────────────
+// Opus 128kbps ≈ 16KB/秒（含 Ogg 封裝），48KB ≈ 3 秒；等太久（開台初期資料少）就先開始播
+const LIVE_PREBUFFER_BYTES       = 48 * 1024;
+const LIVE_PREBUFFER_MAX_WAIT_MS = 8000;
+
+// 先把 src 的資料囤到 bytes（或等滿 maxWaitMs），再一次放出並接著串流。
+// 回傳的串流被關閉（換歌／停止）時一併銷毀 src，讓轉碼器 ffmpeg 收到 EPIPE 結束、連帶停掉 yt-dlp。
+function _prebuffer(src, bytes, maxWaitMs) {
+  const out  = new PassThrough();
+  const held = [];
+  let size = 0, released = false;
+
+  const release = (ended = false) => {
+    if (released) return;
+    released = true;
+    clearTimeout(timer);
+    src.off('data', onData);
+    for (const chunk of held) out.write(chunk);
+    held.length = 0;
+    if (ended) out.end();
+    else src.pipe(out);
+  };
+  const onData = (chunk) => {
+    held.push(chunk);
+    size += chunk.length;
+    if (size >= bytes) { src.pause(); release(); }
+  };
+  const timer = setTimeout(() => release(), maxWaitMs);
+
+  src.on('data', onData);
+  src.once('end', () => release(true));
+  src.once('error', err => out.destroy(err));
+  out.once('close', () => { clearTimeout(timer); src.destroy(); });
+  return out;
 }
 
 function cleanupProcess(guildId) {
@@ -652,10 +689,12 @@ function _fallbackStream(guildId, item, player, retryCount, silent) {
   // 轉碼器結束（換歌後沒人讀、或轉碼失敗）→ 一併停掉 yt-dlp，不讓它在背景繼續下載
   transcoder.on('close', () => _killTree(ytdlp));
 
-  const resource = createAudioResource(transcoder.stdout, {
-    inputType:    StreamType.OggOpus,
-    inlineVolume: false,
-  });
+  // 直播（沒有長度）先囤約 3 秒再開始播：音訊是即時進來的，網路抖動造成的短暫斷音由這段緩衝吸收
+  const isLive = !item.durationSec;
+  const resource = createAudioResource(
+    isLive ? _prebuffer(transcoder.stdout, LIVE_PREBUFFER_BYTES, LIVE_PREBUFFER_MAX_WAIT_MS) : transcoder.stdout,
+    { inputType: StreamType.OggOpus, inlineVolume: false },
+  );
 
   resource.playStream?.on('error', err => {
     logger.error('OnlineMusic', '音頻流錯誤:', err);

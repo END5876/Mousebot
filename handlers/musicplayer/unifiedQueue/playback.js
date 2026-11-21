@@ -354,7 +354,10 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
 
   const notifyChannel = _getNotifyChannel(guildId, channel);
 
-  const player = createAudioPlayer();
+  // maxMissedFrames：預設連續 5 幀（0.1 秒）讀不到音訊就 stop()，當成播完換下一首。
+  // 直播的音訊是即時進來的，網路抖動就會斷 0.2～0.4 秒 → 播幾秒就被跳過（VPS 實測 4～11 秒）。
+  // 放寬到 250 幀（5 秒）：短暫斷音只會靜音一下再接上；串流真的結束時走「resource 已結束」的判斷，不受影響。
+  const player = createAudioPlayer({ behaviors: { maxMissedFrames: 250 } });
   // 每個 player 只換一次歌：串流錯誤時 'error' 之後緊接著 Idle，兩邊都換會一次吃掉兩首
   let advanced = false;
   // 這首出錯了：交給 'error' 監聽器換歌，也不再單曲循環／列表循環重播這首壞掉的歌
