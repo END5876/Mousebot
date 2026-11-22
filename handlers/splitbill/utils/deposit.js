@@ -7,8 +7,9 @@
  * 實際花費金額確定後，系統自動把「已收訂金」與「應分攤的實際花費」
  * 互相抵銷，算出每個人最終「多退」或「少補」的金額。
  *
- * 訂金可以用任何行程內設定過匯率的幣別記錄；記錄當下就會依行程匯率
- * 換算並存成 amountInBase，供「每人淨額 / 最佳化轉帳」直接使用。
+ * 訂金可以用任何行程內設定過匯率的幣別記錄；記錄當下就換算成基準幣別存成 amountInBase，
+ * 供「每人淨額 / 最佳化轉帳」直接使用。跟網頁一樣：呼叫端先查當天的即時匯率傳進來（rateToBase），
+ * 查不到才用行程設定的匯率。
  */
 
 const crypto = require('crypto');
@@ -17,16 +18,19 @@ const { round2, toBase } = require('./calculator');
 /**
  * 新增一筆預收款紀錄
  * @param {object} trip
- * @param {{collectorId:string, payerId:string, amount:number, currency?:string, note?:string}} input
+ * @param {{collectorId:string, payerId:string, amount:number, currency?:string, note?:string, rateToBase?:number}} input
+ *   rateToBase：1 單位這個幣別＝多少基準幣（當天的即時匯率）；沒給就用 trip.rates
  * @returns {object} 新建立的 deposit 物件
  */
-function addDeposit(trip, { collectorId, payerId, amount, currency, note }) {
+function addDeposit(trip, { collectorId, payerId, amount, currency, note, rateToBase }) {
   if (!collectorId || !payerId) throw new Error('請選擇收款人和付款人');
   if (collectorId === payerId) throw new Error('收款人與付款人不能是同一人');
   if (!(amount > 0)) throw new Error('金額要大於 0');
 
   const cur = (currency || trip.baseCurrency).toUpperCase();
-  const amountInBase = round2(toBase(amount, cur, trip.rates));
+  const amountInBase = cur !== trip.baseCurrency && rateToBase > 0
+    ? round2(amount * rateToBase)
+    : round2(toBase(amount, cur, trip.rates));
 
   const deposit = {
     id: `dep_${crypto.randomBytes(4).toString('hex')}`,

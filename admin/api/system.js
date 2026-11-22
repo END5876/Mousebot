@@ -11,6 +11,7 @@ const { TEXT_TYPES, VOICE_TYPES, guildSummary, guildChannels } = require('../dis
 const { HttpError, FileResponse, oneOf, snowflake, str, requireReady } = require('../http');
 const { createBackupTools, BackupError } = require('../backup');
 const profile = require('../../profile');
+const logger = require('../../utils/logger');
 
 const SYNC_COOLDOWN_MS = 30 * 1000;
 const RESTART_DELAY_MS = 500;
@@ -182,6 +183,7 @@ module.exports = function registerSystem(router, client) {
     uptimeSec: Math.round(process.uptime()),
     pid: process.pid,
     node: process.version,
+    logLevel: logger.getLevel(),
   }));
 
   router.post('/api/restart', ({ audit: log }) => {

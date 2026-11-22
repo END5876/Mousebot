@@ -2,7 +2,7 @@
 
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, MessageFlags } = require('discord.js');
 const splitbillClient = require('../utils/splitbillClient');
-const { calcNetBalances, calcNetBalancesByCurrency, listTransfersByMember, getUsedCurrencies, convertNetToSingleCurrency, round2 } = require('../utils/calculator');
+const { calcNetBalances, calcNetBalancesByCurrency, listTransfersByMember, getUsedCurrencies, fetchRealTimeRate, round2 } = require('../utils/calculator');
 const { simplifyDebts } = require('../utils/settlement');
 const { showMainMenu } = require('../commands/splitbill');
 const { memberMention } = require('../utils/tripHelper');
@@ -281,7 +281,7 @@ module.exports = {
         .setDescription(
           `此行程目前使用過的幣別有：**${currencies.join('、')}**\n` +
           `請選擇要換算成哪一種幣別進行最終結算：\n\n` +
-          `*💡 這裡會用「當下即時匯率」重新換算，跟記帳當下存好的匯率可能不同。*`
+          `*💡 會把 ${trip.baseCurrency} 的轉帳建議依今天的匯率換算成你選的幣別，跟網頁的結算頁是同一套算法，僅供參考；記好的帳目不會變。*`
         );
 
       const selectRow = new ActionRowBuilder().addComponents(
@@ -307,25 +307,37 @@ module.exports = {
       const targetCurrency = values[0];
       await interaction.deferUpdate();
 
-      const netByCurrency = calcNetBalancesByCurrency(trip);
-      const { converted, rates, failedCurrencies } = await convertNetToSingleCurrency(netByCurrency, targetCurrency, trip);
-
-      const rateLines = Object.entries(rates)
-        .filter(([currency]) => currency !== targetCurrency)
-        .map(([currency, rate]) => `1 ${currency} = ${rate === null ? '❌ 查不到' : `${rate} ${targetCurrency}`}`)
-        .join('\n');
-
-      const transactions = simplifyDebts(converted);
+      // 跟網頁的結算頁同一套算法：先用基準幣別算出最精簡的轉帳，再整串乘上同一個匯率。
+      // 匯率先查今天的即時匯率，查不到才用行程設定的匯率；兩邊都查不到就維持基準幣別
+      const base = trip.baseCurrency;
+      const baseTransactions = simplifyDebts(calcNetBalances(trip));
+      let rate = 1;
+      let rateNote = '';
+      if (targetCurrency !== base) {
+        const live = await fetchRealTimeRate(base, targetCurrency).catch(() => null);
+        const tripRate = trip.rates && trip.rates[targetCurrency]; // 1 target = tripRate 基準幣
+        if (live > 0) {
+          rate = live;
+          rateNote = `依今天的匯率 1 ${base} ≈ ${Number(live.toPrecision(4))} ${targetCurrency} 換算，僅供參考。`;
+        } else if (tripRate > 0) {
+          rate = 1 / tripRate;
+          rateNote = `查不到今天的匯率，改用行程設定的匯率 1 ${targetCurrency} = ${tripRate} ${base} 換算，僅供參考。`;
+        } else {
+          rate = null;
+          rateNote = `⚠️ 查不到 ${targetCurrency} 的匯率，下面仍以 ${base} 顯示。`;
+        }
+      }
+      const shownCurrency = rate ? targetCurrency : base;
+      const transactions = baseTransactions.map((t) => ({ ...t, amount: rate ? round2(t.amount * rate) : t.amount }));
 
       const embed = new EmbedBuilder()
         .setColor(0x9b59b6)
-        .setTitle(`💱 「${trip.name}」轉帳建議（換算成 ${targetCurrency}，即時匯率）`)
+        .setTitle(`💱 「${trip.name}」轉帳建議（換算成 ${shownCurrency}，依今天匯率，僅供參考）`)
         .setDescription(
-          (rateLines ? `**採用即時匯率：**\n${rateLines}\n\n` : '') +
+          (rateNote ? `${rateNote}\n\n` : '') +
           (transactions.length
-            ? `**最精簡轉帳路線：**\n${transactions.map((t, idx) => `${idx + 1}. ${memberMention(trip, t.from)} ➡️ ${memberMention(trip, t.to)}：**${t.amount} ${targetCurrency}**`).join('\n')}`
-            : '🎉 換算後大家都結清了，不用再轉帳！') +
-          (failedCurrencies.length ? `\n\n⚠️ 查不到以下幣別的即時匯率，這些帳目**沒有算進上面的結果**：${failedCurrencies.join('、')}` : '')
+            ? `**最精簡轉帳路線：**\n${transactions.map((t, idx) => `${idx + 1}. ${memberMention(trip, t.from)} ➡️ ${memberMention(trip, t.to)}：**${t.amount} ${shownCurrency}**`).join('\n')}`
+            : '🎉 大家都結清了，不用再轉帳！')
         );
 
       const row = new ActionRowBuilder().addComponents(

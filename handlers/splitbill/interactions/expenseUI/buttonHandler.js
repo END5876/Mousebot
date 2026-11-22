@@ -54,7 +54,7 @@ async function handleButton(interaction, cache) {
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
         .setTitle('💰 步驟 1/4：選擇幣別')
-        .setDescription('這筆訂金是用哪種幣別收的？\n*(訂金會保留原始幣別，不會預先換算成基準幣別)*');
+        .setDescription(`這筆訂金是用哪種幣別收的？\n*會依今天的匯率換算成 ${trip.baseCurrency} 記下來，之後匯率變動不影響這筆。*`);
 
       const selectRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()

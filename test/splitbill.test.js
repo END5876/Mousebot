@@ -142,3 +142,15 @@ test('tripHelper：幣別格式與 splitbill-service 一致', () => {
   for (const ok of ['TWD', 'JPY', 'USDT', 'USDT0', 'AB']) assert.equal(isCurrencyCode(ok), true, ok);
   for (const bad of ['', 'A', '1USD', 'usd', 'ABCDEFGHIJK', 'US D', '<b>', null]) assert.equal(isCurrencyCode(bad), false, String(bad));
 });
+
+// 預收款：跟網頁一樣，有當天匯率（rateToBase）就用它換算，沒有才用行程匯率
+test('addDeposit：外幣優先用傳進來的當天匯率，基準幣別不換算', () => {
+  const { addDeposit } = require('../handlers/splitbill/utils/deposit');
+  const trip = { baseCurrency: 'TWD', rates: { TWD: 1, JPY: 0.2 }, deposits: [] };
+  const live = addDeposit(trip, { collectorId: 'a', payerId: 'b', amount: 1000, currency: 'JPY', rateToBase: 0.21 });
+  assert.equal(live.amountInBase, 210);
+  const fallback = addDeposit(trip, { collectorId: 'a', payerId: 'b', amount: 1000, currency: 'JPY' });
+  assert.equal(fallback.amountInBase, 200);
+  const base = addDeposit(trip, { collectorId: 'a', payerId: 'b', amount: 500, currency: 'TWD', rateToBase: 9 });
+  assert.equal(base.amountInBase, 500);
+});

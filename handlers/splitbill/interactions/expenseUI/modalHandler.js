@@ -87,10 +87,12 @@ async function handleModal(interaction, cache) {
       // 而不是重新查詢「現在」的作用行程，避免這幾步操作期間使用者切換了
       // 自己的作用行程，導致訂金被寫入錯誤的行程。找不到（例如行程已被刪除）
       // 就直接中止，不寫入任何資料。
+      // 接下來要查行程、查匯率（最多 1.5 秒）、存檔，可能超過 Discord 的 3 秒回覆期限：先 defer
+      await interaction.deferUpdate();
       const trip = await splitbillClient.resolveTripById(guildId, state.tripId);
       if (!trip) {
         cache.delete(guildId, user.id);
-        return interaction.reply({ content: '⚠️ 找不到原本的行程（可能已被刪除），操作已取消，請重新開始。', flags: MessageFlags.Ephemeral });
+        return interaction.followUp({ content: '⚠️ 找不到原本的行程（可能已被刪除），操作已取消，請重新開始。', flags: MessageFlags.Ephemeral });
       }
 
       let note = '預收款/訂金';
@@ -103,6 +105,20 @@ async function handleModal(interaction, cache) {
 
       const depositsAdded = [];
       let totalAmount = 0;
+
+      // 跟網頁一樣先查當天的即時匯率，查不到才用行程設定的匯率。
+      // 互動要在 3 秒內回覆，查匯率最多等 1.5 秒
+      const base = trip.baseCurrency;
+      const foreign = state.depositCurrency && state.depositCurrency !== base;
+      const liveRate = foreign
+        ? await Promise.race([
+          fetchRealTimeRate(state.depositCurrency, base).catch(() => null),
+          new Promise((r) => setTimeout(() => r(null), 1500)),
+        ])
+        : null;
+      const rateLine = !foreign ? ''
+        : liveRate ? `\n換算：依今天的匯率 1 ${state.depositCurrency} ≈ ${liveRate} ${base} 記下來，之後匯率變動不影響這筆。`
+          : `\n換算：查不到今天的匯率，改用行程設定的匯率 1 ${state.depositCurrency} = ${trip.rates[state.depositCurrency]} ${base}。`;
 
       try {
         for (let i = 0; i < state.depositPayerIds.length; i++) {
@@ -118,7 +134,8 @@ async function handleModal(interaction, cache) {
             payerId: state.depositPayerIds[i],
             amount,
             currency: state.depositCurrency,
-            note
+            note,
+            rateToBase: liveRate || undefined,
           });
           
           depositsAdded.push(deposit);
@@ -129,11 +146,11 @@ async function handleModal(interaction, cache) {
         cache.delete(guildId, user.id);
 
         const payerMentions = depositsAdded.map(d => `${memberMention(trip, d.payerId)}(${d.amount})`).join('、');
-        const msg = `✅ **預收款紀錄成功！** ${memberMention(trip, state.depositCollectorId)} 共收了 ${totalAmount} ${state.depositCurrency}。\n付款人：${payerMentions}\n備註：${note}`;
+        const msg = `✅ **預收款紀錄成功！** ${memberMention(trip, state.depositCollectorId)} 共收了 ${totalAmount} ${state.depositCurrency}。\n付款人：${payerMentions}\n備註：${note}${rateLine}`;
         
         return showMainMenu(interaction, msg);
       } catch (err) {
-        return interaction.reply({ content: `❌ 記錄失敗：${err.message}`, flags: MessageFlags.Ephemeral });
+        return interaction.followUp({ content: `❌ 記錄失敗：${err.message}`, flags: MessageFlags.Ephemeral });
       }
     }
 
