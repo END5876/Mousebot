@@ -33,11 +33,11 @@ async function startBillScan(interaction, trip, cache) {
 
   const waitEmbed = new EmbedBuilder()
     .setColor(0x9b59b6)
-    .setTitle('📷 掃描帳單新增花費')
+    .setTitle('📷 掃描帳單新增支出')
     .setDescription(
       `請在 **${BILL_SCAN_TIMEOUT_MS / 1000} 秒內**，直接在本頻道傳送帳單／收據照片（拍照或截圖皆可）。\n` +
       `我會自動幫你判讀項目名稱、金額與幣別，稍後仍可再手動確認或修改！\n` +
-      `*(可以一次夾帶多張圖片，每一張會各自算成一筆花費，單則訊息最多處理 ${BILL_SCAN_MAX_IMAGES_PER_BATCH} 張；僅接受圖片格式。這則訊息稍後會被刪除，辨識結果會另外傳一則只有你看得到的訊息)*`
+      `*（可以一次夾帶多張圖片，每一張會各自算成一筆支出，單則訊息最多處理 ${BILL_SCAN_MAX_IMAGES_PER_BATCH} 張；僅接受圖片格式。這則訊息稍後會被刪除，辨識結果會另外傳一則只有你看得到的訊息）*`
     );
 
   const cancelRow = new ActionRowBuilder().addComponents(

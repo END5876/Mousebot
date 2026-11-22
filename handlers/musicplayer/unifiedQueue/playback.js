@@ -83,7 +83,7 @@ function _buildEmbed(guildId) {
 
   if (!np) return null;
 
-  let loopText = '❌ 關閉';
+  let loopText = '➡️ 不循環';
   if (loopMode === 'one') loopText = '🔂 單曲循環';
   if (loopMode === 'all') loopText = '🔁 列表循環';
   if (isRandomPlay) loopText = '🎲 隨機連播';
@@ -95,7 +95,7 @@ function _buildEmbed(guildId) {
     .setColor(paused ? 0x95A5A6 : isRandomPlay ? 0xFF8C00 : 0x1DB954)
     .setTitle(paused ? '⏸️ 已暫停' : '🎵 正在播放')
     .setTimestamp()
-    .setFooter({ text: '📋 使用下方按鈕控制播放' });
+    .setFooter({ text: '用下方按鈕控制播放' });
 
   if (item.type === 'bilibili') {
     embed
@@ -398,7 +398,7 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
               ? `[${md(manualNext.title)}](${manualNext.url})`
               : `🎧 **${md(manualNext.title)}**`
           )
-          .addFields({ name: '提示', value: '此曲播放完畢後將繼續隨機連播', inline: false })
+          .addFields({ name: '提示', value: '這首播完會繼續隨機連播。', inline: false })
           .setTimestamp();
         if (manualNext.thumbnail) manualEmbed.setThumbnail(manualNext.thumbnail);
         sendTo.send({ embeds: [manualEmbed] }).catch(() => {});
@@ -414,13 +414,13 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
       if (!next) {
         logger.success('UnifiedQueue', '隨機連播：找不到本地音樂，停止');
         stopAll(guildId);
-        sendTo.send('✅ 找不到本地音樂，隨機連播已停止').catch(() => {});
+        sendTo.send('ℹ️ 音樂庫裡沒有歌了，隨機連播已停止。').catch(() => {});
         return;
       }
 
       const nextEmbed = new EmbedBuilder()
         .setColor(0xFF8C00)
-        .setTitle('🎲 隨機連播 — 下一首')
+        .setTitle('🎲 隨機連播：下一首')
         .setDescription(`🎧 **${md(next.title)}**`)
         .setTimestamp();
       sendTo.send({ embeds: [nextEmbed] }).catch(() => {});
@@ -501,11 +501,11 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
     if (errorCount >= MAX_CONSECUTIVE_PLAY_ERRORS) {
       logger.error('UnifiedQueue', `連續 ${errorCount} 首播放失敗，停止播放 (${guildId})`);
       stopAll(guildId);
-      sendTo.send(`❌ 連續 ${errorCount} 首播放失敗，已停止播放`).catch(() => {});
+      sendTo.send(`⚠️ 連續 ${errorCount} 首都播不出來，已停止播放。請確認網址或網路，再用 /play 點一次。`).catch(() => {});
       return;
     }
 
-    sendTo.send(`❌ 播放 **${md(item.title)}** 時發生錯誤，嘗試跳過...`).catch(() => {});
+    sendTo.send(`⚠️ **${md(item.title)}** 播不出來，已跳到下一首。`).catch(() => {});
 
     // 串流錯誤時 @discordjs/voice 會在 emit('error') 之後把 player 切到 Idle；引擎自己 emit 的錯誤
     // （下載失敗、重試用盡）則可能已經是 Idle。兩種都只在這裡換一次歌，
@@ -527,8 +527,11 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
       await engine.playStream(guildId, item, player, { silent, countPlay });
     }
   } catch (err) {
-    logger.error('UnifiedQueue', '引擎啟動失敗:', err.message);
-    notifyChannel.send(`❌ 無法播放 **${md(item.title)}**：${err.message}`).catch(() => {});
+    // 技術細節（yt-dlp、engine 的錯誤）只寫 log，頻道裡寫使用者能做什麼
+    logger.error('UnifiedQueue', `引擎啟動失敗（${item.title}）：`, err.message);
+    notifyChannel.send(item.type === 'bilibili'
+      ? `⚠️ **${md(item.title)}** 播不出來，可能是私人影片、有地區限制或網址打錯。請換一個網址，或改用關鍵字搜尋。`
+      : `⚠️ **${md(item.title)}** 現在播不了，可能檔案已被移除。請用 /play 換一首。`).catch(() => {});
     if (nowPlaying.get(guildId)?.player === player) nowPlaying.delete(guildId);
     return;
   }
@@ -826,7 +829,7 @@ async function _connectTo({ guild, voiceChannel, textChannel, client }) {
       voiceMonitor.stopMonitoring(guildId);
       connections.delete(guildId);
       const sendTo = _getNotifyChannel(guildId, textChannel);
-      sendTo?.send('❌ 語音連線已斷開，請重新使用指令播放').catch(() => {});
+      sendTo?.send('⚠️ Bot 跟語音頻道斷線了，佇列已清空。用 /play 就能重新開始。').catch(() => {});
     }
   });
 

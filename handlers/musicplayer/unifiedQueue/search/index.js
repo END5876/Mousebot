@@ -35,27 +35,27 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
   try {
     connection = await ensureConnection(interaction);
   } catch {
-    return interaction.editReply('❌ 加入語音頻道時發生錯誤');
+    return interaction.editReply('❌ 沒能加入語音頻道，請再試一次。');
   }
-  if (!connection) return interaction.editReply('❌ 你必須先加入語音頻道！');
+  if (!connection) return interaction.editReply('🔈 先加入一個語音頻道，Bot 才知道要去哪裡播。加入後再用一次指令。');
 
   if (input.startsWith(SEARCH_MARKER)) {
     const keyword = input.slice(SEARCH_MARKER.length).trim();
-    if (!keyword) return interaction.editReply('❌ 搜尋關鍵字不可為空');
+    if (!keyword) return interaction.editReply('⚠️ 請輸入要搜尋的關鍵字。');
     return _handleOnlineSearch(interaction, keyword, guildId);
   }
 
   // autocomplete 選了長檔名的本地音樂（value 是標記 + 雜湊）→ 換回完整檔名
   if (input.startsWith(LOCAL_KEY_MARKER)) {
     const filename = resolveLocalKey(input);
-    if (!filename) return interaction.editReply('❌ 找不到這首本地音樂（音樂庫可能已變動），請重新選擇');
+    if (!filename) return interaction.editReply('⚠️ 音樂庫裡找不到這首（清單可能剛更新過），請重新用 /play 選一次。');
     input = filename;
   }
 
   const cleanInput = cleanUrl(input);
   // cleanUrl 遇到網址裡互相衝突的影片 ID（例如 /shorts/<A>?v=<B>）會回傳空字串
   if (!cleanInput && /^https?:\/\//i.test(input.trim())) {
-    return interaction.editReply('❌ 無法辨識這個網址指向哪一部影片（網址裡有互相衝突的影片 ID）');
+    return interaction.editReply('⚠️ 看不出這個網址是哪一部影片，請從影片頁重新複製網址。');
   }
   // 只有「scheme://」形式才算網址：new URL('Re:Zero opening') 也會成功（協定是 're:'），
   // 這種關鍵字/檔名要走本地或線上搜尋，不能被當成不支援的網址拒絕
@@ -65,20 +65,20 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
   let item;
 
   if (isUrl) {
-    if (!isSupportedMediaUrl(cleanInput)) return interaction.editReply('❌ 只支援 YouTube 與 Bilibili 的網址');
+    if (!isSupportedMediaUrl(cleanInput)) return interaction.editReply('⚠️ 只支援 YouTube 和 Bilibili 的網址。');
 
     const engine = _engines.bilibili;
-    if (!engine) return interaction.editReply('⏳ 線上音樂引擎初始化中，請稍後再試');
+    if (!engine) return interaction.editReply('⏳ Bot 剛啟動，線上音樂還在準備，約 30 秒後再試一次。');
 
     // YouTube 網址沒有 list= 參數就不可能是播放清單，直接跳過偵測（省一次 yt-dlp）
     const needPlaylistCheck = typeof engine.checkPlaylist === 'function' && !_isYouTubeWithoutList(input);
     const infoMsg = () => interaction.editReply({
-      embeds: [new EmbedBuilder().setColor(0x1DB954).setDescription('🔍 正在獲取影片資訊...')]
+      embeds: [new EmbedBuilder().setColor(0x95A5A6).setDescription('🔍 正在讀取這個影片…（通常 5 秒內）')]
     });
 
     await (needPlaylistCheck
       ? interaction.editReply({
-          embeds: [new EmbedBuilder().setColor(0x1DB954).setDescription('🔍 正在檢查網址類型...')]
+          embeds: [new EmbedBuilder().setColor(0x95A5A6).setDescription('🔍 正在讀取這個網址…（通常 5 秒內）')]
         })
       : infoMsg());
 
@@ -117,7 +117,7 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
     let { info, error } = await infoResult;
     // 使用者在播放清單選單停留期間，並行的 getInfo 可能已逾時；照原本「選完才抓」的流程再抓一次
     if (error && askedPlaylist) ({ info, error } = await fetchInfo());
-    if (error) return interaction.editReply(`❌ 無法獲取影片資訊：${error.message}`);
+    if (error) return interaction.editReply('⚠️ 讀不到這個影片，可能是私人影片、有地區限制或網址打錯。請換一個網址，或改用關鍵字搜尋。');
 
     item = info;
     item.type = 'bilibili';

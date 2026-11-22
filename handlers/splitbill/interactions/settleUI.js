@@ -26,7 +26,7 @@ const { memberMention } = require('../utils/tripHelper');
 function formatExpenseSections(bucketsByCurrency, trip) {
   const categories = [
     { field: 'paid',  prefix: '➕', label: '幫大家先墊的錢' },
-    { field: 'share', prefix: '➖', label: '自己該分攤的花費' },
+    { field: 'share', prefix: '➖', label: '自己該分攤的支出' },
   ];
 
   const sections = [];
@@ -149,12 +149,12 @@ module.exports = {
     if (customId === 'set_nav') {
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
-        .setTitle('📊 結算與淨額中心')
+        .setTitle('📊 結算')
         .setDescription(`目前行程：**${trip.name}**\n要看什麼？`);
 
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('set_btn_balance').setLabel('🟢 查看每人淨額').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('set_btn_transfer').setLabel('🚀 建議轉帳清單').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('set_btn_balance').setLabel('🟢 每個人要付或可拿回多少').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('set_btn_transfer').setLabel('🚀 建議轉帳').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId('exp_btn_ledger_last__set').setLabel('📒 查看帳目清單').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('nav_main').setLabel('⬅️ 返回主選單').setStyle(ButtonStyle.Secondary)
       );
@@ -185,7 +185,7 @@ module.exports = {
 
       const renderMember = ({ m, val }) => {
         const statusIcon = val > 0 ? '🟢' : '🔴';
-        const actionText = val > 0 ? '需收回' : '需付款';
+        const actionText = val > 0 ? '可拿回' : '要付';
         const titleLine = `**${statusIcon} ${memberMention(trip, m.id)} ${actionText} ${round2(Math.abs(val))} ${trip.baseCurrency}**`;
 
         const sections = formatExpenseSections(netByCurrency[m.id], trip);
@@ -198,18 +198,18 @@ module.exports = {
       const groups = [];
       if (owing.length) {
         const [first, ...rest] = owing.map(renderMember);
-        groups.push([`**🔴 需要付款**\n\n${first}`, ...rest]);
+        groups.push([`**🔴 要付錢的人**\n\n${first}`, ...rest]);
       }
       if (receiving.length) {
         const [first, ...rest] = receiving.map(renderMember);
-        groups.push([`**🟢 需要收款**\n\n${first}`, ...rest]);
+        groups.push([`**🟢 可以拿回錢的人**\n\n${first}`, ...rest]);
       }
       if (settled.length) {
-        groups.push([`**⚪ 已結清**\n${settled.map(m => memberMention(trip, m.id)).join('、')} 帳目兩清，無需收付`]);
+        groups.push([`**⚪ 已結清**\n${settled.map(m => memberMention(trip, m.id)).join('、')} 不用付也不用拿回。`]);
       }
 
       // 金額其實是行程的基準幣別，不一定是 TWD
-      const tip = `💡 以上金額已依記帳當下匯率換算成 ${trip.baseCurrency}，方便對帳。想知道誰該轉給誰？可以到「建議轉帳清單」查看最省事的匯款方案。`;
+      const tip = `💡 金額都已依記帳當下的匯率換算成 ${trip.baseCurrency}。想知道誰該轉給誰？到「建議轉帳」看最省事的轉法。`;
       const blocks = [];
       groups.forEach((g, idx) => {
         if (idx > 0) blocks.push(BALANCE_SEPARATOR);
@@ -223,7 +223,7 @@ module.exports = {
 
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
-        .setTitle(`🟢 「${trip.name}」成員收支淨額`)
+        .setTitle(`🟢 「${trip.name}」每個人要付或可拿回多少`)
         .setDescription(pages[page]);
       if (pages.length > 1) embed.setFooter({ text: `第 ${page + 1} / ${pages.length} 頁` });
 
@@ -248,7 +248,7 @@ module.exports = {
 
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
-        .setTitle(`🚀 「${trip.name}」建議轉帳清單（基準幣別 ${trip.baseCurrency}）`);
+        .setTitle(`🚀 「${trip.name}」建議轉帳（以 ${trip.baseCurrency} 計）`);
 
       if (!transactions.length) {
         embed.setDescription('🎉 大家都結清了，不用再轉帳！');

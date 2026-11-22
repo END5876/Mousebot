@@ -95,7 +95,7 @@ async function handleModal(interaction, cache) {
         return interaction.followUp({ content: '⚠️ 找不到原本的行程（可能已被刪除），操作已取消，請重新開始。', flags: MessageFlags.Ephemeral });
       }
 
-      let note = '預收款/訂金';
+      let note = '預收款';
       if (state.depositPayerIds.length < 5) {
         try {
           const inputNote = interaction.fields.getTextInputValue('dep_note');
@@ -223,14 +223,14 @@ async function handleModal(interaction, cache) {
           `項目：**${desc}**\n` +
           `金額：**${amount} ${currency}**\n` +
           `匯率：**1 ${currency} = ${actualRate} ${trip.baseCurrency}** (${rateSource})\n\n` +
-          `👉 誰先幫大家付了這筆錢？\n*(💡 若為多人合資代墊，請直接複選)*`
+          `👉 誰先幫大家付了這筆錢？\n*（💡 若為多人合資代墊，請直接複選）*`
         );
 
       const memberOptions = trip.members.slice(0, 25).map(m => ({ label: m.name, value: m.id }));
       const selectRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(withDraftId('exp_select_payer', draftId))
-          .setPlaceholder('選擇代墊者 (可多選，最多5人)...')
+          .setPlaceholder('選擇代墊者（可多選，最多5人）...')
           .setMinValues(1)
           .setMaxValues(Math.min(memberOptions.length, 5))
           .addOptions(memberOptions)

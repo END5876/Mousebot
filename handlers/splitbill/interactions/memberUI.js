@@ -100,7 +100,7 @@ module.exports = {
     if (customId.startsWith('mem_confirm_remove::')) {
       const pinnedTrip = await loadPinnedTrip(interaction);
       if (!pinnedTrip) {
-        return interaction.reply({ content: '⚠️ 找不到行程（可能已被刪除或已在網頁解除綁定），請重新開啟面板。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 找不到行程（可能已被刪除，或已在網頁中斷與伺服器的連線），請重新開啟面板。', flags: MessageFlags.Ephemeral });
       }
       const token = customId.split('::')[2];
       const pending = pendingRemovals.get(token);
@@ -120,7 +120,7 @@ module.exports = {
     const { trip } = await splitbillClient.resolveTrip(guildId, null, user.id);
 
     if (customId === 'nav_main') return showMainMenu(interaction);
-    if (!trip) return showMainMenu(interaction, '⚠️ 找不到行程（可能已被刪除或已在網頁解除綁定）。');
+    if (!trip) return showMainMenu(interaction, '⚠️ 找不到行程（可能已被刪除，或已在網頁中斷與伺服器的連線）。');
 
     if (customId === 'mem_nav') {
       const unlinked = trip.members.filter((m) => !isLinkedMember(m)).length;
@@ -144,9 +144,9 @@ module.exports = {
     }
 
     if (customId === 'mem_btn_add_ui') {
-      const embed = new EmbedBuilder().setColor(0x9b59b6).setTitle('➕ 邀請成員加入行程').setDescription('請使用下方選單選擇要拉入此行程分帳的成員：');
+      const embed = new EmbedBuilder().setColor(0x9b59b6).setTitle('➕ 把伺服器成員加入行程').setDescription('從下方選單選人，選好就會直接加入這個行程。');
       const menuRow = new ActionRowBuilder().addComponents(
-        new UserSelectMenuBuilder().setCustomId(`mem_select_add::${trip.id}`).setPlaceholder('選取群組成員...').setMinValues(1).setMaxValues(10)
+        new UserSelectMenuBuilder().setCustomId(`mem_select_add::${trip.id}`).setPlaceholder('選伺服器成員（可以多選）').setMinValues(1).setMaxValues(10)
       );
       return interaction.update({ embeds: [embed], components: [menuRow] });
     }
@@ -177,7 +177,7 @@ module.exports = {
 
       const embed = new EmbedBuilder().setColor(0xe74c3c).setTitle('🗑️ 從行程移出成員').setDescription(
         '請選擇要移出的成員（可多選）：\n*（至少要留下 1 位已連結 Discord 的成員）*' +
-        (hiddenLinked ? `\n*(另有 ${hiddenLinked} 位已連結 Discord 的成員只有行程建立者可以移除，未列出)*` : '')
+        (hiddenLinked ? `\n*（另有 ${hiddenLinked} 位已連結 Discord 的成員只有行程建立者可以移除，未列出）*` : '')
       );
 
       const memberOptions = removable.slice(0, 25).map(m => (m.discordId
@@ -205,7 +205,7 @@ module.exports = {
         return interaction.reply({ content: '✅ 所有成員都已經連結 Discord 帳號了。', flags: MessageFlags.Ephemeral });
       }
       const embed = new EmbedBuilder().setColor(0x9b59b6).setTitle('🔗 連結 Discord 帳號（1/2）')
-        .setDescription('這些成員是在網頁上建立的，還沒有對應的 Discord 帳號。\n請先選擇要連結的是哪一位：\n\n*(本人也可以用網頁的邀請連結自己認領)*');
+        .setDescription('這些成員是在網頁上建立的，還沒有對應的 Discord 帳號。\n請先選擇要連結的是哪一位：\n\n*（本人也可以用網頁的邀請連結自己認領）*');
       const menuRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(`mem_select_link_member::${trip.id}`)
@@ -223,10 +223,10 @@ module.exports = {
         .setColor(0x9b59b6)
         .setTitle(`📋 行程「${trip.name}」成員名單`)
         .setDescription(trip.members.length
-          ? trip.members.map((m, i) => (m.discordId
-            ? `${i + 1}. <@${m.discordId}> (\`${m.name}\`)`
-            : `${i + 1}. ${m.name}　*（${m.lineId ? '已用 LINE 連結' : '尚未連結 Discord'}）*`)).join('\n')
-          : ' 目前沒有成員。');
+          ? trip.members.map((m) => (m.discordId
+            ? `• <@${m.discordId}>（${m.name}）`
+            : `• ${m.name}　*（${m.lineId ? '已用 LINE 連結' : '還沒連結 Discord'}）*`)).join('\n')
+          : '目前沒有成員。');
 
       const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('mem_nav').setLabel('⬅️ 返回成員管理').setStyle(ButtonStyle.Secondary));
       return interaction.update({ embeds: [embed], components: [row] });
@@ -238,7 +238,7 @@ module.exports = {
     const baseId = customId.split('::')[0];
     const trip = await loadPinnedTrip(interaction);
     if (!trip) {
-      return interaction.reply({ content: '⚠️ 找不到行程（可能已被刪除或已在網頁解除綁定），請重新開啟面板。', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: '⚠️ 找不到行程（可能已被刪除，或已在網頁中斷與伺服器的連線），請重新開啟面板。', flags: MessageFlags.Ephemeral });
     }
     const save = () => splitbillClient.saveTrip(guildId, trip.id, trip, { actorId: interaction.user.id });
 
@@ -253,7 +253,7 @@ module.exports = {
         addedCount++;
       }
       if (addedCount > 0) await save();
-      const skipNote = skipped.length ? `\n（機器人不能加入行程，已略過：${skipped.join('、')}）` : '';
+      const skipNote = skipped.length ? `\n（Bot 不能加入行程，已略過：${skipped.join('、')}）` : '';
       return showMainMenu(interaction, `✅ 成功將 ${addedCount} 位成員新增至行程「${trip.name}」！${skipNote}`);
     }
 

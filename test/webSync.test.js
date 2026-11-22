@@ -112,7 +112,7 @@ test('autojoin：不是音樂指令建立的語音連線，網頁也看得到；
       assert.equal(state.connections.get(AJ), conn, '音樂播放接手了 autojoin 的連線');
       assert.equal(require('../handlers/musicplayer/voiceActivityMonitor').isMonitoring(AJ), true, '並掛上閒置監控（同 /play）');
       await new Promise((r) => setImmediate(r));
-      assert.ok(sent.some((m) => /網頁播放器/.test(m)), '沒有點歌頻道時，紀錄發在語音頻道的文字聊天');
+      assert.ok(sent.some((m) => /裊器音樂/.test(m)), '沒有點歌頻道時，紀錄發在語音頻道的文字聊天');
     } finally {
       state._engines.local = prevLocal;
       for (const m of [state.queues, state.nowPlaying, state.connections]) m.delete(AJ);

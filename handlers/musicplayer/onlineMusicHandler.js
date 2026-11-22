@@ -221,7 +221,7 @@ async function getInfo(url, { signal } = {}) {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
-      reject(new Error('執行 yt-dlp 失敗: ' + err.message));
+      reject(new Error('執行 yt-dlp 失敗：' + err.message));
     });
   });
 }
@@ -758,10 +758,10 @@ async function setupOnlineMusicEngine() {
       `PO Token ${potVersion ? `✓（bgutil ${potVersion}）` : poToken ? '✓（手動）' : '✗'}`,
     ].join('、');
     if (!potVersion) logger.warn('OnlineMusic', 'bgutil PO Token 伺服器無回應，YouTube 較容易被判定為機器人');
-    bootSummary.report('線上音樂 (YouTube/Bilibili)', 'ok', `yt-dlp + FFmpeg 就緒｜${cookieBits}`);
+    bootSummary.report('線上音樂（YouTube/Bilibili）', 'ok', `yt-dlp + FFmpeg 就緒｜${cookieBits}`);
     logger.debug('OnlineMusic', `快取資料夾: ${cache.CACHE_DIR}（上限 ${cache.MAX_CACHE_SIZE_MB} MB）`);
   } else {
-    bootSummary.report('線上音樂 (YouTube/Bilibili)', 'warn', 'yt-dlp 或 FFmpeg 未就緒，功能可能無法正常運作');
+    bootSummary.report('線上音樂（YouTube/Bilibili）', 'warn', 'yt-dlp 或 FFmpeg 未就緒，功能可能無法正常運作');
   }
 
   registerEngine('bilibili', {

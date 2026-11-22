@@ -80,7 +80,7 @@ function encodeNormalizedMp3(inputPath, outputPath) {
 function _normalizeOne(filePath) {
   return new Promise((resolve, reject) => {
     if (!fs.existsSync(filePath)) {
-      return reject(new Error(`檔案不存在: ${filePath}`));
+      return reject(new Error(`檔案不存在：${filePath}`));
     }
 
     const dir  = path.dirname(filePath);
@@ -130,11 +130,11 @@ function _analyzeLoudness(filePath) {
       try {
         resolve(JSON.parse(match[0]));
       } catch (e) {
-        reject(new Error('loudnorm JSON 解析失敗: ' + e.message));
+        reject(new Error('loudnorm JSON 解析失敗：' + e.message));
       }
     });
 
-    ff.on('error', (err) => reject(new Error('執行 ffmpeg 分析失敗: ' + err.message)));
+    ff.on('error', (err) => reject(new Error('執行 ffmpeg 分析失敗：' + err.message)));
   });
 }
 
@@ -178,7 +178,7 @@ function _runFfmpeg(args, failLabel) {
       else reject(new Error(`${failLabel} (code ${code}): ${stderr.slice(-300)}`));
     });
 
-    ff.on('error', (err) => reject(new Error('執行 ffmpeg 轉檔失敗: ' + err.message)));
+    ff.on('error', (err) => reject(new Error('執行 ffmpeg 轉檔失敗：' + err.message)));
   });
 }
 

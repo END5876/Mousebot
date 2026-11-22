@@ -108,7 +108,7 @@ function validateCustomSplit(amount, shares) {
   const sum = round2(shares.reduce((s, x) => s + x.share, 0));
   const diff = round2(Math.abs(sum - amount));
   if (diff > 0.01) {
-    throw new Error(`各自應付的金額加起來是 ${sum}，跟總花費 ${amount} 差了 ${diff}`);
+    throw new Error(`各自分攤的金額加起來是 ${sum}，跟總花費 ${amount} 差了 ${diff}`);
   }
 }
 
@@ -383,7 +383,7 @@ async function loadRateTable(from) {
       const res = await fetch(`https://open.er-api.com/v6/latest/${encodeURIComponent(from)}`, {
         signal: AbortSignal.timeout(5000),
       });
-      if (!res.ok) throw new Error(`API 狀態碼異常: ${res.status}`);
+      if (!res.ok) throw new Error(`API 狀態碼異常：${res.status}`);
       const data = await res.json();
       if (!data || typeof data.rates !== 'object') return null;
       if (fxCache.size >= FX_CACHE_MAX) fxCache.delete(fxCache.keys().next().value);

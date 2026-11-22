@@ -156,7 +156,7 @@ function buildSplitModePayload(state) {
     .setDescription(
       `**${state.item}** — ${state.amount} ${state.currency}\n分攤對象：${participantNames}\n\n` +
       '請選擇分攤方式：' +
-      (canCustom ? '' : `\n*(⚠️ 分攤對象超過 ${CUSTOM_SPLIT_MODAL_LIMIT} 人，Discord 表單一次最多只能填 ${CUSTOM_SPLIT_MODAL_LIMIT} 人的金額，此時僅能使用「平均分攤」)*`)
+      (canCustom ? '' : `\n*（⚠️ 分攤對象超過 ${CUSTOM_SPLIT_MODAL_LIMIT} 人，Discord 表單一次最多只能填 ${CUSTOM_SPLIT_MODAL_LIMIT} 人的金額，此時僅能使用「平均分攤」）*`)
     );
 
   const btnRow = new ActionRowBuilder().addComponents(
@@ -258,12 +258,12 @@ module.exports = {
 
       const modal = new ModalBuilder()
         .setCustomId('qs_modal_custom_shares')
-        .setTitle(`✏️ 各自應付多少 (總計: ${state.amount})`);
+        .setTitle(`✏️ 每個人分攤多少（總計：${state.amount}）`);
 
       state.participants.forEach((p, idx) => {
         const input = new TextInputBuilder()
           .setCustomId(`share_${idx}`)
-          .setLabel(nameLabel(p.name, ' 應付多少（免費請填 0）？'))
+          .setLabel(nameLabel(p.name, ' 分攤多少（免費請填 0）？'))
           .setStyle(TextInputStyle.Short)
           .setPlaceholder('例如：0、300、700')
           .setRequired(true);
@@ -378,7 +378,7 @@ module.exports = {
       state.tempPayers = payerIds.map(id => ({ id, name: displayNameOf(interaction, id) }));
       cache.set(guildId, user.id, state);
 
-      const modal = new ModalBuilder().setCustomId('qs_modal_payer_amounts').setTitle(`多人代墊金額 (總計: ${state.amount})`);
+      const modal = new ModalBuilder().setCustomId('qs_modal_payer_amounts').setTitle(`多人代墊金額（總計：${state.amount}）`);
       state.tempPayers.forEach((p, idx) => {
         const input = new TextInputBuilder()
           .setCustomId(`amt_${idx}`)

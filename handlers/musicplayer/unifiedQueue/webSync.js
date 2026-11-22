@@ -216,7 +216,7 @@ function announce(guildId, text) {
   if (!ANNOUNCE) return;
   const guild = client.guilds.cache.get(guildId);
   const ch = guild ? notifyChannelFor(guild, voiceInfo(guildId).channelId) : null;
-  if (ch && typeof ch.send === 'function') ch.send(`🌐 網頁播放器：${text}`).catch(() => {});
+  if (ch && typeof ch.send === 'function') ch.send(`🌐 裊器音樂：${text}`).catch(() => {});
 }
 
 // 網頁點歌時的通知頻道：最近點歌的文字頻道 → 沒有的話用語音頻道內建的文字聊天（Bot 有權限發言時）
@@ -270,17 +270,17 @@ function prepareVoice(guildId) {
 async function resolveItem(raw) {
   if (raw?.kind === 'lib') {
     const engine = _engines.local;
-    if (!engine) fail('本地音樂引擎未就緒');
+    if (!engine) fail('Bot 剛啟動，音樂庫還在準備，請過一下再試。');
     const file = engine.getMusicFiles().find((f) => f.filename === raw.filename);
-    if (!file) fail('這台 Bot 的音樂庫清單還沒有這首歌（剛上傳的歌要等清單更新），請稍後再試');
+    if (!file) fail('這台 Bot 的音樂庫清單還沒有這首歌（剛上傳的歌要等清單更新），請過一下再試。');
     return { ...file, title: file.name, type: 'local' };
   }
   if (raw?.kind === 'online') {
     const engine = _engines.bilibili;
-    if (!engine || typeof engine.getInfo !== 'function') fail('線上音樂引擎未就緒');
+    if (!engine || typeof engine.getInfo !== 'function') fail('Bot 剛啟動，線上音樂還在準備，約 30 秒後再試一次。');
     if (!isSupportedMediaUrl(raw.url)) fail('只支援 YouTube 與 Bilibili 的網址');
     let info;
-    try { info = await engine.getInfo(raw.url); } catch (err) { fail(`無法取得影片資訊：${err.message}`); }
+    try { info = await engine.getInfo(raw.url); } catch { fail('讀不到這個影片，可能是私人影片、有地區限制或網址打錯。'); }
     return { ...info, type: 'bilibili' };
   }
   fail('不支援的歌曲格式');
@@ -302,13 +302,13 @@ async function execute(cmd) {
       // 用 skipCurrent：還在下載的那首 player 仍是 Idle，直接 stop() 不會生效
       if (randomPlaySettings.get(guildId)) {
         skipCurrent(guildId);
-        announce(guildId, `⏭️ 跳過「${md(np.item.title)}」，隨機連播下一首`);
-        return '已跳過，隨機連播下一首';
+        announce(guildId, `⏭️ 跳過「${md(np.item.title)}」，接著隨機連播下一首`);
+        return '已跳過，接著隨機連播下一首';
       }
       if (queue.length === 0 && loopMode === 'off') {
         stopAll(guildId);
-        announce(guildId, `⏭️ 跳過「${md(np.item.title)}」，佇列為空，停止播放`);
-        return '已跳過，佇列為空，停止播放';
+        announce(guildId, `⏭️ 跳過「${md(np.item.title)}」。佇列是空的，已停止播放`);
+        return '已跳過。佇列是空的，已停止播放';
       }
       // 單曲循環：跳到佇列下一首（單曲循環保持開著），佇列空了才重播目前這首
       if (loopMode === 'one') {
@@ -326,7 +326,7 @@ async function execute(cmd) {
     case 'resume': {
       needPlaying();
       const r = action === 'pause' ? pauseCurrent(guildId) : resumeCurrent(guildId);
-      if (r === 'busy') fail('Bot 正在播報語音或載入歌曲，請稍後再試');
+      if (r === 'busy') fail('Bot 正在播報語音或載入歌曲，請過幾秒再試。');
       if (r === 'already') return action === 'pause' ? '已經是暫停狀態' : '目前正在播放，沒有暫停';
       refreshControlPanel(guildId);
       announce(guildId, action === 'pause' ? `⏸️ 暫停「${md(np.item.title)}」` : `▶️ 繼續播放「${md(np.item.title)}」`);
@@ -346,7 +346,7 @@ async function execute(cmd) {
       loopSettings.set(guildId, mode);
       if (mode === 'all') resetLoopAllCycle(guildId);
       await refreshPanel(guildId);
-      const text = mode === 'one' ? '🔂 單曲循環已開啟' : mode === 'all' ? '🔁 列表循環已開啟' : '❌ 循環已關閉';
+      const text = mode === 'one' ? '🔂 已開啟單曲循環' : mode === 'all' ? '🔁 已開啟列表循環' : '➡️ 已改回不循環';
       announce(guildId, text);
       return text;
     }
@@ -360,7 +360,7 @@ async function execute(cmd) {
         resetShuffleBag(guildId); // 每次開啟都是新的一輪，與 uq_random_play 一致
       }
       await refreshPanel(guildId);
-      const text = on ? '🎲 隨機連播已開啟' : '❌ 隨機連播已關閉';
+      const text = on ? '🎲 已開啟隨機連播' : '➡️ 已關閉隨機連播';
       announce(guildId, text);
       return text;
     }
@@ -378,7 +378,7 @@ async function execute(cmd) {
       const queue = queues.get(guildId) || [];
       const i = Number(cmd.index);
       const target = queue[i];
-      if (!target || (cmd.key && itemKey(target) !== cmd.key)) fail('佇列已經變動，請重新整理後再試');
+      if (!target || (cmd.key && itemKey(target) !== cmd.key)) fail('佇列已經變動了，請重新載入頁面再試一次。');
       queue.splice(i, 1);
       session.schedule();
       announce(guildId, `➖ 從佇列移除「${md(target.title)}」`);
@@ -453,7 +453,7 @@ async function handleCommand(cmd) {
     result = { ok: true, message: await execute(cmd) };
     logger.info('WebSync', `網頁操作 ${cmd.action} (${cmd.guildId})：${result.message}`);
   } catch (err) {
-    result = { ok: false, message: err instanceof CommandError ? err.message : `執行失敗：${err.message}` };
+    result = { ok: false, message: err instanceof CommandError ? err.message : '沒能完成這個操作，請再試一次。' };
     if (!(err instanceof CommandError)) logger.error('WebSync', `執行網頁指令失敗 (${cmd.action})：`, err);
   }
   try {

@@ -197,7 +197,7 @@ async function saveTrip(guildId, tripId, trip, opts = {}) {
 // 「是否為建立者或 OWNER_USER_ID」，不只依賴 Bot 端的檢查。
 async function deleteTrip(guildId, tripId, actorId) {
   const trip = await resolveTripById(guildId, tripId);
-  if (!trip) throw new Error('找不到這個行程（可能已被刪除或已解除綁定）');
+  if (!trip) throw new Error('找不到這個行程（可能已被刪除，或已中斷與伺服器的連線）');
   return request('DELETE', `/trip/${encodeURIComponent(tripId)}`, undefined, actorHeaders(actorId));
 }
 

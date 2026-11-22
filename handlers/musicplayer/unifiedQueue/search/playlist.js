@@ -31,8 +31,7 @@ async function _askPlaylistChoice(interaction, playlistInfo) {
     new ButtonBuilder()
       .setCustomId('pl_cancel')
       .setLabel('取消')
-      .setEmoji('❌')
-      .setStyle(ButtonStyle.Danger),
+      .setStyle(ButtonStyle.Secondary),
   );
 
   const message = await interaction.editReply({
@@ -40,8 +39,8 @@ async function _askPlaylistChoice(interaction, playlistInfo) {
       new EmbedBuilder()
         .setColor(0x1DB954)
         .setTitle('📋 偵測到播放清單')
-        .setDescription(`「${playlistInfo.title}」共有 **${playlistInfo.count}** 首歌曲，請選擇加入方式：`)
-        .setFooter({ text: '請於 30 秒內選擇，逾時將只加入第一首' })
+        .setDescription(`「${playlistInfo.title}」共有 **${playlistInfo.count}** 首歌，要怎麼加入？`)
+        .setFooter({ text: '30 秒內沒選，就只加入你貼的這一首。' })
     ],
     components: [row],
   }).catch(() => null);
@@ -60,7 +59,7 @@ async function _askPlaylistChoice(interaction, playlistInfo) {
     });
   } catch {
     await interaction.editReply({
-      embeds: [new EmbedBuilder().setColor(0xFFA500).setDescription('⌛ 選擇逾時，將只加入第一首')],
+      embeds: [new EmbedBuilder().setColor(0x95A5A6).setDescription('⌛ 30 秒內沒選，只加入你貼的這一首。')],
       components: [],
     }).catch(() => {});
     return 'first';
@@ -69,7 +68,7 @@ async function _askPlaylistChoice(interaction, playlistInfo) {
   }
 
   if (selection.customId === 'pl_cancel') {
-    await selection.update({ content: '❌ 已取消加入播放清單', embeds: [], components: [] });
+    await selection.update({ content: '已取消，沒有加入播放清單。', embeds: [], components: [] });
     return 'cancel';
   }
 
@@ -77,8 +76,8 @@ async function _askPlaylistChoice(interaction, playlistInfo) {
     embeds: [
       new EmbedBuilder().setColor(0x1DB954).setDescription(
         selection.customId === 'pl_all'
-          ? '📋 正在加入整個播放清單，請稍候...'
-          : '🔍 正在獲取影片資訊...'
+          ? '📋 正在加入整個播放清單…（歌多的話要十幾秒）'
+          : '🔍 正在讀取這個影片…（通常 5 秒內）'
       )
     ],
     components: [],
@@ -129,9 +128,8 @@ async function _handleAddPlaylist(interaction, baseUrl, playlistInfo, guildId) {
     .setDescription(`「${playlistInfo.title}」`)
     .addFields(
       { name: '✅ 成功加入', value: `${addedCount} 首`, inline: true },
-      ...(skippedCount > 0 ? [{ name: '⚠️ 已跳過', value: `${skippedCount} 首（無法解析網址）`, inline: true }] : []),
+      ...(skippedCount > 0 ? [{ name: '⚠️ 沒有加入', value: `${skippedCount} 首（私人或已刪除的影片）`, inline: true }] : []),
     )
-    .setFooter({ text: '💡 metadata 取自快速清單模式，播放時仍會取得完整資訊' })
     .setTimestamp();
 
   await interaction.editReply({ embeds: [embed], components: [] });

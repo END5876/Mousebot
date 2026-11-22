@@ -22,7 +22,7 @@ function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'ex
     const embed = new EmbedBuilder()
       .setColor(0x95a5a6)
       .setTitle(`📒 「${trip.name}」總帳目清單`)
-      .setDescription('📭 目前尚無任何花費或訂金紀錄。');
+      .setDescription('📭 還沒有任何支出或預收款。');
 
     const navRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(backNav.customId).setLabel(backNav.label).setStyle(ButtonStyle.Secondary)
@@ -45,12 +45,12 @@ function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'ex
     if (r.type === 'expense') {
       const payers = r.payers.map(p => memberDisplay(trip, p.userId)).join('、');
       const participantsText = formatParticipantsList(trip, r.participants, r.currency);
-      return `**#${globalIdx}** \`[花費]\` **${r.description}**\n${amountText}\n> 🕒 ${dateStr}・由 ${payers} 代墊\n> 💸 分攤：${participantsText}`;
+      return `**#${globalIdx}** \`[支出]\` **${r.description}**\n${amountText}\n> 🕒 ${dateStr}・由 ${payers} 代墊\n> 💸 分攤：${participantsText}`;
     } else {
       const payer = memberDisplay(trip, r.payerId);
       const collector = memberDisplay(trip, r.collectorId);
       const noteText = r.note ? `\n> 📝 備註：${r.note}` : '';
-      return `**#${globalIdx}** \`[訂金]\` **${payer} → ${collector}**\n${amountText}\n> 🕒 ${dateStr}${noteText}`;
+      return `**#${globalIdx}** \`[預收]\` **${payer} → ${collector}**\n${amountText}\n> 🕒 ${dateStr}${noteText}`;
     }
   }).join('\n\n');
 
@@ -73,10 +73,10 @@ function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'ex
       {
         name: '📊 總覽',
         value:
-          `🧾 花費筆數：\`${trip.expenses.length} 筆\`\n` +
+          `🧾 支出筆數：\`${trip.expenses.length} 筆\`\n` +
           `💰 轉帳筆數：\`${(trip.deposits || []).length} 筆\`\n` +
-          `💵 花費總額：**${round2(totalExpenseBase)} ${trip.baseCurrency}**${breakdownText ? `（${breakdownText}）` : ''}\n` +
-          `🏦 訂金總額：**${round2(totalDepositBase)} ${trip.baseCurrency}**`
+          `💵 支出總額：**${round2(totalExpenseBase)} ${trip.baseCurrency}**${breakdownText ? `（${breakdownText}）` : ''}\n` +
+          `🏦 預收款總額：**${round2(totalDepositBase)} ${trip.baseCurrency}**`
       }
     )
     .setFooter({ text: `第 ${safePage + 1} / ${totalPages} 頁・共 ${allRecords.length} 筆紀錄\n💡 可用下方選單直接刪除本頁任一筆（刪除前會再次確認）` });
@@ -87,8 +87,8 @@ function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'ex
       .setPlaceholder('🗑️ 選擇本頁一筆帳目將其刪除...')
       .addOptions(pageRecords.map(r => ({
         label: r.type === 'expense'
-          ? `[花費] ${r.description} (${r.amount} ${r.currency})`.slice(0, 100)
-          : `[訂金] ${memberDisplay(trip, r.payerId)} 給 ${memberDisplay(trip, r.collectorId)} (${r.amount} ${r.currency})`.slice(0, 100),
+          ? `[支出] ${r.description} (${r.amount} ${r.currency})`.slice(0, 100)
+          : `[預收] ${memberDisplay(trip, r.payerId)} 給 ${memberDisplay(trip, r.collectorId)} (${r.amount} ${r.currency})`.slice(0, 100),
         value: `${r.type}_${r.id}`
       })))
   );

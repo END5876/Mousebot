@@ -113,7 +113,7 @@ async function completeExpenseLogging(interaction, trip, state, participantIds, 
       const payerText = newExpense.payers.map(p => memberMention(trip, p.userId)).join(', ');
       const shareText = shares.map(s => `${memberMention(trip, s.userId)}(${s.share})`).join('、');
       const amountText = formatAmountConversion(newExpense.amount, newExpense.currency, amountInBase, trip.baseCurrency);
-      const msg = `✅ **記帳成功（自訂分攤）！** 項目：${newExpense.description} | 金額：${amountText}\n代墊：${payerText}\n各自應付：${shareText}`;
+      const msg = `✅ **已記下（自訂分攤）** 項目：${newExpense.description} | 金額：${amountText}\n代墊：${payerText}\n各自應付：${shareText}`;
       
       return showMainMenu(interaction, msg);
 

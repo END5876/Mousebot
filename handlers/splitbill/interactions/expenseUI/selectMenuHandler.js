@@ -38,7 +38,7 @@ async function handleSelectMenu(interaction, cache) {
 
         const curInput = new TextInputBuilder()
           .setCustomId('currency')
-          .setLabel('幣別代碼 (例如：EUR、SGD、CNY)')
+          .setLabel('幣別代碼（例如：EUR、SGD、CNY）')
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
           .setMaxLength(10);
@@ -76,8 +76,8 @@ async function handleSelectMenu(interaction, cache) {
 
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
-        .setTitle('💰 步驟 2/4：選擇收款人')
-        .setDescription(`幣別：**${selectedCurrency}**\n\n誰負責「代收」這筆訂金？\n*(例如：負責統一訂機票/住宿的人)*`);
+        .setTitle('💰 步驟 2/4：誰收錢')
+        .setDescription(`幣別：**${selectedCurrency}**\n\n誰負責收這筆預收款？\n*（例如：負責統一訂機票、住宿的人）*`);
 
       const selectRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
@@ -108,13 +108,13 @@ async function handleSelectMenu(interaction, cache) {
 
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
-        .setTitle('💰 步驟 3/4：選擇付款人')
-        .setDescription(`幣別：**${state.depositCurrency}**\n\n誰「付錢」給了收款人？\n*(💡 可多選，最多 ${maxSelect} 人)*`);
+        .setTitle('💰 步驟 3/4：誰付錢給他（可多選）')
+        .setDescription(`幣別：**${state.depositCurrency}**\n\n誰「付錢」給了收款人？\n*（💡 可多選，最多 ${maxSelect} 人）*`);
 
       const selectRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId('exp_select_deposit_payer')
-          .setPlaceholder(`選擇付款人 (可多選，最多 ${maxSelect} 人)...`)
+          .setPlaceholder(`選擇付款人（可多選，最多 ${maxSelect} 人）...`)
           .setMinValues(1)
           .setMaxValues(maxSelect)
           .addOptions(availableMembers.slice(0, 25).map(m => ({ label: m.name, value: m.id })))
@@ -142,13 +142,13 @@ async function handleSelectMenu(interaction, cache) {
 
       const modal = new ModalBuilder()
         .setCustomId('exp_modal_multi_deposit')
-        .setTitle(`💰 步驟 4/4：輸入訂金金額 (${state.depositCurrency})`);
+        .setTitle(`💰 步驟 4/4：預收款金額（${state.depositCurrency}）`);
 
       values.forEach((id, idx) => {
         const memberName = pinnedTrip.members.find(m => m.id === id).name;
         const amountInput = new TextInputBuilder()
           .setCustomId(`dep_amount_${idx}`)
-          .setLabel(nameLabel(memberName, ` 付了多少 (${state.depositCurrency})？`))
+          .setLabel(nameLabel(memberName, ` 付了多少（${state.depositCurrency}）？`))
           .setStyle(TextInputStyle.Short)
           .setRequired(true);
         modal.addComponents(new ActionRowBuilder().addComponents(amountInput));
@@ -157,7 +157,7 @@ async function handleSelectMenu(interaction, cache) {
       if (values.length < 5) {
         const noteInput = new TextInputBuilder()
           .setCustomId('dep_note')
-          .setLabel('備註 (選填，例如：機票+住宿訂金)')
+          .setLabel('備註（選填，例如：機票＋住宿）')
           .setStyle(TextInputStyle.Short)
           .setRequired(false);
         modal.addComponents(new ActionRowBuilder().addComponents(noteInput));
@@ -172,11 +172,11 @@ async function handleSelectMenu(interaction, cache) {
       // 送出表單時直接鎖定這個 tripId，不受使用者中途切換作用行程影響。
       const modal = new ModalBuilder()
         .setCustomId(`exp_modal_add_${selectedCurrency}::${trip.id}`)
-        .setTitle(`步驟 2/3：新增花費 (${selectedCurrency})`);
+        .setTitle(`步驟 2/3：新增支出（${selectedCurrency}）`);
 
-      const descInput = new TextInputBuilder().setCustomId('desc').setLabel('項目名稱 (例如：計程車、晚餐)').setStyle(TextInputStyle.Short).setRequired(true);
-      const amountInput = new TextInputBuilder().setCustomId('amount').setLabel(`金額 (單位: ${selectedCurrency})`).setStyle(TextInputStyle.Short).setRequired(true);
-      const rateInput = new TextInputBuilder().setCustomId('custom_rate').setLabel(`自訂匯率 (1 ${selectedCurrency} = ? ${trip.baseCurrency})`).setStyle(TextInputStyle.Short).setPlaceholder('💡 留空將自動抓取當下即時網路匯率').setRequired(false);
+      const descInput = new TextInputBuilder().setCustomId('desc').setLabel('項目名稱（例如：計程車、晚餐）').setStyle(TextInputStyle.Short).setRequired(true);
+      const amountInput = new TextInputBuilder().setCustomId('amount').setLabel(`金額（單位：${selectedCurrency}）`).setStyle(TextInputStyle.Short).setRequired(true);
+      const rateInput = new TextInputBuilder().setCustomId('custom_rate').setLabel(`自訂匯率（1 ${selectedCurrency} = ? ${trip.baseCurrency}）`).setStyle(TextInputStyle.Short).setPlaceholder('💡 留空將自動抓取當下即時網路匯率').setRequired(false);
 
       modal.addComponents(new ActionRowBuilder().addComponents(descInput), new ActionRowBuilder().addComponents(amountInput), new ActionRowBuilder().addComponents(rateInput));
       return interaction.showModal(modal);
@@ -204,7 +204,7 @@ async function handleSelectMenu(interaction, cache) {
         return renderSplitMethodUI(interaction, state, pinnedTrip);
       } else {
         state.tempPayerIds = payerIds; 
-        const modal = new ModalBuilder().setCustomId(withDraftId('exp_modal_multi_payer', draftId)).setTitle(`輸入多人代墊金額 (總計: ${state.amount})`);
+        const modal = new ModalBuilder().setCustomId(withDraftId('exp_modal_multi_payer', draftId)).setTitle(`輸入多人代墊金額（總計：${state.amount}）`);
 
         payerIds.forEach((id, idx) => {
           const memberName = pinnedTrip.members.find(m => m.id === id).name;
@@ -246,13 +246,13 @@ async function handleSelectMenu(interaction, cache) {
 
       const modal = new ModalBuilder()
         .setCustomId(withDraftId('exp_modal_custom_split', draftId))
-        .setTitle(`✏️ 輸入各自應付金額 (總計: ${state.amount})`);
+        .setTitle(`✏️ 每個人分攤多少（總計：${state.amount}）`);
 
       values.forEach((id, idx) => {
         const memberName = pinnedTrip.members.find(m => m.id === id).name;
         const input = new TextInputBuilder()
           .setCustomId(`share_${idx}`)
-          .setLabel(nameLabel(memberName, ' 應付多少 (免費請填 0)？'))
+          .setLabel(nameLabel(memberName, ' 分攤多少（免費請填 0）？'))
           .setStyle(TextInputStyle.Short)
           .setPlaceholder('例如：0、1000、2000')
           .setRequired(true);
@@ -274,13 +274,13 @@ async function handleSelectMenu(interaction, cache) {
 
       if (type === 'expense') {
         record = trip.expenses.find(e => e.id === realId);
-        if (!record) return interaction.reply({ content: '⚠️ 找不到此花費帳目，可能已被其他人刪除。', flags: MessageFlags.Ephemeral });
+        if (!record) return interaction.reply({ content: '⚠️ 找不到這筆支出，可能已被其他人刪除。', flags: MessageFlags.Ephemeral });
 
         const amountText = formatAmountConversion(record.amount, record.currency, record.amountInBase, trip.baseCurrency);
         const payers = record.payers.map(p => memberDisplay(trip, p.userId)).join('、');
         const participantsText = formatParticipantsList(trip, record.participants, record.currency);
 
-        titleText = `[花費] ${record.description}`;
+        titleText = `[支出] ${record.description}`;
         color = 0xe74c3c;
         detailText =
           `💰 金額：${amountText}\n` +
@@ -288,10 +288,10 @@ async function handleSelectMenu(interaction, cache) {
           `📊 分攤：${participantsText}`;
       } else if (type === 'deposit') {
         record = trip.deposits.find(d => d.id === realId);
-        if (!record) return interaction.reply({ content: '⚠️ 找不到此訂金紀錄，可能已被其他人刪除。', flags: MessageFlags.Ephemeral });
+        if (!record) return interaction.reply({ content: '⚠️ 找不到這筆預收款，可能已被其他人刪除。', flags: MessageFlags.Ephemeral });
 
         const amountText = formatAmountConversion(record.amount, record.currency, record.amountInBase, trip.baseCurrency);
-        titleText = `[訂金] ${memberDisplay(trip, record.payerId)} → ${memberDisplay(trip, record.collectorId)}`;
+        titleText = `[預收] ${memberDisplay(trip, record.payerId)} → ${memberDisplay(trip, record.collectorId)}`;
         color = 0xe74c3c;
         detailText =
           `💰 金額：${amountText}` +

@@ -47,7 +47,7 @@ async function _replyPlayResult(interaction, item, result) {
   }
 
   if (!result.queued) {
-    replyEmbed.setFooter({ text: '使用下方按鈕控制播放' });
+    replyEmbed.setFooter({ text: '用下方按鈕控制播放' });
   }
 
   await interaction.editReply({ embeds: [replyEmbed], components: [] });
@@ -94,12 +94,12 @@ function _buildSearchComponents(results) {
 async function _handleOnlineSearch(interaction, keyword, guildId) {
   const engine = _engines.bilibili;
   if (!engine || typeof engine.searchMulti !== 'function') {
-    return interaction.editReply('⏳ 線上音樂引擎初始化中，請稍後再試');
+    return interaction.editReply('⏳ Bot 剛啟動，線上音樂還在準備，約 30 秒後再試一次。');
   }
 
   await interaction.editReply({
     embeds: [
-      new EmbedBuilder().setColor(0x1DB954).setDescription(`🔍 正在搜尋「${keyword}」（YouTube + Bilibili）...`)
+      new EmbedBuilder().setColor(0x95A5A6).setDescription(`🔍 正在 YouTube 和 Bilibili 搜尋「${keyword}」…（最多約 20 秒）`)
     ],
     components: [],
   });
@@ -108,11 +108,11 @@ async function _handleOnlineSearch(interaction, keyword, guildId) {
   try {
     results = await engine.searchMulti(keyword, 5);
   } catch (err) {
-    return interaction.editReply(`❌ 搜尋失敗：${err.message}`);
+    return interaction.editReply('⚠️ 搜尋沒有完成，請過一下再試一次。');
   }
 
   if (!results || results.length === 0) {
-    return interaction.editReply(`❌ 找不到與「${keyword}」相關的結果`);
+    return interaction.editReply(`ℹ️ 找不到「${keyword}」。換個關鍵字試試，或直接貼上影片網址。`);
   }
 
   const listText = results
@@ -125,7 +125,7 @@ async function _handleOnlineSearch(interaction, keyword, guildId) {
         .setColor(0x1DB954)
         .setTitle(`🔍 搜尋結果：「${keyword}」（YouTube + Bilibili）`)
         .setDescription(listText)
-        .setFooter({ text: '請於 60 秒內從下方選單選擇（🎬 YouTube / 📺 Bilibili），或按取消' })
+        .setFooter({ text: '60 秒內從下方選單選一首（🎬 YouTube、📺 Bilibili），或按「取消搜尋」。' })
     ],
     components: _buildSearchComponents(results),
   }).catch(() => null);
@@ -143,7 +143,7 @@ async function _handleOnlineSearch(interaction, keyword, guildId) {
     });
   } catch {
     return interaction.editReply({
-      content: '⌛ 搜尋已逾時，請重新使用 /play',
+      content: '⌛ 超過 60 秒沒選，這次搜尋已經過期。請重新用 /play 搜尋。',
       embeds: [], components: [],
     }).catch(() => {});
   } finally {
@@ -151,14 +151,14 @@ async function _handleOnlineSearch(interaction, keyword, guildId) {
   }
 
   if (selection.customId === 'srch_cancel') {
-    return selection.update({ content: '❌ 已取消搜尋', embeds: [], components: [] });
+    return selection.update({ content: '已取消搜尋。', embeds: [], components: [] });
   }
 
   const picked = results[Number(selection.values[0])];
 
   await selection.update({
     embeds: [
-      new EmbedBuilder().setColor(0x1DB954).setDescription(`🔍 正在取得「${picked.title}」的資訊...`)
+      new EmbedBuilder().setColor(0x95A5A6).setDescription(`🔍 正在讀取「${picked.title}」…（通常 5 秒內）`)
     ],
     components: [],
   });
@@ -168,7 +168,7 @@ async function _handleOnlineSearch(interaction, keyword, guildId) {
     item = await engine.getInfo(picked.url);
     item.type = 'bilibili';
   } catch (err) {
-    return interaction.editReply(`❌ 無法獲取影片資訊：${err.message}`);
+    return interaction.editReply('⚠️ 讀不到這個影片，可能是私人影片、有地區限制或已經下架。請換一首。');
   }
 
   const result = await enqueue(guildId, item, interaction.channel);

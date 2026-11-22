@@ -53,7 +53,7 @@ function trackInfo(item) {
   return {
     key: itemKey(item),
     title: item.title || item.name || item.filename || '未知曲目',
-    source: online ? (/youtu\.?be/i.test(item.url || '') ? 'YouTube' : 'Bilibili') : '本地音樂',
+    source: online ? (/youtu\.?be/i.test(item.url || '') ? 'YouTube' : 'Bilibili') : '音樂庫',
     url: online ? item.url ?? null : null,
     author: online ? item.author || null : null,
     durationSec: item.durationSec || null,
@@ -193,7 +193,7 @@ function notifyChannelFor(guild, channelId) {
 /** 本地音樂清單（依播放次數排序），q 有值時以名稱篩選 */
 function libraryList(q, limit = 200) {
   const engine = state._engines.local;
-  if (!engine) throw new HttpError(503, '本地音樂引擎尚未就緒');
+  if (!engine) throw new HttpError(503, 'Bot 剛啟動，音樂庫還在準備，請過一下再試。');
   const keyword = String(q || '').trim().toLowerCase();
   const files = engine.getMusicFiles();
   const matched = keyword
@@ -214,16 +214,16 @@ async function onlineSearch(q, limit = 5) {
     const results = await engine.searchMulti(q, limit);
     return (results || []).map((r) => ({ title: r.title, url: r.url, platform: r.platform, author: r.author, duration: r.duration }));
   } catch (err) {
-    throw new HttpError(502, `搜尋失敗：${err.message}`);
+    throw new HttpError(502, '搜尋沒有完成，請過一下再試一次。');
   }
 }
 
 async function resolveItem(raw) {
   if (raw?.kind === 'lib') {
     const engine = state._engines.local;
-    if (!engine) throw new HttpError(503, '本地音樂引擎尚未就緒');
+    if (!engine) throw new HttpError(503, 'Bot 剛啟動，音樂庫還在準備，請過一下再試。');
     const file = engine.getMusicFiles().find((f) => f.filename === raw.filename);
-    if (!file) throw new HttpError(404, '找不到這首本地音樂，清單可能已經更新');
+    if (!file) throw new HttpError(404, '音樂庫裡找不到這首，清單可能剛更新過。');
     return { ...file, title: file.name, type: 'local' };
   }
   if (raw?.kind === 'online') {
@@ -234,7 +234,7 @@ async function resolveItem(raw) {
     try {
       return { ...(await engine.getInfo(cleanUrl(url))), type: 'bilibili' };
     } catch (err) {
-      throw new HttpError(502, `無法取得影片資訊：${err.message}`);
+      throw new HttpError(502, '讀不到這個影片，可能是私人影片、有地區限制或網址打錯。');
     }
   }
   throw new HttpError(400, '不支援的歌曲格式');

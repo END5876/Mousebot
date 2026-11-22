@@ -34,16 +34,16 @@ async function _handlePlayAll(interaction, shuffleOpt) {
   try {
     connection = await ensureConnection(interaction);
   } catch {
-    return interaction.editReply('❌ 加入語音頻道時發生錯誤');
+    return interaction.editReply('❌ 沒能加入語音頻道，請再試一次。');
   }
-  if (!connection) return interaction.editReply('❌ 你必須先加入語音頻道！');
+  if (!connection) return interaction.editReply('🔈 先加入一個語音頻道，Bot 才知道要去哪裡播。加入後再用一次指令。');
 
   const engine = _engines.local;
-  if (!engine) return interaction.editReply('❌ 本地音樂引擎未就緒');
+  if (!engine) return interaction.editReply('⏳ Bot 剛啟動，音樂庫還在準備，請過一下再試。');
 
   let files = engine.getMusicFiles();
   if (files.length === 0) {
-    return interaction.editReply('❌ music 資料夾內沒有可播放的音訊檔案！');
+    return interaction.editReply('ℹ️ 音樂庫還沒有歌。加歌之後就能用 /play 點播。');
   }
 
   if (shuffleOpt === 'yes') files = _shuffle(files);
@@ -59,18 +59,18 @@ async function _handlePlayAll(interaction, shuffleOpt) {
     addedCount++;
   }
 
-  const orderLabel = shuffleOpt === 'yes' ? '🔀 隨機排序' : '📋 依檔名順序';
+  const orderLabel = shuffleOpt === 'yes' ? '🔀 打亂順序' : '📋 照歌名順序';
   const previewLines = files
     .slice(0, 10)
     .map((f, i) => `\`${i + 1}.\` ${f.name}`)
     .join('\n');
   const moreText = files.length > 10
-    ? `\n*...以及另外 ${files.length - 10} 首*`
+    ? `\n*…還有 ${files.length - 10} 首*`
     : '';
 
   const embed = new EmbedBuilder()
     .setColor(0x1DB954)
-    .setTitle('📋 已將所有本地音樂加入佇列')
+    .setTitle('📋 已把音樂庫的歌全部加入佇列')
     .addFields(
       { name: '✅ 加入數量', value: `${addedCount} 首`, inline: true },
       { name: '🔢 排序方式', value: orderLabel, inline: true },
@@ -98,16 +98,16 @@ async function _handleLocalMultiSelect(interaction) {
   try {
     connection = await ensureConnection(interaction);
   } catch {
-    return interaction.editReply('❌ 加入語音頻道時發生錯誤');
+    return interaction.editReply('❌ 沒能加入語音頻道，請再試一次。');
   }
-  if (!connection) return interaction.editReply('❌ 你必須先加入語音頻道！');
+  if (!connection) return interaction.editReply('🔈 先加入一個語音頻道，Bot 才知道要去哪裡播。加入後再用一次指令。');
 
   const engine = _engines.local;
-  if (!engine) return interaction.editReply('❌ 本地音樂引擎未就緒');
+  if (!engine) return interaction.editReply('⏳ Bot 剛啟動，音樂庫還在準備，請過一下再試。');
 
   const files = engine.getMusicFiles();
   if (files.length === 0) {
-    return interaction.editReply('❌ music 資料夾內沒有可播放的音訊檔案！');
+    return interaction.editReply('ℹ️ 音樂庫還沒有歌。加歌之後就能用 /play 點播。');
   }
 
   const displayFiles = files.slice(0, LOCAL_MULTI_SELECT_LIMIT);
@@ -122,7 +122,7 @@ async function _handleLocalMultiSelect(interaction) {
   const selectRow = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId('lm_pick')
-      .setPlaceholder('請勾選要加入的本地音樂（可多選）...')
+      .setPlaceholder('勾選要加入的歌（可以多選）')
       .setMinValues(1)
       .setMaxValues(options.length)
       .addOptions(options)
@@ -137,16 +137,16 @@ async function _handleLocalMultiSelect(interaction) {
   );
 
   const noteText = truncated
-    ? `⚠️ 本地音樂共有 **${files.length}** 首，選單受 Discord 平台限制僅能顯示前 **${LOCAL_MULTI_SELECT_LIMIT}** 首。\n若需要清單外的曲目，請改用 \`/play\` 輸入關鍵字，自動完成選取單首加入。`
+    ? `ℹ️ 音樂庫共有 **${files.length}** 首，選單受 Discord 平台限制僅能顯示前 **${LOCAL_MULTI_SELECT_LIMIT}** 首。\n若需要清單外的曲目，請改用 \`/play\` 輸入關鍵字，自動完成選取單首加入。`
     : `共 **${files.length}** 首，請勾選要加入的曲目：`;
 
   const message = await interaction.editReply({
     embeds: [
       new EmbedBuilder()
         .setColor(0x1DB954)
-        .setTitle('📂 選擇多首本地音樂')
+        .setTitle('📂 從音樂庫選多首')
         .setDescription(noteText)
-        .setFooter({ text: '請於 60 秒內勾選並送出，或按取消' })
+        .setFooter({ text: '60 秒內勾選並送出，或按「取消」。' })
     ],
     components: [selectRow, cancelRow],
   }).catch(() => null);
@@ -165,7 +165,7 @@ async function _handleLocalMultiSelect(interaction) {
     });
   } catch {
     return interaction.editReply({
-      content: '⌛ 選擇已逾時，請重新使用 /play',
+      content: '⌛ 超過 60 秒沒選，這次選擇已經過期。請重新用 /play 選歌。',
       embeds: [], components: [],
     }).catch(() => {});
   } finally {
@@ -173,7 +173,7 @@ async function _handleLocalMultiSelect(interaction) {
   }
 
   if (selection.customId === 'lm_cancel') {
-    return selection.update({ content: '❌ 已取消選擇', embeds: [], components: [] });
+    return selection.update({ content: '已取消選擇。', embeds: [], components: [] });
   }
 
   const pickedFiles = selection.values
@@ -182,7 +182,7 @@ async function _handleLocalMultiSelect(interaction) {
 
   await selection.update({
     embeds: [
-      new EmbedBuilder().setColor(0x1DB954).setDescription(`➕ 正在加入 ${pickedFiles.length} 首本地音樂...`)
+      new EmbedBuilder().setColor(0x95A5A6).setDescription(`➕ 正在加入 ${pickedFiles.length} 首…`)
     ],
     components: [],
   });
@@ -203,7 +203,7 @@ async function _handleLocalMultiSelect(interaction) {
 
   const embed = new EmbedBuilder()
     .setColor(0x1DB954)
-    .setTitle('📂 已將所選本地音樂加入佇列')
+    .setTitle('📂 已把選的歌加入佇列')
     .addFields(
       { name: '✅ 加入數量', value: `${addedCount} 首`, inline: true },
       { name: '📄 曲目清單', value: previewLines },

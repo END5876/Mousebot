@@ -519,6 +519,8 @@ function runParent() {
 //   (4) 每個請求的本次訊息最前面多一行【現在時間：…】（單一人格在 CURRENT_TURN_DIVIDER 之後）；
 //       子程序把時間固定成 2026-01-01T04:00Z，見各處註解。system instruction 不變。
 // 2026-11-08 使用者要求：/music local list 改為 /music list；/splitbill-quick、/splitbill-attach 併入 /splitbill 子指令（panel／quick／attach）
+// 2026-11-22 UI 改版第 5 批（文案大掃除，ui-review/GLOSSARY.md）：/play、/music、/splitbill 的指令說明改用統一用詞
+//   （本地音樂→音樂庫、隨機排序→打亂順序、花費→支出、綁定→連到伺服器），只改說明文字，選項與行為不變。
 const EXPECTED = {
   "commands": {
     "order": [
@@ -537,19 +539,19 @@ const EXPECTED = {
       "play",
       "music"
     ],
-    "hash": "4761d35f9b177a372c2d4e0cc8a34923b25169b757afef9969c902f4ef41a8b2",
+    "hash": "9e6220e450e404ac8868a7254d4bcfeda3f45250c5923167b77c685cae95ad05",
     "perCommand": {
       "ai": "87328ef894fcd4ce0366a01fcfed1ca54e416bfd165ba046bccbb6ebec6dacdf",
       "autojoin": "3ac54ee7c6a6b7c7a0b4d98716ce2bb880d87c8a46f726b4b3e7846489426141",
-      "music": "da9faa26ca06492352190d96cf32b8cac037c5b8a3bc4db24cd088216c890a8c",
+      "music": "fb6d2846b5e1e84d8f83cc089b94403b03e80cbbfade9a4f9e1e397924e21c6c",
       "nh": "2ac77d917b93d75311bf6338e4971d199c92b3b323154ad1c62b45c431e5b94c",
       "notify": "f62c8eb19c08f5e189157b8459c10fad6352a5504c9e4837784e524365c7d66b",
       "ping": "b449edfcb32695a478ad802cf05f36888e51737afd0f85b7cf5751167616df56",
-      "play": "3e2f930bbd432e50c5dc65eae9fabb3d9861d1c63038d94bb05f4f9a3919d22a",
+      "play": "bc2190aae2d158a0eb17756e02ecaf1d455a0ad29406f7549c6f21864f7a4c31",
       "response": "cd5b787723643e981f1845e2896d2b9c804bbff32b041b575ab6c51658302770",
       "say": "775a34377aada8af947ed81ba43db5d0c360f0a11f21069bfa9bbe581d54d999",
       "serverinfo": "351cfffdbeb28e5b1bf6f70d72f06582483c351964977bf442336b9b9a0c49f0",
-      "splitbill": "53d6c7c2331216af2f6f50c8e691a92e95c9ed3c1f9a160dd6bb4dc8bcb261d6",
+      "splitbill": "f38bd21c7cee201c2cef81481ed01946d772cb5367993a83e2dc299a8099a7b5",
       "timeannounce": "4a36b0da2bd2c26df31c48e7efcd264ff7580250f2e591e72013cdfad688dfc6",
       "tts": "2b790133e03c55ea44480148bd476980807209b0b2596a37fb6fd9c70c642b47",
       "voice": "14194d4c788830e1e057817b8d40ec654339d2c4c1757a7b56c72254d2e4ea8e"

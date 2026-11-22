@@ -35,9 +35,9 @@ async function handleButton(interaction, cache) {
         .setDescription(`目前行程：**${trip.name}**\n要做什麼？`);
 
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('exp_btn_add_start').setLabel('➕ 新增花費').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('exp_btn_add_start').setLabel('➕ 新增支出').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('exp_btn_scan_start').setLabel('📷 掃描帳單新增').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('exp_btn_deposit_start').setLabel('💰 收取金額').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('exp_btn_deposit_start').setLabel('💰 預收款').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId('exp_btn_ledger_last__exp').setLabel('📒 總帳目清單／刪除').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主選單').setStyle(ButtonStyle.Secondary)
       );
@@ -47,22 +47,22 @@ async function handleButton(interaction, cache) {
 
     if (customId === 'exp_btn_deposit_start') {
       if (!trip.members || trip.members.length < 2) {
-        return interaction.reply({ content: '⚠️ 行程至少要有兩位成員才能記訂金，請先到「👥 成員管理」新增成員。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 行程至少要有兩位成員才能記預收款，請先到「👥 成員管理」新增成員。', flags: MessageFlags.Ephemeral });
       }
 
       const currencies = Object.keys(trip.rates);
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
         .setTitle('💰 步驟 1/4：選擇幣別')
-        .setDescription(`這筆訂金是用哪種幣別收的？\n*會依今天的匯率換算成 ${trip.baseCurrency} 記下來，之後匯率變動不影響這筆。*`);
+        .setDescription(`預收款是出發前先向大家收的錢（例如團費、公基金）。這筆是用哪種幣別收的？\n*會依今天的匯率換算成 ${trip.baseCurrency} 記下來，之後匯率變動不影響這筆。*`);
 
       const selectRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId('exp_select_deposit_currency')
-          .setPlaceholder('選擇訂金幣別...')
+          .setPlaceholder('選擇幣別')
           .addOptions(
             currencies.map(c => ({
-              label: `${c}${c === trip.baseCurrency ? '（基準幣別）' : ''}`,
+              label: `${c}${c === trip.baseCurrency ? '（結算用）' : ''}`,
               value: c
             })).slice(0, 25)
           )
@@ -84,7 +84,7 @@ async function handleButton(interaction, cache) {
       const embed = new EmbedBuilder()
         .setColor(0x3498db)
         .setTitle('💱 步驟 1/3：請選擇幣別')
-        .setDescription('為方便計算，請先由下方選單選擇此筆花費的「結帳幣別」。');
+        .setDescription('先從下方選單選這筆支出是用哪種幣別付的。');
 
       const selectRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
@@ -92,8 +92,8 @@ async function handleButton(interaction, cache) {
           .setPlaceholder('選擇結帳貨幣...')
           .addOptions(
             currencies.map(c => ({
-              label: `${c}${c === trip.baseCurrency ? '（基準幣別）' : ''}`,
-              description: c !== trip.baseCurrency ? `參考匯率: ${trip.rates[c]}` : '匯率: 1',
+              label: `${c}${c === trip.baseCurrency ? '（結算用）' : ''}`,
+              description: c !== trip.baseCurrency ? `參考匯率：${trip.rates[c]}` : '匯率：1',
               value: c
             })).slice(0, 25)
           )
@@ -112,7 +112,7 @@ async function handleButton(interaction, cache) {
       }
 
       if (!process.env.GEMINI_API_KEY) {
-        return interaction.reply({ content: '⚠️ 帳單辨識目前沒有開放，請改用「➕ 新增花費」手動輸入。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 帳單辨識目前沒有開放，請改用「➕ 新增支出」手動輸入。', flags: MessageFlags.Ephemeral });
       }
 
       return startBillScan(interaction, trip, cache);
@@ -135,25 +135,25 @@ async function handleButton(interaction, cache) {
 
       const modal = new ModalBuilder()
         .setCustomId(`exp_modal_add_${currency}::${trip.id}`)
-        .setTitle(`確認並送出花費 (${currency})`);
+        .setTitle(`確認並送出支出（${currency}）`);
 
       const descInput = new TextInputBuilder()
         .setCustomId('desc')
-        .setLabel('項目名稱 (例如：計程車、晚餐)')
+        .setLabel('項目名稱（例如：計程車、晚餐）')
         .setStyle(TextInputStyle.Short)
         .setRequired(true);
       if (prefillDescription) descInput.setValue(String(prefillDescription).slice(0, 100));
 
       const amountInput = new TextInputBuilder()
         .setCustomId('amount')
-        .setLabel(`金額 (單位: ${currency})`)
+        .setLabel(`金額（單位：${currency}）`)
         .setStyle(TextInputStyle.Short)
         .setRequired(true);
       if (amount) amountInput.setValue(String(amount));
 
       const rateInput = new TextInputBuilder()
         .setCustomId('custom_rate')
-        .setLabel(`自訂匯率 (1 ${currency} = ? ${trip.baseCurrency})`)
+        .setLabel(`自訂匯率（1 ${currency} = ? ${trip.baseCurrency}）`)
         .setStyle(TextInputStyle.Short)
         .setPlaceholder('💡 留空將自動抓取當下即時網路匯率')
         .setRequired(false);
@@ -186,19 +186,19 @@ async function handleButton(interaction, cache) {
       if (type === 'expense') {
         const idx = trip.expenses.findIndex(e => e.id === realId);
         if (idx === -1) {
-          return renderLedgerPage(interaction, trip, page, '⚠️ 找不到此花費帳目，可能已被其他人刪除。', source);
+          return renderLedgerPage(interaction, trip, page, '⚠️ 找不到這筆支出，可能已被其他人刪除。', source);
         }
         const deleted = trip.expenses.splice(idx, 1)[0];
         await splitbillClient.saveTrip(guildId, trip.id, trip, { actorId: interaction.user.id });
-        return renderLedgerPage(interaction, trip, page, `🗑️ 已成功刪除花費：**${deleted.description}** (${deleted.amount} ${deleted.currency})`, source);
+        return renderLedgerPage(interaction, trip, page, `🗑️ 已刪除支出：**${deleted.description}** (${deleted.amount} ${deleted.currency})`, source);
       } else if (type === 'deposit') {
         const idx = trip.deposits.findIndex(d => d.id === realId);
         if (idx === -1) {
-          return renderLedgerPage(interaction, trip, page, '⚠️ 找不到此訂金紀錄，可能已被其他人刪除。', source);
+          return renderLedgerPage(interaction, trip, page, '⚠️ 找不到這筆預收款，可能已被其他人刪除。', source);
         }
         const deleted = trip.deposits.splice(idx, 1)[0];
         await splitbillClient.saveTrip(guildId, trip.id, trip, { actorId: interaction.user.id });
-        return renderLedgerPage(interaction, trip, page, `🗑️ 已成功刪除訂金紀錄：**${memberDisplay(trip, deleted.payerId)} 預付給 ${memberDisplay(trip, deleted.collectorId)}** (${deleted.amount} ${deleted.currency})`, source);
+        return renderLedgerPage(interaction, trip, page, `🗑️ 已刪除預收款：**${memberDisplay(trip, deleted.payerId)} 預付給 ${memberDisplay(trip, deleted.collectorId)}** (${deleted.amount} ${deleted.currency})`, source);
       }
     }
 
@@ -242,7 +242,7 @@ async function handleButton(interaction, cache) {
       const selectRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(withDraftId('exp_select_participants', draftId))
-          .setPlaceholder('挑選分攤此花費的人...')
+          .setPlaceholder('選要分攤這筆支出的人')
           .setMinValues(1)
           .setMaxValues(memberOptions.length)
           .addOptions(memberOptions)
@@ -263,16 +263,16 @@ async function handleButton(interaction, cache) {
         .setTitle('✏️ 自訂金額分攤')
         .setDescription(
           `總花費：**${state.amount} ${state.currency}**\n\n` +
-          `請選擇需要「指定各自應付金額」的成員。\n` +
-          `*(⚠️ Discord 表單限制，最多可選 ${maxSelect} 人；未被選到的人視為不參與此筆分攤)*\n` +
-          `*(💡 若某人不需付錢，填入 0 即可)*`
+          `選要自己填分攤金額的人。\n` +
+          `*（⚠️ Discord 表單限制，最多可選 ${maxSelect} 人；未被選到的人視為不參與此筆分攤）*\n` +
+          `*（💡 若某人不需付錢，填入 0 即可）*`
         );
 
       const memberOptions = pinnedTrip.members.slice(0, 25).map(m => ({ label: m.name, value: m.id }));
       const selectRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(withDraftId('exp_select_custom_participants', draftId))
-          .setPlaceholder(`選擇成員 (最多 ${maxSelect} 人)...`)
+          .setPlaceholder(`選擇成員（最多 ${maxSelect} 人）...`)
           .setMinValues(1)
           .setMaxValues(maxSelect)
           .addOptions(memberOptions)

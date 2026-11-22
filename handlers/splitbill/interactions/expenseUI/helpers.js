@@ -12,7 +12,7 @@ function parseLedgerSuffix(suffix) {
 
 function getBackNavConfig(source) {
   if (source === 'set') {
-    return { customId: 'set_nav', label: '⬅️ 返回結算與淨額中心' };
+    return { customId: 'set_nav', label: '⬅️ 返回結算' };
   }
   return { customId: 'exp_nav', label: '🔙 返回記帳管理' };
 }

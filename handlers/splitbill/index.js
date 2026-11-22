@@ -144,7 +144,7 @@ function setupSplitbillCommands(client) {
   });
 
   // 沒有 SPLITBILL_SERVICE_URL 時 utils/features.js 不會呼叫這裡（開機摘要由它回報 off）
-  bootSummary.report('分帳系統 (/splitbill panel / quick / attach)', 'ok', '資料來自獨立的 splitbill-service（SPLITBILL_SERVICE_URL）');
+  bootSummary.report('分帳系統（/splitbill panel / quick / attach）', 'ok', '資料來自獨立的 splitbill-service（SPLITBILL_SERVICE_URL）');
 }
 
 /**

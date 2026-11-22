@@ -33,7 +33,7 @@ async function renderTripNav(interaction, alertMsg = null, page = 0) {
   const embed = new EmbedBuilder()
     .setColor(0xe74c3c)
     .setTitle('🧳 行程與外幣設定')
-    .setDescription(`你目前使用的行程：${activeName}\n*(每人各自獨立，切換行程不會影響其他成員看到的行程)*\n\n請直接由下方選單切換行程，或使用按鈕建立/刪除行程、新增幣別匯率。\n\n🌐 網頁上建立的行程，可以在網頁的「設定 → 行程 → Discord 伺服器綁定」產生綁定碼，再到這裡輸入 \`/splitbill attach\`。`);
+    .setDescription(`你目前使用的行程：${activeName}\n*（每人各自獨立，切換行程不會影響其他成員看到的行程）*\n\n請直接由下方選單切換行程，或使用按鈕建立/刪除行程、新增幣別匯率。\n\n🌐 網頁上建立的行程，可以在網頁的「設定 → 行程 → 連到 Discord 伺服器」產生連線碼，再到這裡輸入 \`/splitbill attach\`。`);
 
   if (trip) {
     const rateLines = Object.entries(trip.rates)
@@ -71,7 +71,7 @@ async function renderTripNav(interaction, alertMsg = null, page = 0) {
           ? `🔄 切換行程（第 ${safePage + 1}/${totalPages} 頁，只影響你自己）...`
           : '🔄 快速切換其他行程（只影響你自己）...')
         // 選項標籤上限 100 字，網頁建立的行程名稱可能更長
-        .addOptions(options.map(t => ({ label: String(t.name).slice(0, 100), value: t.id, description: `基準幣別: ${t.baseCurrency}` })))
+        .addOptions(options.map(t => ({ label: String(t.name).slice(0, 100), value: t.id, description: `結算用的幣別：${t.baseCurrency}` })))
     );
     components.push(selectRow);
     if (totalPages > 1) {
@@ -96,7 +96,7 @@ async function renderTripNav(interaction, alertMsg = null, page = 0) {
 function replyNotAllowedToDelete(interaction, trip) {
   const who = trip.ownerId
     ? `只有行程建立者 <@${trip.ownerId}> 可以刪除行程「${trip.name}」。`
-    : `行程「${trip.name}」建立時沒有記錄建立者，僅 Bot 擁有者可以刪除。`;
+    : `行程「${trip.name}」建立時沒有記錄建立者，請聯絡管理員刪除。`;
   return interaction.reply({ content: `❌ ${who}`, flags: MessageFlags.Ephemeral });
 }
 
@@ -136,7 +136,7 @@ module.exports = {
       const modal = new ModalBuilder().setCustomId(`trip_modal_add_currency::${trip.id}`).setTitle('🪙 新增幣別匯率');
       const curInput = new TextInputBuilder()
         .setCustomId('currency')
-        .setLabel('幣別代碼 (例如：VND、SGD、CNY)')
+        .setLabel('幣別代碼（例如：VND、SGD、CNY）')
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
         .setMaxLength(10);

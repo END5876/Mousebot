@@ -239,14 +239,14 @@ function downloadAndCache(url, title, ytdlpArgs, onProgress) {
       }
     });
 
-    ytdlp.on('error', err => reject(new Error('執行 yt-dlp 失敗: ' + err.message)));
+    ytdlp.on('error', err => reject(new Error('執行 yt-dlp 失敗：' + err.message)));
 
     ytdlp.on('close', code => {
       if (code !== 0) {
         safeUnlink(rawTmp);
         safeUnlink(`${rawTmp}.part`);
         logger.error(platform, `下載失敗:`, errorOutput.slice(-300));
-        reject(new Error(`下載失敗 (code: ${code}): ${errorOutput.slice(-200)}`));
+        reject(new Error(`下載失敗（code: ${code}）：${errorOutput.slice(-200)}`));
         return;
       }
 
@@ -268,7 +268,7 @@ function downloadAndCache(url, title, ytdlpArgs, onProgress) {
         .catch(err => {
           safeUnlink(rawTmp);
           safeUnlink(mp3Tmp);
-          reject(new Error('轉檔快取檔失敗: ' + err.message));
+          reject(new Error('轉檔快取檔失敗：' + err.message));
         });
     });
   });

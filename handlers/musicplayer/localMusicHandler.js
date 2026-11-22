@@ -306,12 +306,12 @@ async function playStream(guildId, item, player, { silent = false, countPlay = t
         await libraryClient.downloadToFile(item.filename, item.filePath);
       } catch (err) {
         logger.error('LocalMusic', `向共用音樂庫下載失敗: ${item.filename} (${err.message})`);
-        player.emit('error', new Error(`找不到檔案: ${item.filename}`));
+        player.emit('error', new Error(`找不到檔案：${item.filename}`));
         return;
       }
     } else {
       logger.error('LocalMusic', `找不到檔案: ${item.filePath}`);
-      player.emit('error', new Error(`找不到檔案: ${item.filename}`));
+      player.emit('error', new Error(`找不到檔案：${item.filename}`));
       return;
     }
   }
@@ -351,20 +351,24 @@ function buildLocalListReply() {
 
   if (musicFiles.length === 0) {
     return {
-      content: '❌ data/music 資料夾內沒有可播放的音訊檔案\n支援格式：`.mp3` `.wav` `.ogg` `.flac` `.m4a` `.aac`',
+      content: 'ℹ️ 音樂庫還沒有歌。加歌之後就能用 /play 點播。',
       flags: MessageFlags.Ephemeral,
     };
   }
 
-  const listText = musicFiles
-    .map((f, i) => `${i + 1}. **${f.name}** — \`${f.filename}\` (${getFileSize(f.filePath)}) · ▶️ ${f.playCount} 次`)
-    .join('\n');
+  // 每行「歌名・播放 N 次」，只列前 20 首（依播放次數），其餘寫還有幾首，不再被 Discord 的長度上限截斷
+  const LIST_MAX = 20;
+  const shown = musicFiles.slice(0, LIST_MAX);
+  const rest = musicFiles.length - shown.length;
+  const listText = shown
+    .map((f, i) => `${i + 1}. **${f.name}**・播放 ${f.playCount} 次`)
+    .join('\n') + (rest > 0 ? `\n…還有 ${rest} 首，可以用 /play 打歌名找到。` : '');
 
   const embed = new EmbedBuilder()
     .setColor(0x1DB954)
-    .setTitle(`📁 本地音樂清單 (共 ${musicFiles.length} 首，依播放次數排序)`)
-    .setDescription(listText.length > 4096 ? listText.slice(0, 4093) + '...' : listText)
-    .setFooter({ text: '可使用 /play 指令播放（可直接選擇自動完成）' })
+    .setTitle(`📁 音樂庫（共 ${musicFiles.length} 首，依播放次數排序）`)
+    .setDescription(listText.length > 4096 ? listText.slice(0, 4095) + '…' : listText)
+    .setFooter({ text: '用 /play 打歌名就能點播。' })
     .setTimestamp();
 
   return { embeds: [embed] };

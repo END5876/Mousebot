@@ -17,16 +17,16 @@ const logger = require('../../../utils/logger');
 module.exports = {
   data: new SlashCommandSubcommandBuilder()
     .setName('attach')
-    .setDescription('把網頁上建立的分帳行程綁定到這個伺服器（需要網頁產生的綁定碼）')
+    .setDescription('把網頁上的分帳行程連到這個伺服器（要用網頁產生的連線碼）')
     .addStringOption(opt =>
-      opt.setName('code').setDescription('網頁「Discord 綁定」產生的 8 碼綁定碼').setRequired(true).setMaxLength(20)),
+      opt.setName('code').setDescription('網頁「連到 Discord 伺服器」產生的 8 碼連線碼').setRequired(true).setMaxLength(20)),
 
   async execute(interaction) {
     if (!interaction.guildId) {
-      return interaction.reply({ content: '⚠️ 請在要綁定的伺服器裡執行這個指令。', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: '⚠️ 請在要連線的伺服器裡執行這個指令。', flags: MessageFlags.Ephemeral });
     }
     if (!splitbillClient.isConfigured()) {
-      return interaction.reply({ content: '⚠️ 分帳功能目前沒有開放，無法綁定。', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: '⚠️ 分帳功能目前沒有開放，沒辦法連線。', flags: MessageFlags.Ephemeral });
     }
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -39,15 +39,15 @@ module.exports = {
       const trip = result.trip;
       const lines = [
         result.alreadyAttached
-          ? `行程「**${trip.name}**」原本就綁在這個伺服器了。`
-          : `已把行程「**${trip.name}**」綁定到這個伺服器！`,
+          ? `行程「**${trip.name}**」原本就連在這個伺服器了。`
+          : `已把行程「**${trip.name}**」連到這個伺服器。`,
         `👥 成員 ${trip.members.length} 人（其中 ${trip.members.filter(m => !m.discordId).length} 人尚未連結 Discord）`,
       ];
       if (result.joined) lines.push('🙋 你已自動加入為這個行程的成員。');
       lines.push('', '已切換到這個行程，輸入 `/splitbill panel` 就能開始記帳。');
-      lines.push('尚未連結 Discord 的成員：本人可以用網頁的邀請連結認領，或由任何成員在「👥 成員管理 → 🔗 連結 Discord 帳號」替他連結。');
+      lines.push('還沒連結 Discord 的成員：本人可以用網頁的邀請連結加入並選「我是哪一位」，或由任何成員在「👥 成員管理 → 🔗 連結 Discord 帳號」替他連結。');
 
-      const embed = new EmbedBuilder().setColor(0x2ecc71).setTitle('🔗 綁定成功').setDescription(lines.join('\n'));
+      const embed = new EmbedBuilder().setColor(0x2ecc71).setTitle('🔗 已連到這個伺服器').setDescription(lines.join('\n'));
       return interaction.editReply({ embeds: [embed] });
     } catch (err) {
       // 4xx 是使用者輸入的問題（綁定碼錯誤等），不必記錄；其他的才是服務或程式出錯
@@ -55,7 +55,7 @@ module.exports = {
         logger.error('Splitbill', `/splitbill attach 失敗（guild=${interaction.guildId}）：${splitbillClient.describeError(err)}`);
       }
       // service 的錯誤訊息本身就是給使用者看的中文說明（綁定碼錯誤、不是建立者、已綁別的伺服器…）
-      const msg = err.status && err.status < 500 ? err.message : `綁定失敗：${err.message}`;
+      const msg = err.status && err.status < 500 ? err.message : '沒有連線成功，請稍後再試一次。';
       return interaction.editReply({ content: `❌ ${msg}` });
     }
   }

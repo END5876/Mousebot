@@ -104,12 +104,12 @@ async function handleAutocomplete(interaction) {
   const localEngine = _engines.local;
 
   const ALL_LOCAL_CHOICE = {
-    name: '📂 ▶ 全部本地音樂（一次加入所有檔案）',
+    name: '📂 ▶ 把音樂庫的歌全部加入佇列',
     value: '__ALL_LOCAL__',
   };
 
   const MULTI_LOCAL_CHOICE = {
-    name: '📂✅ 選擇多首本地音樂（勾選加入）',
+    name: '📂✅ 從音樂庫勾選多首加入',
     value: '__LOCAL_MULTI__',
   };
 
@@ -139,7 +139,7 @@ async function handleAutocomplete(interaction) {
   // name 超過 100 字 Discord 會拒絕整個 respond（所有建議都不顯示），長輸入先截斷再放進標籤
   const fallbackLabel = focusedRaw.length > 60 ? `${focusedRaw.slice(0, 60)}…` : focusedRaw;
   const fallbackSearchChoice = {
-    name : `🔍 搜尋線上：「${fallbackLabel}」（YouTube + Bilibili）`.slice(0, 100),
+    name : `🔍 線上搜尋「${fallbackLabel}」（YouTube、Bilibili）`.slice(0, 100),
     value: (SEARCH_MARKER + focusedRaw).slice(0, 100),
   };
 

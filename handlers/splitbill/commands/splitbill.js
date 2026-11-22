@@ -83,7 +83,7 @@ module.exports = {
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('exp_nav').setLabel('💸 記帳管理').setStyle(ButtonStyle.Primary).setDisabled(!trip),
       new ButtonBuilder().setCustomId('mem_nav').setLabel('👥 成員管理').setStyle(ButtonStyle.Secondary).setDisabled(!trip),
-      new ButtonBuilder().setCustomId('set_nav').setLabel('📊 結算與淨額').setStyle(ButtonStyle.Success).setDisabled(!hasAnyRecords),
+      new ButtonBuilder().setCustomId('set_nav').setLabel('📊 結算').setStyle(ButtonStyle.Success).setDisabled(!hasAnyRecords),
       new ButtonBuilder().setCustomId('trip_nav').setLabel('🧳 行程設定').setStyle(ButtonStyle.Secondary)
     );
 
