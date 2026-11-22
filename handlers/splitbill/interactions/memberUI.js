@@ -129,7 +129,7 @@ module.exports = {
       }
       const token = customId.split('::')[2];
       const pending = pendingRemovals.get(token);
-      // 只有當初選人的那位可以按（確認訊息是只有自己看得到的，這裡多擋一層）
+      // 只有當初選人的那位可以按（面板本身也只給叫出者按，這裡多擋一層）
       if (pending && pending.userId !== user.id) {
         return interaction.reply({ content: '⚠️ 這是別人的確認，請從成員管理自己選擇要移除的成員。', flags: MessageFlags.Ephemeral });
       }

@@ -1,7 +1,7 @@
 'use strict';
 
 const {
-  EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags
+  EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle
 } = require('discord.js');
 const C = require('../../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const { scanBillImage } = require('../../utils/billScanner');
@@ -68,12 +68,10 @@ async function startBillScan(interaction, trip, cache) {
 
     // 統一的「送出結果」函式：用 followUp() 補發一則新訊息——面板已經被刪除了，
     // 這裡不能再用 editReply（沒有訊息可編輯）。一次批次裡每張圖／每個提示訊息都會各自呼叫一次，彼此獨立送出。
-    // 🔒 只有自己看得到（主控面板也是）：以前用 msg.reply() 公開回覆在圖片底下，之後「確認並送出」
-    // →選代墊人→主控台→結算都在那則公開訊息上更新，整個行程的帳目會被頻道裡的人看光，
-    // 別人也能點上面的按鈕把它換成自己的面板（或重新掃描時把它刪掉）。
+    // 公開訊息，跟主控面板一樣；只有掃描的人能按上面的按鈕（index.js enforcePanelOwner()）
     const deliverResult = async (payload) => {
       try {
-        await interaction.followUp({ ...payload, flags: MessageFlags.Ephemeral });
+        await interaction.followUp(payload);
       } catch (err) {
         logger.error('Splitbill', '送出帳單辨識結果失敗:', err.message);
       }
@@ -234,7 +232,7 @@ async function startBillScan(interaction, trip, cache) {
     // 而不是原地 editReply——如果 90 秒等待期間頻道還有其他訊息，原地編輯一樣會被洗上去看不到。
     (async () => {
       await interaction.deleteReply().catch(() => {});
-      await interaction.followUp({ embeds: [timeoutEmbed], components: [retryRow], flags: MessageFlags.Ephemeral }).catch(() => {});
+      await interaction.followUp({ embeds: [timeoutEmbed], components: [retryRow] }).catch(() => {});
     })();
   });
 }

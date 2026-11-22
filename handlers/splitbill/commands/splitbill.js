@@ -1,7 +1,7 @@
 'use strict';
 
 const C = require('../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const splitbillClient = require('../utils/splitbillClient');
 const { canViewTrip } = require('../utils/tripHelper');
 const { md } = require('../../../utils/markdown');
@@ -110,9 +110,9 @@ module.exports = {
     } else if (interaction.isMessageComponent() || interaction.isModalSubmit()) {
       await interaction.update(payload);
     } else {
-      // 🔒 只有叫出面板的人看得到：以前是公開訊息，成員在面板上點進帳目、結算時，
-      // 這些畫面也會覆寫在同一則公開訊息上，頻道裡的非成員都看得到完整帳目
-      await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
+      // 公開訊息（使用者決定 2026-11-22：不要「只有您才能看到這個」）；
+      // 只有叫出面板的人能按上面的按鈕，見 index.js enforcePanelOwner()
+      await interaction.reply(payload);
     }
   }
 };

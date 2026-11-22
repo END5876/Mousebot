@@ -365,13 +365,12 @@ function buildLocalListReply() {
   const rest = musicFiles.length - shown.length;
   const listText = shown
     .map((f, i) => `${i + 1}. **${f.name}**・播放 ${f.playCount} 次`)
-    .join('\n') + (rest > 0 ? `\n…還有 ${rest} 首，可以用 /play 打歌名找到。` : '');
+    .join('\n') + (rest > 0 ? `\n…還有 ${rest} 首，用 /play 打歌名就能點。` : '');
 
   const embed = new EmbedBuilder()
     .setColor(C.MUSIC)
     .setTitle(`📁 音樂庫（共 ${musicFiles.length} 首，依播放次數排序）`)
     .setDescription(listText.length > 4096 ? listText.slice(0, 4095) + '…' : listText)
-    .setFooter({ text: '用 /play 打歌名就能點播。' })
     .setTimestamp();
 
   // 有設定 MUSIC_PUBLIC_URL 時附「在網頁看全部」

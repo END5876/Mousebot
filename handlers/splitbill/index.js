@@ -147,12 +147,34 @@ function setupSplitbillCommands(client) {
   bootSummary.report('分帳系統（/splitbill panel / quick / attach）', 'ok', '資料來自獨立的 splitbill-service（SPLITBILL_SERVICE_URL）');
 }
 
+// ────────────────────────────────────────────────────────────────
+// 公開的分帳面板只給叫出它的人按：面板之後的畫面（帳目、結算…）都會更新在同一則訊息上，
+// 而且每個人看到的是「自己」的作用行程，別人一按就會把面板換成他的行程。
+// 叫出者＝這則訊息由哪個人的互動產生（message.interactionMetadata.user）。
+// ────────────────────────────────────────────────────────────────
+const SPLITBILL_PREFIXES = ['exp_', 'mem_', 'set_', 'trip_', 'qs_'];
+
+async function enforcePanelOwner(interaction) {
+  const { customId, message, user } = interaction;
+  if (customId !== 'nav_main' && !SPLITBILL_PREFIXES.some((p) => customId.startsWith(p))) return true;
+  if (!message || message.flags?.has(MessageFlags.Ephemeral)) return true;
+  const ownerId = message.interactionMetadata?.user?.id;
+  if (!ownerId || ownerId === user.id) return true;
+  await interaction.reply({
+    content: `這是 <@${ownerId}> 的分帳面板，請用 /splitbill panel 叫出你自己的。`,
+    allowedMentions: { parse: [] },
+    flags: MessageFlags.Ephemeral,
+  });
+  return false;
+}
+
 /**
  * 分流按鈕點擊
  */
 async function handleButtonInteraction(interaction) {
   const { customId } = interaction;
 
+  if (!(await enforcePanelOwner(interaction))) return;
   if (!(await enforceTripPermission(interaction))) return;
 
   if (customId === 'nav_main') {
@@ -185,6 +207,7 @@ async function handleModalInteraction(interaction) {
 async function handleSelectInteraction(interaction) {
   const { customId } = interaction;
 
+  if (!(await enforcePanelOwner(interaction))) return;
   if (!(await enforceTripPermission(interaction))) return;
 
   if (customId.startsWith('exp_')) return expenseUI.handleSelectMenu(interaction, stateCache);

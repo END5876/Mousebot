@@ -88,7 +88,7 @@ function setupUnifiedCommands(client) {
         const owner = activeSearchMessages.get(interaction.message.id);
         if (owner && owner !== interaction.user.id) {
           return interaction.reply({
-            content: `這是 <@${owner}> 的搜尋結果，只有他能選。想點歌的話，用 /play 自己搜尋。`,
+            content: `這是 <@${owner}> 的搜尋結果，想點歌請用 /play。`,
             flags: MessageFlags.Ephemeral,
             allowedMentions: { parse: [] },
           }).catch(() => {});
@@ -96,7 +96,7 @@ function setupUnifiedCommands(client) {
         return;
       }
       return interaction.reply({
-        content: '⌛ 這個選單已經過期了（超過時間沒選，或已經選過）。請重新用 /play 搜尋。',
+        content: '⌛ 這個選單已經過期，請重新用 /play 搜尋。',
         flags: MessageFlags.Ephemeral,
       }).catch(() => {});
     }
@@ -123,7 +123,7 @@ function setupUnifiedCommands(client) {
           return await interaction.update({ content: 'ℹ️ 已經停止了。', embeds: [], components: [] });
         }
         if (!pending || pending.np !== nowPlaying.get(guildId) || Date.now() - pending.at > STOP_CONFIRM_TTL_MS) {
-          return await interaction.update({ content: 'ℹ️ 這個確認已經過期了。要停止的話，請再按一次面板的「停止播放」。', embeds: [], components: [] });
+          return await interaction.update({ content: 'ℹ️ 這個確認已經過期，請再按一次「停止播放」。', embeds: [], components: [] });
         }
         const count = (queues.get(guildId) || []).length;
         stopAll(guildId);
@@ -188,8 +188,7 @@ function setupUnifiedCommands(client) {
           if (count >= STOP_CONFIRM_MIN) {
             const token = newStopToken(np);
             await interaction.reply({
-              embeds: [new EmbedBuilder().setColor(C.DANGER).setTitle(`停止播放並清空 ${count} 首佇列？`)
-                .setDescription('目前這首會停止，佇列裡的歌也會全部移除。')],
+              embeds: [new EmbedBuilder().setColor(C.DANGER).setTitle(`停止播放並清空 ${count} 首佇列？`)],
               components: [new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`uq_stop_yes:${token}`).setLabel('停止並清空').setStyle(ButtonStyle.Danger),
                 new ButtonBuilder().setCustomId('uq_stop_no').setLabel('繼續播放').setStyle(ButtonStyle.Secondary),
@@ -212,9 +211,7 @@ function setupUnifiedCommands(client) {
           const next = loopSettings.get(guildId) === mode ? 'off' : mode;
           loopSettings.set(guildId, next);
           if (next === 'all') resetLoopAllCycle(guildId);
-          await say(next === 'one' ? '🔂 已開啟單曲循環，這首會一直重播。'
-            : next === 'all' ? '🔁 已開啟列表循環，佇列播完會從頭再播。'
-              : '➡️ 已改回不循環，佇列播完就停止。');
+          await say(next === 'one' ? '🔂 已開啟單曲循環' : next === 'all' ? '🔁 已開啟列表循環' : '➡️ 已改回不循環');
           // 走面板更新的排隊（換歌時正在重發面板也不會互相蓋掉）；會順便排程寫出播放快照
           await updateControlPanel(guildId, interaction.channel, { preferEdit: true });
           webSync.notifyChange();
@@ -230,8 +227,7 @@ function setupUnifiedCommands(client) {
             loopSettings.set(guildId, 'off');
             resetShuffleBag(guildId);
           }
-          await say(next ? '🎲 已開啟隨機連播，播完這首會從音樂庫隨機挑下一首。'
-            : '➡️ 已關閉隨機連播，播完這首會接著播佇列（佇列空了就停止）。');
+          await say(next ? '🎲 已開啟隨機連播' : '➡️ 已關閉隨機連播');
           await updateControlPanel(guildId, interaction.channel, { preferEdit: true });
           webSync.notifyChange();
           break;
@@ -243,7 +239,7 @@ function setupUnifiedCommands(client) {
       }
     } catch (err) {
       logger.error('UnifiedQueue', '按鈕互動錯誤:', err);
-      try { await interaction.reply({ content: '⚠️ 沒能完成這個操作，Bot 可能剛好在換歌。請再按一次；還是不行，請用 /music nowplaying 叫出新的面板。', flags: MessageFlags.Ephemeral }); } catch {}
+      try { await interaction.reply({ content: '⚠️ 沒能完成，請再按一次；還是不行就用 /music nowplaying 叫出新面板。', flags: MessageFlags.Ephemeral }); } catch {}
     }
   });
 
@@ -259,19 +255,19 @@ function setupUnifiedCommands(client) {
 const playCommand = {
   data: new SlashCommandBuilder()
     .setName('play')
-    .setDescription('播放 Bilibili / YouTube 影片，或本地音訊檔案')
+    .setDescription('播放 YouTube、Bilibili 影片或音樂庫的歌')
     .addStringOption(opt =>
       opt.setName('input')
-        .setDescription('影片網址或音樂庫的歌名（輸入關鍵字可以搜尋）')
+        .setDescription('影片網址或歌名')
         .setRequired(true)
         .setAutocomplete(true)
     )
     .addStringOption(opt =>
       opt.setName('shuffle')
-        .setDescription('全部加入時的排序方式（單首播放時忽略此選項）')
+        .setDescription('全部加入時的播放順序')
         .setRequired(false)
         .addChoices(
-          { name: '📋 依檔名順序（預設）', value: 'no' },
+          { name: '📋 照歌名順序（預設）', value: 'no' },
           { name: '🔀 打亂順序', value: 'yes' },
         )
     ),
@@ -311,10 +307,10 @@ const musicCommand = {
     .addSubcommand(sub => sub.setName('nowplaying').setDescription('查看目前播放的詳細資訊'))
     .addSubcommand(sub =>
       sub.setName('randomplay')
-        .setDescription('從音樂庫隨機播一首，可以順便開啟隨機連播')
+        .setDescription('從音樂庫隨機播一首')
         .addStringOption(opt =>
           opt.setName('continuous')
-            .setDescription('要不要開啟隨機連播（播完自動從音樂庫隨機挑下一首，直到手動關閉）')
+            .setDescription('播完要不要繼續隨機播下去')
             .setRequired(false)
             .addChoices(
               { name: '🎲 開啟隨機連播', value: 'yes' },
@@ -324,7 +320,7 @@ const musicCommand = {
     )
     // 原本是 local 群組底下只有 list 一個子指令，拿掉多餘的一層
     .addSubcommand(sub =>
-      sub.setName('list').setDescription('列出音樂庫的歌（依這台 Bot 的播放次數排序）')
+      sub.setName('list').setDescription('列出音樂庫的歌（常播的在前面）')
     )
     // ★ 修改：idle 從 addSubcommandGroup（3個獨立子指令）
     //   合併為單一 addSubcommand + 可選 action 參數，
@@ -332,10 +328,10 @@ const musicCommand = {
     //   留空 = 查看狀態，帶 action = 開啟/關閉
     .addSubcommand(sub =>
       sub.setName('idle')
-        .setDescription('管理閒置自動離開功能（僅管理員可用，留空則查看目前狀態）')
+        .setDescription('沒人聽時自動停止播放（管理員）')
         .addStringOption(opt =>
           opt.setName('action')
-            .setDescription('選擇操作，留空則查看目前狀態')
+            .setDescription('留空＝查看目前設定')
             .addChoices(
               { name: '開啟', value: 'enable' },
               { name: '關閉', value: 'disable' },
@@ -479,14 +475,12 @@ async function handleMusicLoop(interaction) {
   session.schedule();
 
   const loopText = next === 'one' ? '🔂 已開啟單曲循環' : next === 'all' ? '🔁 已開啟列表循環' : '➡️ 已改回不循環';
-  const description = next === 'one' ? '這首會一直重播。' : next === 'all' ? '佇列播完會從頭再播。' : '播完這首接著播佇列，佇列播完就停止。';
 
   await interaction.reply({
     embeds: [
       new EmbedBuilder()
         .setColor(next === 'off' ? C.NEUTRAL : C.MUSIC)
         .setTitle(loopText)
-        .setDescription(description)
         .addFields({
           name: '正在播放',
           value: np.item.type === 'bilibili'
@@ -579,16 +573,6 @@ async function handleMusicRandomPlay(interaction) {
     .setColor(C.MUSIC)
     .setTitle(enableContinuous ? '🎲 隨機連播已開始' : '🎲 隨機播一首')
     .setDescription(`🎧 **${md(track.title)}**`)
-    .addFields(
-      {
-        name: '模式',
-        value: enableContinuous
-          ? '🎲 隨機連播（播完自動從音樂庫隨機挑下一首，直到手動關閉）'
-          : '▶️ 單首播放',
-        inline: false,
-      },
-    )
-    .setFooter({ text: enableContinuous ? '可以按面板的「隨機連播」隨時關閉。' : '想一直隨機播下去：/music randomplay continuous:開啟隨機連播' })
     .setTimestamp();
 
   await interaction.editReply({ embeds: [embed] });
@@ -657,13 +641,11 @@ async function handleMusicIdle(interaction, action) {
       }
     }
 
-    // 誠實反映本次操作是否真的立即生效，避免管理員被誤導
-    const statusNote = monitorStarted
-      ? '（已套用到目前的語音連線）'
-      : '（Bot 現在不在語音頻道，下次 /play 時套用）';
+    // Bot 不在語音頻道時，設定要等下次點歌才開始計時
+    const statusNote = monitorStarted ? '' : '，下次點歌時生效';
 
     await interaction.reply({
-      content: `✅ 已開啟閒置自動停止播放${statusNote}\n頻道沒人 30 分鐘、或 60 分鐘沒人說話時會停止播放，Bot 會留在頻道裡。`,
+      content: `✅ 已開啟閒置自動停止播放${statusNote}：頻道沒人 30 分鐘或 60 分鐘沒人說話就停止。`,
       flags: MessageFlags.Ephemeral,
     });
   } else {
@@ -671,7 +653,7 @@ async function handleMusicIdle(interaction, action) {
     voiceMonitor.stopMonitoring(guildId);
 
     await interaction.reply({
-      content: '➡️ 已關閉閒置自動停止播放，頻道沒人時也會繼續播。',
+      content: '➡️ 已關閉閒置自動停止播放。',
       flags: MessageFlags.Ephemeral,
     });
   }

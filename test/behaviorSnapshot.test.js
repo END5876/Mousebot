@@ -522,6 +522,7 @@ function runParent() {
 // 2026-11-22 UI 改版第 5 批（文案大掃除，ui-review/GLOSSARY.md）：/play、/music、/splitbill 的指令說明改用統一用詞
 //   （本地音樂→音樂庫、隨機排序→打亂順序、花費→支出、綁定→連到伺服器），只改說明文字，選項與行為不變。
 // 2026-11-22 UI 改版第 6 批：/music remove 的 position 加自動完成（顯示「3. 歌名」），說明改成「要移除第幾首（打數字會列出對應的歌名）」。
+// 2026-11-22 使用者要求（音樂說明瘦身）：/play、/music 的指令與選項說明改短，不寫系統怎麼運作；/play shuffle 預設選項改叫「照歌名順序」。
 const EXPECTED = {
   "commands": {
     "order": [
@@ -540,15 +541,15 @@ const EXPECTED = {
       "play",
       "music"
     ],
-    "hash": "cd9a41773143e4d000a19988b27bbff40e98a89f6110b01be9e82ca4c17288fb",
+    "hash": "6c84f2ed09cce8a825f65c4c50fcd072b5c7bdc16cf28a643c73a55c98a6a6e1",
     "perCommand": {
       "ai": "87328ef894fcd4ce0366a01fcfed1ca54e416bfd165ba046bccbb6ebec6dacdf",
       "autojoin": "3ac54ee7c6a6b7c7a0b4d98716ce2bb880d87c8a46f726b4b3e7846489426141",
-      "music": "1247bdb3ca7b9e64197e2c0e47c2c1b8a63f67ef29c02b115c369c2df5064b86",
+      "music": "84dad430012a15d5864e958ced98b2b8794e1315ff3d58e394faebe62449c25c",
       "nh": "2ac77d917b93d75311bf6338e4971d199c92b3b323154ad1c62b45c431e5b94c",
       "notify": "f62c8eb19c08f5e189157b8459c10fad6352a5504c9e4837784e524365c7d66b",
       "ping": "b449edfcb32695a478ad802cf05f36888e51737afd0f85b7cf5751167616df56",
-      "play": "bc2190aae2d158a0eb17756e02ecaf1d455a0ad29406f7549c6f21864f7a4c31",
+      "play": "29e35b241658ccc1677a2e8a9abda050239905fb0865e5f5ec8beb80b91f2b39",
       "response": "cd5b787723643e981f1845e2896d2b9c804bbff32b041b575ab6c51658302770",
       "say": "775a34377aada8af947ed81ba43db5d0c360f0a11f21069bfa9bbe581d54d999",
       "serverinfo": "351cfffdbeb28e5b1bf6f70d72f06582483c351964977bf442336b9b9a0c49f0",

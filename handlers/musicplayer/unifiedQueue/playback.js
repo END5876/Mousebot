@@ -96,8 +96,7 @@ function _buildEmbed(guildId) {
   const embed = new EmbedBuilder()
     .setColor(paused ? C.NEUTRAL : C.MUSIC)
     .setTitle(paused ? '⏸️ 已暫停' : '🎵 正在播放')
-    .setTimestamp()
-    .setFooter({ text: isRandomPlay ? '隨機連播中：這首播完會先播佇列，佇列空了再從音樂庫隨機挑' : '用下方按鈕控制播放' });
+    .setTimestamp();
 
   if (item.type === 'bilibili') {
     embed
@@ -196,7 +195,7 @@ function buildQueueView(guildId, page = 0) {
       ? `${start + i + 1}. [${md(t.title)}](${t.url})`
       : `${start + i + 1}. ${md(t.title)}`)));
   } else {
-    lines.push(isRandomPlay ? '佇列是空的，播完會從音樂庫隨機挑下一首。' : '佇列是空的。');
+    lines.push('佇列是空的。');
   }
   let desc = lines.join('\n');
   if (desc.length > 4096) desc = desc.slice(0, 4095) + '…';

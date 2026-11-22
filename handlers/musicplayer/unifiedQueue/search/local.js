@@ -63,7 +63,7 @@ async function _handlePlayAll(interaction, shuffleOpt) {
     } else {
       await playRandomLocal(guildId, interaction.channel, { enableContinuous: true });
     }
-    await interaction.editReply({ content: '🎲 已開啟隨機連播，會從音樂庫隨機挑歌接著播。', embeds: [], components: [] }).catch(() => {});
+    await interaction.editReply({ content: '🎲 已開啟隨機連播', embeds: [], components: [] }).catch(() => {});
     await updateControlPanel(guildId, interaction.channel);
     return;
   }
@@ -117,10 +117,7 @@ async function _confirmPlayAll(interaction, total) {
   const message = await interaction.editReply({
     embeds: [new EmbedBuilder().setColor(C.MUSIC)
       .setTitle(`把音樂庫的 ${total} 首全部加進佇列？`)
-      .setDescription(queued
-        ? `會排在目前 ${queued} 首的後面，要播很久才輪到之後點的歌。`
-        : '要播很久才輪到之後點的歌。')
-      .setFooter({ text: '60 秒內沒選就取消。' })],
+      .setDescription(queued ? `會排在目前 ${queued} 首後面，之後點的歌要很久才輪到。` : '之後點的歌要很久才輪到。')],
     components: [row],
   }).catch(() => null);
   if (!message) return 'cancel';
@@ -198,8 +195,8 @@ async function _handleLocalMultiSelect(interaction) {
   );
 
   const noteText = truncated
-    ? `ℹ️ 音樂庫共有 **${files.length}** 首，選單受 Discord 平台限制僅能顯示前 **${LOCAL_MULTI_SELECT_LIMIT}** 首。\n若需要清單外的曲目，請改用 \`/play\` 輸入關鍵字，自動完成選取單首加入。`
-    : `共 **${files.length}** 首，請勾選要加入的曲目：`;
+    ? `只列出前 ${LOCAL_MULTI_SELECT_LIMIT} 首，其他的歌請用 /play 打歌名點。`
+    : null;
 
   const message = await interaction.editReply({
     embeds: [
@@ -207,7 +204,6 @@ async function _handleLocalMultiSelect(interaction) {
         .setColor(C.MUSIC)
         .setTitle('📂 從音樂庫選多首')
         .setDescription(noteText)
-        .setFooter({ text: '60 秒內勾選並送出，或按「取消」。' })
     ],
     components: [selectRow, cancelRow],
   }).catch(() => null);
