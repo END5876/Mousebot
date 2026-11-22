@@ -1,5 +1,6 @@
 'use strict';
 
+const { TextInputBuilder, TextInputStyle } = require('discord.js');
 const { memberDisplay } = require('../../utils/tripHelper');
 const { round2 } = require('../../utils/calculator');
 
@@ -57,6 +58,20 @@ function parseDraftCustomId(customId) {
   return { baseId: customId.slice(0, idx), draftId: customId.slice(idx + 1) };
 }
 
+/**
+ * 外幣支出 Modal 的「實際扣款金額」欄位（跟網頁一樣填結算幣別的金額，不填匯率）。
+ * 支出本來就是結算幣別時回傳 null（不需要這一欄）。
+ */
+function actualBaseInput(currency, baseCurrency) {
+  if (currency === baseCurrency) return null;
+  return new TextInputBuilder()
+    .setCustomId('actual_base')
+    .setLabel(`實際扣款金額（${baseCurrency}，選填）`)
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder('留空就依今天匯率換算')
+    .setRequired(false);
+}
+
 module.exports = {
   expenseDraftCacheUserId,
   withDraftId,
@@ -64,5 +79,6 @@ module.exports = {
   parseLedgerSuffix,
   getBackNavConfig,
   formatAmountConversion,
-  formatParticipantsList
+  formatParticipantsList,
+  actualBaseInput,
 };

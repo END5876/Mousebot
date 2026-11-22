@@ -103,8 +103,9 @@ async function handleAutocomplete(interaction) {
 
   const localEngine = _engines.local;
 
+  const localCount = localEngine ? localEngine.getMusicFiles().length : 0;
   const ALL_LOCAL_CHOICE = {
-    name: '📂 ▶ 把音樂庫的歌全部加入佇列',
+    name: `📂 把音樂庫的 ${localCount} 首全部加入佇列`,
     value: '__ALL_LOCAL__',
   };
 
@@ -130,7 +131,8 @@ async function handleAutocomplete(interaction) {
 
   // 空白輸入：只顯示本地清單，不觸發線上搜尋
   if (focused.trim() === '') {
-    const choices = [ALL_LOCAL_CHOICE, MULTI_LOCAL_CHOICE, ...fileChoices];
+    // 「全部加入」放最後：一點下去會把整個音樂庫塞進共用佇列，不該是第一個選項
+    const choices = [...fileChoices, MULTI_LOCAL_CHOICE, ALL_LOCAL_CHOICE];
     interaction.respond(choices.slice(0, 25)).catch(() => {});
     return true;
   }

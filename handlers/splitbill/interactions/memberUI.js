@@ -1,5 +1,6 @@
 'use strict';
 
+const C = require('../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const crypto = require('crypto');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, UserSelectMenuBuilder, StringSelectMenuBuilder, MessageFlags } = require('discord.js');
 const splitbillClient = require('../utils/splitbillClient');
@@ -58,6 +59,29 @@ function newRemovalToken() {
 }
 const PENDING_REMOVAL_MS = 10 * 60 * 1000;
 
+// 成員管理畫面；alertMsg 是剛剛操作的結果（顯示在訊息上方）
+function renderMemberNav(interaction, trip, alertMsg = '') {
+  const unlinked = trip.members.filter((m) => !isLinkedMember(m)).length;
+  const embed = new EmbedBuilder()
+    .setColor(C.SPLITBILL)
+    .setTitle('👥 行程成員管理')
+    .setDescription(
+      `當前行程：**${trip.name}**` +
+      (unlinked ? `\n\n🔗 有 **${unlinked}** 位成員還沒連結 Discord 帳號，可以用「連結 Discord 帳號」替他們連結。` : '')
+    );
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('mem_btn_add_ui').setLabel('➕ 新增成員').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('mem_btn_remove_ui').setLabel('🗑️ 移除成員').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('mem_btn_link_ui').setLabel('🔗 連結 Discord 帳號').setStyle(ButtonStyle.Secondary).setDisabled(!unlinked),
+    new ButtonBuilder().setCustomId('mem_btn_list').setLabel('📋 查看名單').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('nav_main').setLabel('⬅️ 返回主選單').setStyle(ButtonStyle.Secondary)
+  );
+  const payload = { content: alertMsg || '', embeds: [embed], components: [row] };
+  if (interaction.deferred || interaction.replied) return interaction.editReply(payload);
+  return interaction.update(payload);
+}
+
 async function removeMembers(interaction, trip, targetMemberIds) {
   const save = () => splitbillClient.saveTrip(interaction.guildId, trip.id, trip, { actorId: interaction.user.id });
   // 先記下顯示用的名字／提及，移除後就查不到了
@@ -75,21 +99,22 @@ async function removeMembers(interaction, trip, targetMemberIds) {
   // 以伺服器存檔後的名單為準回報結果：service 會把不允許移除的已連結成員補回去，
   // 不能只看本地陣列就說「已移出」
   const saved = await save();
-  const remaining = new Set(((saved && saved.members) || trip.members).map((m) => m.id));
+  if (saved && Array.isArray(saved.members)) trip.members = saved.members;
+  const remaining = new Set(trip.members.map((m) => m.id));
   const removedIds = targetMemberIds.filter((id) => labelOf.has(id) && !remaining.has(id));
   const keptIds = targetMemberIds.filter((id) => labelOf.has(id) && remaining.has(id));
   if (!removedIds.length) {
-    return showMainMenu(interaction, `❌ 沒有移除任何成員：${keptIds.map((id) => labelOf.get(id)).join(', ')} 只有行程建立者可以移除。`);
+    return renderMemberNav(interaction, trip, `❌ 沒有移除任何成員：${keptIds.map((id) => labelOf.get(id)).join('、')} 只有行程建立者可以移除。`);
   }
 
-  let resContent = `🗑️ 已移出 ${removedIds.length} 位成員：${removedIds.map((id) => labelOf.get(id)).join(', ')}。`;
+  let resContent = `🗑️ 已移除 ${removedIds.length} 位成員：${removedIds.map((id) => labelOf.get(id)).join('、')}。`;
   if (keptIds.length) {
-    resContent += `\n⚠️ ${keptIds.map((id) => labelOf.get(id)).join(', ')} 已連結 Discord 帳號，只有行程建立者可以移除，仍保留在行程中。`;
+    resContent += `\n⚠️ ${keptIds.map((id) => labelOf.get(id)).join('、')} 已連結 Discord 帳號，只有行程建立者可以移除，仍保留在行程中。`;
   }
   if (hasHistory) {
-    resContent += '\n⚠️ 被移出的成員有參與過的帳目，這些金額已經不算進結算，其他人的要付、可拿回金額跟著改變了。';
+    resContent += '\n⚠️ 被移除的成員有參與過的帳目，這些金額已經不算進結算，其他人的要付、可拿回金額跟著改變了。';
   }
-  return showMainMenu(interaction, resContent);
+  return renderMemberNav(interaction, trip, resContent);
 }
 
 module.exports = {
@@ -106,11 +131,11 @@ module.exports = {
       const pending = pendingRemovals.get(token);
       // 只有當初選人的那位可以按（確認訊息是只有自己看得到的，這裡多擋一層）
       if (pending && pending.userId !== user.id) {
-        return interaction.reply({ content: '⚠️ 這是別人的確認，請從成員管理自己選擇要移出的成員。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⚠️ 這是別人的確認，請從成員管理自己選擇要移除的成員。', flags: MessageFlags.Ephemeral });
       }
       pendingRemovals.delete(token);
       if (!pending || Date.now() - pending.at > PENDING_REMOVAL_MS) {
-        return interaction.reply({ content: '⌛ 這個確認已經逾時，請回到成員管理重新選擇要移出的成員。', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '⌛ 這個確認已經逾時，請回到成員管理重新選擇要移除的成員。', flags: MessageFlags.Ephemeral });
       }
       const problem = removalProblem(pinnedTrip, pending.ids, user.id);
       if (problem) return interaction.reply({ content: problem, flags: MessageFlags.Ephemeral });
@@ -122,33 +147,16 @@ module.exports = {
     if (customId === 'nav_main') return showMainMenu(interaction);
     if (!trip) return showMainMenu(interaction, '⚠️ 找不到行程（可能已被刪除，或已在網頁中斷與伺服器的連線）。');
 
-    if (customId === 'mem_nav') {
-      const unlinked = trip.members.filter((m) => !isLinkedMember(m)).length;
-      const embed = new EmbedBuilder()
-        .setColor(0x9b59b6)
-        .setTitle('👥 行程成員管理')
-        .setDescription(
-          `當前行程：**${trip.name}**\n請選擇管理動作：` +
-          (unlinked ? `\n\n🔗 有 **${unlinked}** 位成員尚未連結 Discord 帳號（在 Discord 只會顯示名字、無法操作面板），可用「連結 Discord 帳號」替他們連結。` : '')
-        );
-
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('mem_btn_add_ui').setLabel('➕ 新增成員').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('mem_btn_remove_ui').setLabel('🗑️ 移除成員').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('mem_btn_link_ui').setLabel('🔗 連結 Discord 帳號').setStyle(ButtonStyle.Secondary).setDisabled(!unlinked),
-        new ButtonBuilder().setCustomId('mem_btn_list').setLabel('📋 查看名單').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('nav_main').setLabel('⬅️ 返回主選單').setStyle(ButtonStyle.Secondary)
-      );
-
-      return interaction.update({ embeds: [embed], components: [row] });
-    }
+    if (customId === 'mem_nav') return renderMemberNav(interaction, trip);
 
     if (customId === 'mem_btn_add_ui') {
-      const embed = new EmbedBuilder().setColor(0x9b59b6).setTitle('➕ 把伺服器成員加入行程').setDescription('從下方選單選人，選好就會直接加入這個行程。');
+      const embed = new EmbedBuilder().setColor(C.SPLITBILL).setTitle('➕ 把伺服器成員加入行程').setDescription('從下方選單選人，選好就會直接加入這個行程。');
       const menuRow = new ActionRowBuilder().addComponents(
         new UserSelectMenuBuilder().setCustomId(`mem_select_add::${trip.id}`).setPlaceholder('選伺服器成員（可以多選）').setMinValues(1).setMaxValues(10)
       );
-      return interaction.update({ embeds: [embed], components: [menuRow] });
+      return interaction.update({ content: '', embeds: [embed], components: [menuRow, new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('mem_nav').setLabel('⬅️ 返回成員管理').setStyle(ButtonStyle.Secondary)
+      )] });
     }
 
     if (customId === 'mem_btn_remove_ui') {
@@ -175,8 +183,8 @@ module.exports = {
         });
       }
 
-      const embed = new EmbedBuilder().setColor(0xe74c3c).setTitle('🗑️ 從行程移出成員').setDescription(
-        '請選擇要移出的成員（可多選）：\n*（至少要留下 1 位已連結 Discord 的成員）*' +
+      const embed = new EmbedBuilder().setColor(C.DANGER).setTitle('🗑️ 移除成員').setDescription(
+        '選要移除的成員（可多選）。\n*（至少要留下 1 位已連結 Discord 的成員）*' +
         (hiddenLinked ? `\n*（另有 ${hiddenLinked} 位已連結 Discord 的成員只有行程建立者可以移除，未列出）*` : '')
       );
 
@@ -189,13 +197,15 @@ module.exports = {
       const menuRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(`mem_select_remove::${trip.id}`)
-          .setPlaceholder('選擇要移出的成員（可多選）...')
+          .setPlaceholder('選擇要移除的成員（可多選）')
           .setMinValues(1)
           .setMaxValues(maxRemovable)
           .addOptions(memberOptions)
       );
 
-      return interaction.update({ embeds: [embed], components: [menuRow] });
+      return interaction.update({ content: '', embeds: [embed], components: [menuRow, new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('mem_nav').setLabel('⬅️ 返回成員管理').setStyle(ButtonStyle.Secondary)
+      )] });
     }
 
     if (customId === 'mem_btn_link_ui') {
@@ -204,7 +214,7 @@ module.exports = {
       if (!unlinked.length) {
         return interaction.reply({ content: '✅ 所有成員都已經連結 Discord 帳號了。', flags: MessageFlags.Ephemeral });
       }
-      const embed = new EmbedBuilder().setColor(0x9b59b6).setTitle('🔗 連結 Discord 帳號（1/2）')
+      const embed = new EmbedBuilder().setColor(C.SPLITBILL).setTitle('🔗 連結 Discord 帳號（1/2）')
         .setDescription('要連結哪一位？');
       const menuRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
@@ -220,7 +230,7 @@ module.exports = {
 
     if (customId === 'mem_btn_list') {
       const embed = new EmbedBuilder()
-        .setColor(0x9b59b6)
+        .setColor(C.SPLITBILL)
         .setTitle(`📋 行程「${trip.name}」成員名單`)
         .setDescription(trip.members.length
           ? trip.members.map((m) => (m.discordId
@@ -244,17 +254,27 @@ module.exports = {
 
     if (baseId === 'mem_select_add') {
       let addedCount = 0;
+      const addedIds = [];
       const skipped = [];
       for (const discordUserId of values) {
         const user = (interaction.users && interaction.users.get(discordUserId)) || null;
         if (user && user.bot) { skipped.push(`<@${discordUserId}>`); continue; }
         if (findMemberByDiscordId(trip, discordUserId)) continue;
         trip.members.push({ id: splitbillClient.genId('mem'), name: displayNameOf(interaction, discordUserId), discordId: discordUserId });
+        addedIds.push(discordUserId);
         addedCount++;
       }
       if (addedCount > 0) await save();
       const skipNote = skipped.length ? `\n（Bot 不能加入行程，已略過：${skipped.join('、')}）` : '';
-      return showMainMenu(interaction, `✅ 成功將 ${addedCount} 位成員新增至行程「${trip.name}」！${skipNote}`);
+      await renderMemberNav(interaction, trip, `✅ 已把 ${addedCount} 位成員加入行程「${trip.name}」。${skipNote}`);
+      // 被加的人不會收到任何通知：在頻道公開告訴他們（會 @ 到他們）
+      if (addedIds.length) {
+        await interaction.followUp({
+          content: `👋 ${addedIds.map((id) => `<@${id}>`).join('、')} 你已被加入「${trip.name}」，輸入 /splitbill panel 就能開始記帳。`,
+          allowedMentions: { users: addedIds },
+        }).catch(() => {});
+      }
+      return;
     }
 
     if (baseId === 'mem_select_remove') {
@@ -262,22 +282,26 @@ module.exports = {
       const problem = removalProblem(trip, targetMemberIds, interaction.user.id);
       if (problem) return interaction.reply({ content: problem, flags: MessageFlags.Ephemeral });
 
-      // 有帳目的成員：移出後他的金額不會算進結算，先講清楚、確認後才移出
-      const withEntries = entryCounts(trip, targetMemberIds).filter((c) => c.expenses || c.deposits);
-      if (withEntries.length) {
-        const token = newRemovalToken();
-        pendingRemovals.set(token, { ids: targetMemberIds, userId: interaction.user.id, at: Date.now() });
-        const lines = withEntries.map((c) => `・${memberMention(trip, c.id)}：${[c.expenses ? `${c.expenses} 筆支出` : '', c.deposits ? `${c.deposits} 筆轉帳` : ''].filter(Boolean).join('、')}`);
-        const embed = new EmbedBuilder().setColor(0xe74c3c).setTitle('🗑️ 移出有帳目的成員？').setDescription(
-          `${lines.join('\n')}\n\n移出後，這些金額不會算進結算，其他人的要付、可拿回金額會跟著改變。\n可以先到網頁把他的帳目改給另一位成員，再回來移出。`
-        );
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`mem_confirm_remove::${trip.id}::${token}`).setLabel('仍要移出').setStyle(ButtonStyle.Danger),
-          new ButtonBuilder().setCustomId('mem_nav').setLabel('取消，返回成員管理').setStyle(ButtonStyle.Secondary)
-        );
-        return interaction.update({ embeds: [embed], components: [row] });
-      }
-      return removeMembers(interaction, trip, targetMemberIds);
+      // 一律先確認（選單選了就寫入太容易誤刪）；有帳目的成員寫出筆數和影響
+      const counts = new Map(entryCounts(trip, targetMemberIds).map((c) => [c.id, c]));
+      const lines = targetMemberIds.map((id) => {
+        const c = counts.get(id) || {};
+        const what = [c.expenses ? `${c.expenses} 筆支出` : '', c.deposits ? `${c.deposits} 筆轉帳` : ''].filter(Boolean).join('、');
+        return `・${memberMention(trip, id)}${what ? `：${what}` : ''}`;
+      });
+      const hasEntries = [...counts.values()].some((c) => c.expenses || c.deposits);
+      const token = newRemovalToken();
+      pendingRemovals.set(token, { ids: targetMemberIds, userId: interaction.user.id, at: Date.now() });
+      const embed = new EmbedBuilder().setColor(C.DANGER).setTitle(`🗑️ 移除 ${targetMemberIds.length} 位成員？`).setDescription(
+        lines.join('\n') + (hasEntries
+          ? '\n\n移除後，他們的帳目不會算進結算，其他人的要付、可拿回金額會跟著改變。可以先到網頁把帳目改給另一位成員，再回來移除。'
+          : '')
+      );
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`mem_confirm_remove::${trip.id}::${token}`).setLabel(`移除 ${targetMemberIds.length} 位成員`).setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('mem_nav').setLabel('取消').setStyle(ButtonStyle.Secondary)
+      );
+      return interaction.update({ content: '', embeds: [embed], components: [row] });
     }
 
     if (baseId === 'mem_select_link_member') {
@@ -286,7 +310,7 @@ module.exports = {
       if (!member || isLinkedMember(member)) {
         return interaction.reply({ content: '⚠️ 這位成員已經被連結或已被移除，請重新操作。', flags: MessageFlags.Ephemeral });
       }
-      const embed = new EmbedBuilder().setColor(0x9b59b6).setTitle('🔗 連結 Discord 帳號（2/2）')
+      const embed = new EmbedBuilder().setColor(C.SPLITBILL).setTitle('🔗 連結 Discord 帳號（2/2）')
         .setDescription(`要把「**${member.name}**」連結到哪一位 Discord 使用者？帳目都會保留。`);
       // customId：mem_select_link_user::<tripId>::<memberId>（第二段固定是 tripId，
       // 讓 index.js 的權限檢查能鎖定同一個行程）
@@ -323,11 +347,18 @@ module.exports = {
       member.discordId = discordUserId;
       const saved = await save();
       // service 端會拒絕不合規的連結（例如同時有人先連結了），以回傳結果為準
-      const after = (saved.members || []).find((m) => m.id === memberId);
+      const after = ((saved && saved.members) || []).find((m) => m.id === memberId);
+      if (saved && Array.isArray(saved.members)) trip.members = saved.members;
       if (!after || after.discordId !== discordUserId) {
-        return showMainMenu(interaction, `⚠️ 「${member.name}」沒有連結成功（可能剛好被其他人搶先連結了），請重新查看成員名單。`);
+        return renderMemberNav(interaction, trip, `⚠️ 「${member.name}」沒有連結成功（可能剛好被其他人搶先連結了），請重新查看成員名單。`);
       }
-      return showMainMenu(interaction, `🔗 已把成員「${member.name}」連結到 <@${discordUserId}>，他現在可以操作這個行程了。`);
+      await renderMemberNav(interaction, trip, `🔗 已把成員「${member.name}」連結到 <@${discordUserId}>，他現在可以操作這個行程了。`);
+      // 被連結的人不會收到任何通知：在頻道公開告訴他（不是他的話可以提出）
+      await interaction.followUp({
+        content: `🔗 <@${discordUserId}> 你已被連結為「${trip.name}」的成員「${member.name}」，不是你的話請告訴行程建立者。`,
+        allowedMentions: { users: [discordUserId] },
+      }).catch(() => {});
+      return;
     }
   }
 };

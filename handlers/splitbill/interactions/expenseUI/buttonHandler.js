@@ -4,10 +4,11 @@ const {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, MessageFlags
 } = require('discord.js');
+const C = require('../../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const splitbillClient = require('../../utils/splitbillClient');
 const { memberDisplay } = require('../../utils/tripHelper');
 const { showMainMenu } = require('../../commands/splitbill');
-const { parseLedgerSuffix, expenseDraftCacheUserId, withDraftId, parseDraftCustomId } = require('./helpers');
+const { parseLedgerSuffix, expenseDraftCacheUserId, withDraftId, parseDraftCustomId, actualBaseInput } = require('./helpers');
 const { stopActiveBillScan, parseScanItemSuffix, scanItemCacheUserId } = require('./billScan');
 const { startBillScan } = require('./billScanFlow');
 const { renderLedgerPage } = require('./ledger');
@@ -30,7 +31,7 @@ async function handleButton(interaction, cache) {
 
     if (customId === 'exp_nav') {
       const embed = new EmbedBuilder()
-        .setColor(0x3498db)
+        .setColor(C.SPLITBILL)
         .setTitle('💸 記帳管理分頁')
         .setDescription(`目前行程：**${trip.name}**\n要做什麼？`);
 
@@ -52,7 +53,7 @@ async function handleButton(interaction, cache) {
 
       const currencies = Object.keys(trip.rates);
       const embed = new EmbedBuilder()
-        .setColor(0x2ecc71)
+        .setColor(C.SPLITBILL)
         .setTitle('💰 步驟 1/4：選擇幣別')
         .setDescription('預收款是出發前先向大家收的錢，例如團費。這筆是用哪種幣別收的？');
 
@@ -82,7 +83,7 @@ async function handleButton(interaction, cache) {
 
       const currencies = Object.keys(trip.rates);
       const embed = new EmbedBuilder()
-        .setColor(0x3498db)
+        .setColor(C.SPLITBILL)
         .setTitle('💱 步驟 1/3：請選擇幣別')
         .setDescription('先從下方選單選這筆支出是用哪種幣別付的。');
 
@@ -151,17 +152,13 @@ async function handleButton(interaction, cache) {
         .setRequired(true);
       if (amount) amountInput.setValue(String(amount));
 
-      const rateInput = new TextInputBuilder()
-        .setCustomId('custom_rate')
-        .setLabel(`自訂匯率（1 ${currency} = ? ${trip.baseCurrency}）`)
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('💡 留空將自動抓取當下即時網路匯率')
-        .setRequired(false);
+      // 外幣才問實際扣款金額（跟網頁一樣填結算幣別的金額，不填匯率）
+      const actualInput = actualBaseInput(currency, trip.baseCurrency);
 
       modal.addComponents(
         new ActionRowBuilder().addComponents(descInput),
         new ActionRowBuilder().addComponents(amountInput),
-        new ActionRowBuilder().addComponents(rateInput)
+        ...(actualInput ? [new ActionRowBuilder().addComponents(actualInput)] : [])
       );
 
       return interaction.showModal(modal);
@@ -234,7 +231,7 @@ async function handleButton(interaction, cache) {
       if (!pinnedTrip) return;
 
       const embed = new EmbedBuilder()
-        .setColor(0xe67e22)
+        .setColor(C.SPLITBILL)
         .setTitle('🎯 選擇分攤成員')
         .setDescription('請使用下方選單選擇需要一起平分這筆錢的成員：');
 
@@ -259,7 +256,7 @@ async function handleButton(interaction, cache) {
 
       const maxSelect = Math.min(pinnedTrip.members.length, 5);
       const embed = new EmbedBuilder()
-        .setColor(0xe74c3c)
+        .setColor(C.SPLITBILL)
         .setTitle('✏️ 自訂金額分攤')
         .setDescription(
           `總花費：**${state.amount} ${state.currency}**\n\n` +

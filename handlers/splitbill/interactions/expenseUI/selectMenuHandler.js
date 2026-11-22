@@ -4,11 +4,12 @@ const {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, MessageFlags
 } = require('discord.js');
+const C = require('../../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const { memberDisplay, nameLabel } = require('../../utils/tripHelper');
 const splitbillClient = require('../../utils/splitbillClient');
 const {
   formatAmountConversion, formatParticipantsList, parseLedgerSuffix,
-  expenseDraftCacheUserId, withDraftId, parseDraftCustomId
+  expenseDraftCacheUserId, withDraftId, parseDraftCustomId, actualBaseInput
 } = require('./helpers');
 const { parseScanItemSuffix, scanItemCacheUserId, buildScanResultView, SCAN_CURRENCY_CUSTOM_VALUE } = require('./billScan');
 const { renderSplitMethodUI, completeExpenseLogging, resolveDraftTrip } = require('./expenseCompletion');
@@ -75,7 +76,7 @@ async function handleSelectMenu(interaction, cache) {
       cache.set(guildId, user.id, { depositCurrency: selectedCurrency, tripId: trip.id });
 
       const embed = new EmbedBuilder()
-        .setColor(0x2ecc71)
+        .setColor(C.SPLITBILL)
         .setTitle('💰 步驟 2/4：誰收錢')
         .setDescription(`幣別：**${selectedCurrency}**\n\n誰負責收這筆預收款？\n*（例如：負責統一訂機票、住宿的人）*`);
 
@@ -107,7 +108,7 @@ async function handleSelectMenu(interaction, cache) {
       const maxSelect = Math.min(availableMembers.length, 5);
 
       const embed = new EmbedBuilder()
-        .setColor(0x2ecc71)
+        .setColor(C.SPLITBILL)
         .setTitle('💰 步驟 3/4：誰付錢給他（可多選）')
         .setDescription(`幣別：**${state.depositCurrency}**\n\n誰「付錢」給了收款人？\n*（💡 可多選，最多 ${maxSelect} 人）*`);
 
@@ -176,9 +177,13 @@ async function handleSelectMenu(interaction, cache) {
 
       const descInput = new TextInputBuilder().setCustomId('desc').setLabel('項目名稱（例如：計程車、晚餐）').setStyle(TextInputStyle.Short).setRequired(true);
       const amountInput = new TextInputBuilder().setCustomId('amount').setLabel(`金額（單位：${selectedCurrency}）`).setStyle(TextInputStyle.Short).setRequired(true);
-      const rateInput = new TextInputBuilder().setCustomId('custom_rate').setLabel(`自訂匯率（1 ${selectedCurrency} = ? ${trip.baseCurrency}）`).setStyle(TextInputStyle.Short).setPlaceholder('💡 留空將自動抓取當下即時網路匯率').setRequired(false);
+      // 外幣才問實際扣款金額（跟網頁一樣填結算幣別的金額，不填匯率）
+      const actualInput = actualBaseInput(selectedCurrency, trip.baseCurrency);
 
-      modal.addComponents(new ActionRowBuilder().addComponents(descInput), new ActionRowBuilder().addComponents(amountInput), new ActionRowBuilder().addComponents(rateInput));
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(descInput),
+        new ActionRowBuilder().addComponents(amountInput),
+        ...(actualInput ? [new ActionRowBuilder().addComponents(actualInput)] : []));
       return interaction.showModal(modal);
     }
 

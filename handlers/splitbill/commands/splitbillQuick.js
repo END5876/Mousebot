@@ -1,5 +1,6 @@
 'use strict';
 
+const C = require('../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const { SlashCommandSubcommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const splitbillClient = require('../utils/splitbillClient');
 const logger = require('../../../utils/logger');
@@ -148,7 +149,7 @@ module.exports = {
       const participantText = newExpense.participants.map(s => `${memberDisplay(trip, s.userId)}(${s.amount})`).join('、');
 
       const embed = new EmbedBuilder()
-        .setColor(0x2ecc71)
+        .setColor(C.SUCCESS)
         .setTitle('⚡ 快速記帳成功！')
         .setDescription(
           `**${description}** — ${amount} ${currency} ➔ ${amountInBase} ${trip.baseCurrency}（匯率來源：${rateSource}）\n\n` +

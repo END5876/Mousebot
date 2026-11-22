@@ -1,6 +1,7 @@
 // handlers/unifiedQueue/commands.js
 // 統一佇列 — Slash Commands 註冊、控制面板按鈕互動、閒置監控管理指令
 
+const C = require('../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const { getVoiceConnection } = require('@discordjs/voice');
 const logger = require('../../../utils/logger');
 const {
@@ -8,6 +9,9 @@ const {
   SlashCommandBuilder,
   MessageFlags,
   PermissionFlagsBits,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
 } = require('discord.js');
 
 const voiceMonitor = require('../voiceActivityMonitor');
@@ -29,6 +33,7 @@ const {
   prefetchUpcoming,
   refreshControlPanel,
   _buildButtons,
+  buildQueueView,
 } = require('./playback');
 const { handlePlay, handleAutocomplete } = require('./search');
 const bootSummary = require('../../../utils/bootSummary');
@@ -36,12 +41,29 @@ const session = require('./session');
 const webSync = require('./webSync');
 const { md } = require('../../../utils/markdown');
 
+// 面板「停止播放」：佇列至少這麼多首時先確認（決定 6）
+const STOP_CONFIRM_MIN = 5;
+// 停止確認：代碼 → { 當時的播放（nowPlaying 物件）, 時間 }，2 分鐘內、而且還是同一輪播放才算數
+const STOP_CONFIRM_TTL_MS = 2 * 60 * 1000;
+const pendingStops = new Map();
+function newStopToken(np) {
+  const now = Date.now();
+  for (const [k, v] of pendingStops) if (now - v.at > STOP_CONFIRM_TTL_MS) pendingStops.delete(k);
+  const token = now.toString(36) + Math.random().toString(36).slice(2, 6);
+  pendingStops.set(token, { np, at: now });
+  return token;
+}
+
 // ════════════════════════════════════════════════════════
 //  setupUnifiedCommands
 // ════════════════════════════════════════════════════════
 function setupUnifiedCommands(client) {
   client.on('interactionCreate', async interaction => {
     if (interaction.isAutocomplete()) {
+      if (interaction.commandName === 'music') {
+        respondQueuePositions(interaction);
+        return;
+      }
       handleAutocomplete(interaction);
       return;
     }
@@ -52,7 +74,7 @@ function setupUnifiedCommands(client) {
     // 正常情況下，合法時間內的搜尋互動已被 awaitMessageComponent
     // 的 filter 攔截消耗掉，這裡只會接到「逾時後才點擊」的殭屍互動。
     
-    const ZOMBIE_BUTTON_PREFIXES = ['srch_', 'pl_', 'lm_'];
+    const ZOMBIE_BUTTON_PREFIXES = ['srch_', 'pl_', 'lm_', 'pa_'];
     const ZOMBIE_SELECT_IDS      = ['srch_pick', 'lm_pick'];
 
     if ((interaction.isButton() && ZOMBIE_BUTTON_PREFIXES.some(p => interaction.customId.startsWith(p))) ||
@@ -62,6 +84,15 @@ function setupUnifiedCommands(client) {
       // selection.update() 搶著 ACK 同一個 interaction，導致對方拿到
       // DiscordAPIError[10062] Unknown interaction。交給那邊的 collector 處理即可。
       if (interaction.message && activeSearchMessages.has(interaction.message.id)) {
+        // 別人點了這則搜尋結果：collector 只收原本搜尋的人，這裡回一句說明，不讓 Discord 顯示「此互動失敗」
+        const owner = activeSearchMessages.get(interaction.message.id);
+        if (owner && owner !== interaction.user.id) {
+          return interaction.reply({
+            content: `這是 <@${owner}> 的搜尋結果，只有他能選。想點歌的話，用 /play 自己搜尋。`,
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: { parse: [] },
+          }).catch(() => {});
+        }
         return;
       }
       return interaction.reply({
@@ -74,43 +105,65 @@ function setupUnifiedCommands(client) {
     if (!interaction.customId.startsWith('uq_')) return;
 
     const guildId = interaction.guildId;
-    const np = nowPlaying.get(guildId);
-    if (!np) {
-      return interaction.reply({ content: 'ℹ️ 目前沒有播放音樂。用 /play 點歌。', flags: MessageFlags.Ephemeral });
-    }
-
-    // ★ 使用者操作控制面板按鈕，視為頻道仍活躍，重置閒置計時器
-    voiceMonitor.touchActivity(guildId);
+    // 面板按鈕的回覆只有按的人看得到（面板本身會跟著更新，大家都看得到狀態）
+    const say = (text) => interaction.reply({ content: text, flags: MessageFlags.Ephemeral });
 
     try {
+      // ── 不需要正在播放的按鈕：佇列換頁、停止的確認 ──
+      if (interaction.customId.startsWith('uq_qpage:')) {
+        const page = Number(interaction.customId.split(':')[1]) || 0;
+        return await interaction.update(buildQueueView(guildId, page));
+      }
+      if (interaction.customId === 'uq_stop_no') {
+        return await interaction.update({ content: '好，繼續播放。', embeds: [], components: [] });
+      }
+      if (interaction.customId.startsWith('uq_stop_yes:')) {
+        const pending = pendingStops.get(interaction.customId.split(':')[1]);
+        if (!nowPlaying.has(guildId)) {
+          return await interaction.update({ content: 'ℹ️ 已經停止了。', embeds: [], components: [] });
+        }
+        if (!pending || pending.np !== nowPlaying.get(guildId) || Date.now() - pending.at > STOP_CONFIRM_TTL_MS) {
+          return await interaction.update({ content: 'ℹ️ 這個確認已經過期了。要停止的話，請再按一次面板的「停止播放」。', embeds: [], components: [] });
+        }
+        const count = (queues.get(guildId) || []).length;
+        stopAll(guildId);
+        await interaction.update({ content: `⏹️ 已停止播放${count ? `，清空了 ${count} 首佇列` : ''}。`, embeds: [], components: [] });
+        webSync.notifyChange();
+        return;
+      }
+
+      const np = nowPlaying.get(guildId);
+      if (!np) {
+        return await interaction.reply({ content: 'ℹ️ 目前沒有播放音樂。用 /play 點歌。', flags: MessageFlags.Ephemeral });
+      }
+
+      // ★ 使用者操作控制面板按鈕，視為頻道仍活躍，重置閒置計時器
+      voiceMonitor.touchActivity(guildId);
+
       switch (interaction.customId) {
         case 'uq_skip': {
           const queue = queues.get(guildId) || [];
           const loopMode = loopSettings.get(guildId) || 'off';
           const isRandomPlay = randomPlaySettings.get(guildId) || false;
 
-          // 隨機連播模式下，skip 直接觸發 player.stop()，
-          // Idle 事件會自動隨機挑下一首
+          // 隨機連播模式下，skip 直接觸發 player.stop()，Idle 事件會自動隨機挑下一首
           if (isRandomPlay) {
             skipCurrent(guildId);
-            await interaction.reply({ content: '⏭️ 已跳過，接著隨機連播下一首。', flags: MessageFlags.Ephemeral });
-            break;
-          }
-
-          // 只有「佇列真的空了」且「循環模式關閉」時才整組停止；
-          // 否則交給 player.stop() 觸發 Idle 事件，讓 playback.js 的
-          // 循環邏輯（單曲重播 / 列表循環）接手判斷，避免跳過鍵誤殺循環設定
-          if (queue.length === 0 && loopMode === 'off') {
+            await say('⏭️ 已跳過，接著隨機連播下一首。');
+          } else if (queue.length === 0 && loopMode === 'off') {
+            // 只有「佇列真的空了」且「循環模式關閉」時才整組停止；
+            // 否則交給 player.stop() 觸發 Idle 事件，讓 playback.js 的循環邏輯接手
             stopAll(guildId);
-            await interaction.reply({ content: '⏭️ 已跳過，佇列為空，停止播放', flags: MessageFlags.Ephemeral });
+            await say('⏭️ 已跳過。佇列是空的，已停止播放。');
           } else if (loopMode === 'one') {
             const text = loopOneSkipText(guildId);
             skipCurrent(guildId);
-            await interaction.reply({ content: text, flags: MessageFlags.Ephemeral });
+            await say(text);
           } else {
             skipCurrent(guildId);
-            await interaction.reply({ content: '⏭️ 跳過當前歌曲', flags: MessageFlags.Ephemeral });
+            await say('⏭️ 已跳過這首。');
           }
+          webSync.notifyChange();
           break;
         }
 
@@ -129,107 +182,64 @@ function setupUnifiedCommands(client) {
           break;
         }
 
-        case 'uq_stop':
+        // 停止＝停止播放並清空佇列（決定 6）：佇列 5 首以上先問一次，只有按的人看得到
+        case 'uq_stop': {
+          const count = (queues.get(guildId) || []).length;
+          if (count >= STOP_CONFIRM_MIN) {
+            const token = newStopToken(np);
+            await interaction.reply({
+              embeds: [new EmbedBuilder().setColor(C.DANGER).setTitle(`停止播放並清空 ${count} 首佇列？`)
+                .setDescription('目前這首會停止，佇列裡的歌也會全部移除。')],
+              components: [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`uq_stop_yes:${token}`).setLabel('停止並清空').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('uq_stop_no').setLabel('繼續播放').setStyle(ButtonStyle.Secondary),
+              )],
+              flags: MessageFlags.Ephemeral,
+            });
+            break;
+          }
           stopAll(guildId);
-          await interaction.reply({ content: '⏹️ 已停止播放', flags: MessageFlags.Ephemeral });
-          break;
-
-        case 'uq_loop_one': {
-          // 開啟單曲循環時，關閉隨機連播（互斥）
-          randomPlaySettings.set(guildId, false);
-          const cur = loopSettings.get(guildId);
-          const next = cur === 'one' ? 'off' : 'one';
-          loopSettings.set(guildId, next);
-          await interaction.reply({
-            content: next === 'one' ? '🔂 已開啟單曲循環，這首會一直重播。' : '➡️ 已改回不循環，佇列播完就停止。',
-            flags: MessageFlags.Ephemeral,
-          });
-          await updateControlPanel(guildId, interaction.channel);
+          await say(`⏹️ 已停止播放${count ? `，清空了 ${count} 首佇列` : ''}。`);
+          webSync.notifyChange();
           break;
         }
 
+        case 'uq_loop_one':
         case 'uq_loop_all': {
-          // 開啟列表循環時，關閉隨機連播（互斥）
+          const mode = interaction.customId === 'uq_loop_one' ? 'one' : 'all';
+          // 開啟循環時關閉隨機連播（互斥）
           randomPlaySettings.set(guildId, false);
-          const cur = loopSettings.get(guildId);
-          const next = cur === 'all' ? 'off' : 'all';
+          const next = loopSettings.get(guildId) === mode ? 'off' : mode;
           loopSettings.set(guildId, next);
           if (next === 'all') resetLoopAllCycle(guildId);
-          await interaction.reply({
-            content: next === 'all' ? '🔁 已開啟列表循環，佇列播完會從頭再播。' : '➡️ 已改回不循環，佇列播完就停止。',
-            flags: MessageFlags.Ephemeral,
-          });
-          await updateControlPanel(guildId, interaction.channel);
+          await say(next === 'one' ? '🔂 已開啟單曲循環，這首會一直重播。'
+            : next === 'all' ? '🔁 已開啟列表循環，佇列播完會從頭再播。'
+              : '➡️ 已改回不循環，佇列播完就停止。');
+          // 走面板更新的排隊（換歌時正在重發面板也不會互相蓋掉）；會順便排程寫出播放快照
+          await updateControlPanel(guildId, interaction.channel, { preferEdit: true });
+          webSync.notifyChange();
           break;
         }
 
         case 'uq_random_play': {
-          const cur = randomPlaySettings.get(guildId) || false;
-          const next = !cur;
+          const next = !(randomPlaySettings.get(guildId) || false);
           randomPlaySettings.set(guildId, next);
-
           if (next) {
-            // 開啟隨機連播時，關閉其他循環模式（互斥）
+            // 開啟隨機連播時，關閉其他循環模式（互斥）；每次開啟都是全新一輪，
+            // 重置洗牌袋，與 /music randomplay（playRandomLocal 內部）的行為一致
             loopSettings.set(guildId, 'off');
-            // ★ 新增：每次「開啟」隨機連播都視為全新一輪，
-            //   重置洗牌袋，避免沿用上次關閉前播到一半的舊順序，
-            //   與 /music randomplay（playRandomLocal 內部）的行為保持一致
             resetShuffleBag(guildId);
-            await interaction.reply({
-              content: '🎲 已開啟隨機連播，播完這首會從音樂庫隨機挑下一首。',
-              flags: MessageFlags.Ephemeral,
-            });
-          } else {
-            await interaction.reply({
-              content: '➡️ 已關閉隨機連播，播完這首會接著播佇列（佇列空了就停止）。',
-              flags: MessageFlags.Ephemeral,
-            });
           }
-          await updateControlPanel(guildId, interaction.channel);
+          await say(next ? '🎲 已開啟隨機連播，播完這首會從音樂庫隨機挑下一首。'
+            : '➡️ 已關閉隨機連播，播完這首會接著播佇列（佇列空了就停止）。');
+          await updateControlPanel(guildId, interaction.channel, { preferEdit: true });
+          webSync.notifyChange();
           break;
         }
 
-        case 'uq_queue': {
-          const queueList = queues.get(guildId) || [];
-          const loopMode = loopSettings.get(guildId) || 'off';
-          const isRandomPlay = randomPlaySettings.get(guildId) || false;
-          let loopText = '➡️ 不循環';
-          if (loopMode === 'one') loopText = '🔂 單曲循環';
-          if (loopMode === 'all') loopText = '🔁 列表循環';
-          if (isRandomPlay) loopText = '🎲 隨機連播';
-
-          const embed = new EmbedBuilder()
-            .setColor(isRandomPlay ? 0xFF8C00 : 0x1DB954)
-            .setTitle('🎵 播放佇列')
-            .addFields(
-              {
-                name: '🎧 正在播放',
-                value: np.item.type === 'bilibili'
-                  ? `[${md(np.item.title)}](${np.item.url})`
-                  : `**${md(np.item.title)}**`,
-                inline: false,
-              },
-              { name: '循環模式', value: loopText, inline: true },
-              { name: '佇列數量', value: `${queueList.length} 首`, inline: true },
-            )
-            .setTimestamp();
-
-          if (queueList.length > 0) {
-            const listText = queueList.map((t, i) =>
-              t.type === 'bilibili'
-                ? `${i + 1}. [${md(t.title)}](${t.url})`
-                : `${i + 1}. **${md(t.title)}**`
-            ).join('\n');
-            embed.addFields({
-              name: '📋 佇列',
-              value: listText.length > 1024 ? listText.slice(0, 1021) + '...' : listText,
-              inline: false,
-            });
-          }
-
-          await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+        case 'uq_queue':
+          await interaction.reply({ ...buildQueueView(guildId, 0), flags: MessageFlags.Ephemeral });
           break;
-        }
       }
     } catch (err) {
       logger.error('UnifiedQueue', '按鈕互動錯誤:', err);
@@ -289,9 +299,10 @@ const musicCommand = {
         .setDescription('從佇列移除指定的一首歌')
         .addIntegerOption(opt =>
           opt.setName('position')
-            .setDescription('要移除的佇列編號（用 /music queue 查看）')
+            .setDescription('要移除第幾首（打數字會列出對應的歌名）')
             .setMinValue(1)
             .setRequired(true)
+            .setAutocomplete(true)
         )
     )
     .addSubcommand(sub => sub.setName('loop').setDescription('切換循環模式（不循環 → 單曲循環 → 列表循環）'))
@@ -371,8 +382,9 @@ async function handleMusicStop(interaction) {
   if (!nowPlaying.has(interaction.guildId)) {
     return interaction.reply({ content: 'ℹ️ 目前沒有播放音樂。用 /play 點歌。', flags: MessageFlags.Ephemeral });
   }
+  const count = (queues.get(interaction.guildId) || []).length;
   stopAll(interaction.guildId);
-  await interaction.reply({ content: '⏹️ 已停止播放' });
+  await interaction.reply({ content: `⏹️ 已停止播放${count ? `，清空了 ${count} 首佇列` : ''}。` });
 }
 
 // ── /music skip ──────────────────────────────────────────
@@ -472,7 +484,7 @@ async function handleMusicLoop(interaction) {
   await interaction.reply({
     embeds: [
       new EmbedBuilder()
-        .setColor(next === 'off' ? 0x95A5A6 : 0x1DB954)
+        .setColor(next === 'off' ? C.NEUTRAL : C.MUSIC)
         .setTitle(loopText)
         .setDescription(description)
         .addFields({
@@ -489,51 +501,27 @@ async function handleMusicLoop(interaction) {
 }
 
 // ── /music queue ──────────────────────────────────────────
+// 每頁 20 首，超過時 ◀ ▶ 換頁（buildQueueView，跟面板的「佇列」按鈕共用）
 async function handleMusicQueue(interaction) {
   const np = nowPlaying.get(interaction.guildId);
   const queueList = queues.get(interaction.guildId) || [];
-  const loopMode = loopSettings.get(interaction.guildId) || 'off';
-  const isRandomPlay = randomPlaySettings.get(interaction.guildId) || false;
-
   if (!np && queueList.length === 0) {
     return interaction.reply({ content: 'ℹ️ 目前沒有播放音樂，佇列也是空的。用 /play 點歌。', flags: MessageFlags.Ephemeral });
   }
+  await interaction.reply(buildQueueView(interaction.guildId, 0));
+}
 
-  let loopText = '➡️ 不循環';
-  if (loopMode === 'one') loopText = '🔂 單曲循環';
-  if (loopMode === 'all') loopText = '🔁 列表循環';
-  if (isRandomPlay) loopText = '🎲 隨機連播';
-
-  const embed = new EmbedBuilder()
-    .setColor(isRandomPlay ? 0xFF8C00 : 0x1DB954)
-    .setTitle('🎵 播放佇列')
-    .setTimestamp();
-
-  if (np) {
-    embed.addFields({
-      name: '🎧 正在播放',
-      value: np.item.type === 'bilibili'
-        ? `[${md(np.item.title)}](${np.item.url})\n作者：${md(np.item.author || '未知')}`
-        : `**${md(np.item.title)}**`,
-      inline: false,
-    });
-  }
-  embed.addFields({ name: '循環模式', value: loopText, inline: true });
-
-  if (queueList.length > 0) {
-    const listText = queueList.map((t, i) =>
-      t.type === 'bilibili'
-        ? `${i + 1}. [${md(t.title)}](${t.url})`
-        : `${i + 1}. **${md(t.title)}**`
-    ).join('\n');
-    embed.addFields({
-      name: `📋 佇列（${queueList.length} 首）`,
-      value: listText.length > 1024 ? listText.slice(0, 1023) + '…' : listText,
-      inline: false,
-    });
-  }
-
-  await interaction.reply({ embeds: [embed] });
+// /music remove 的位置自動完成：「3. 歌名」，可以打編號或歌名過濾（Discord 一次最多 25 個）
+function respondQueuePositions(interaction) {
+  const focused = interaction.options.getFocused(true);
+  if (focused.name !== 'position') { interaction.respond([]).catch(() => {}); return; }
+  const queue = queues.get(interaction.guildId) || [];
+  const q = String(focused.value || '').trim().toLowerCase();
+  const choices = queue
+    .map((t, i) => ({ name: `${i + 1}. ${t.title}`.slice(0, 100), value: i + 1 }))
+    .filter((c) => !q || String(c.value).startsWith(q) || c.name.toLowerCase().includes(q))
+    .slice(0, 25);
+  interaction.respond(choices).catch(() => {});
 }
 
 // ── /music clear ──────────────────────────────────────────
@@ -588,7 +576,7 @@ async function handleMusicRandomPlay(interaction) {
   }
 
   const embed = new EmbedBuilder()
-    .setColor(enableContinuous ? 0xFF8C00 : 0x1DB954)
+    .setColor(C.MUSIC)
     .setTitle(enableContinuous ? '🎲 隨機連播已開始' : '🎲 隨機播一首')
     .setDescription(`🎧 **${md(track.title)}**`)
     .addFields(

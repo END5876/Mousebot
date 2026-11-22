@@ -2,6 +2,7 @@
 // 統一佇列 — /play 核心邏輯、網址清理、全部本地音樂、線上搜尋（YouTube）、即時 Autocomplete
 'use strict';
 
+const C = require('../../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const { EmbedBuilder } = require('discord.js');
 
 const { _engines, SEARCH_MARKER, LOCAL_KEY_MARKER } = require('../state');
@@ -73,12 +74,12 @@ async function handlePlay(interaction, input, shuffleOpt = 'no') {
     // YouTube 網址沒有 list= 參數就不可能是播放清單，直接跳過偵測（省一次 yt-dlp）
     const needPlaylistCheck = typeof engine.checkPlaylist === 'function' && !_isYouTubeWithoutList(input);
     const infoMsg = () => interaction.editReply({
-      embeds: [new EmbedBuilder().setColor(0x95A5A6).setDescription('🔍 正在讀取這個影片…（通常 5 秒內）')]
+      embeds: [new EmbedBuilder().setColor(C.NEUTRAL).setDescription('🔍 正在讀取這個影片…（通常 5 秒內）')]
     });
 
     await (needPlaylistCheck
       ? interaction.editReply({
-          embeds: [new EmbedBuilder().setColor(0x95A5A6).setDescription('🔍 正在讀取這個網址…（通常 5 秒內）')]
+          embeds: [new EmbedBuilder().setColor(C.NEUTRAL).setDescription('🔍 正在讀取這個網址…（通常 5 秒內）')]
         })
       : infoMsg());
 

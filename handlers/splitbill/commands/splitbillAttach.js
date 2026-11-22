@@ -1,5 +1,6 @@
 'use strict';
 
+const C = require('../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const { SlashCommandSubcommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const splitbillClient = require('../utils/splitbillClient');
 const logger = require('../../../utils/logger');
@@ -47,7 +48,7 @@ module.exports = {
       lines.push('', '已切換到這個行程，輸入 `/splitbill panel` 就能開始記帳。');
       lines.push('還沒連結 Discord 的成員：本人可以用網頁的邀請連結加入並選「我是哪一位」，或由任何成員在「👥 成員管理 → 🔗 連結 Discord 帳號」替他連結。');
 
-      const embed = new EmbedBuilder().setColor(0x2ecc71).setTitle('🔗 已連到這個伺服器').setDescription(lines.join('\n'));
+      const embed = new EmbedBuilder().setColor(C.SUCCESS).setTitle('🔗 已連到這個伺服器').setDescription(lines.join('\n'));
       return interaction.editReply({ embeds: [embed] });
     } catch (err) {
       // 4xx 是使用者輸入的問題（綁定碼錯誤等），不必記錄；其他的才是服務或程式出錯

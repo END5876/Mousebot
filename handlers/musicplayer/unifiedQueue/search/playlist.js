@@ -7,6 +7,7 @@ const {
   ButtonStyle,
 } = require('discord.js');
 
+const C = require('../../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const { activeSearchMessages } = require('../state');
 const logger = require('../../../../utils/logger');
 const { enqueue, updateControlPanel } = require('../playback');
@@ -37,7 +38,7 @@ async function _askPlaylistChoice(interaction, playlistInfo) {
   const message = await interaction.editReply({
     embeds: [
       new EmbedBuilder()
-        .setColor(0x1DB954)
+        .setColor(C.MUSIC)
         .setTitle('📋 偵測到播放清單')
         .setDescription(`「${playlistInfo.title}」共有 **${playlistInfo.count}** 首歌，要怎麼加入？`)
         .setFooter({ text: '30 秒內沒選，就只加入你貼的這一首。' })
@@ -48,7 +49,7 @@ async function _askPlaylistChoice(interaction, playlistInfo) {
   if (!message) return 'cancel';
 
   // 殭屍互動防護（與 _handleOnlineSearch / _handleLocalMultiSelect 一致）
-  activeSearchMessages.add(message.id);
+  activeSearchMessages.set(message.id, interaction.user.id);
 
   let selection;
   try {
@@ -59,7 +60,7 @@ async function _askPlaylistChoice(interaction, playlistInfo) {
     });
   } catch {
     await interaction.editReply({
-      embeds: [new EmbedBuilder().setColor(0x95A5A6).setDescription('⌛ 30 秒內沒選，只加入你貼的這一首。')],
+      embeds: [new EmbedBuilder().setColor(C.NEUTRAL).setDescription('⌛ 30 秒內沒選，只加入你貼的這一首。')],
       components: [],
     }).catch(() => {});
     return 'first';
@@ -74,7 +75,7 @@ async function _askPlaylistChoice(interaction, playlistInfo) {
 
   await selection.update({
     embeds: [
-      new EmbedBuilder().setColor(0x1DB954).setDescription(
+      new EmbedBuilder().setColor(C.MUSIC).setDescription(
         selection.customId === 'pl_all'
           ? '📋 正在加入整個播放清單…（歌多的話要十幾秒）'
           : '🔍 正在讀取這個影片…（通常 5 秒內）'
@@ -123,7 +124,7 @@ async function _handleAddPlaylist(interaction, baseUrl, playlistInfo, guildId) {
   }
 
   const embed = new EmbedBuilder()
-    .setColor(0x1DB954)
+    .setColor(C.MUSIC)
     .setTitle('📋 播放清單已加入')
     .setDescription(`「${playlistInfo.title}」`)
     .addFields(

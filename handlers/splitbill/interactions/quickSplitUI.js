@@ -4,6 +4,7 @@ const {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ModalBuilder, TextInputBuilder, TextInputStyle, UserSelectMenuBuilder, MessageFlags
 } = require('discord.js');
+const C = require('../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const { equalSplit, round2, parseMoneyInput, validateCustomSplit, validatePayers } = require('../utils/calculator');
 const { simplifyDebts } = require('../utils/settlement');
 const { nameLabel } = require('../utils/tripHelper');
@@ -74,7 +75,7 @@ function buildResultPayload(state) {
     : ['🎉 剛好互相抵銷，無需任何轉帳！'];
 
   const embed = new EmbedBuilder()
-    .setColor(0x2ecc71)
+    .setColor(C.SPLITBILL)
     .setTitle('⚡ 快速分帳結果')
     .setDescription(`**${item}** — 總金額 ${amount} ${currency}`)
     .addFields(
@@ -95,7 +96,7 @@ function buildResultPayload(state) {
 /** 2️⃣ 代墊人選單畫面（含「就是我自己」快捷按鈕） */
 function buildPayerStepPayload(state) {
   const embed = new EmbedBuilder()
-    .setColor(0xf1c40f)
+    .setColor(C.SPLITBILL)
     .setTitle('⚡ 快速分帳 · 誰先代墊了這筆錢？')
     .setDescription(
       `**${state.item}** — ${state.amount} ${state.currency}\n\n` +
@@ -123,7 +124,7 @@ function buildPayerStepPayload(state) {
 function buildParticipantStepPayload(state) {
   const payerNames = state.payers.map(p => `<@${p.userId}>`).join('、');
   const embed = new EmbedBuilder()
-    .setColor(0x3498db)
+    .setColor(C.SPLITBILL)
     .setTitle('⚡ 快速分帳 · 誰要一起分攤？')
     .setDescription(
       `**${state.item}** — ${state.amount} ${state.currency}\n代墊人：${payerNames}\n\n` +
@@ -151,7 +152,7 @@ function buildSplitModePayload(state) {
   const canCustom = state.participants.length <= CUSTOM_SPLIT_MODAL_LIMIT;
 
   const embed = new EmbedBuilder()
-    .setColor(0x9b59b6)
+    .setColor(C.SPLITBILL)
     .setTitle('⚡ 快速分帳 · 怎麼分？')
     .setDescription(
       `**${state.item}** — ${state.amount} ${state.currency}\n分攤對象：${participantNames}\n\n` +

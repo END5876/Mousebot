@@ -1,9 +1,11 @@
 'use strict';
 
+const C = require('../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
 const splitbillClient = require('../utils/splitbillClient');
 const { canViewTrip } = require('../utils/tripHelper');
 const { md } = require('../../../utils/markdown');
+const { splitbillUrl, linkButton } = require('../../../utils/publicUrls');
 const quickCmd = require('./splitbillQuick');
 const attachCmd = require('./splitbillAttach');
 
@@ -37,7 +39,7 @@ module.exports = {
     const trip = canViewTrip(resolved, interaction.user.id) ? resolved : null;
 
     const embed = new EmbedBuilder()
-      .setColor(0x5865f2)
+      .setColor(C.SPLITBILL)
       .setTitle('🧮 分帳主選單')
       .setDescription('用下方按鈕和選單管理行程、記帳和結算。')
       .setTimestamp();
@@ -63,7 +65,7 @@ module.exports = {
       // 避免手機寬度不夠時，長金額文字把整列擠爆或截斷。
       embed.addFields(
         { name: '🧳 目前行程', value: `**${md(trip.name)}**`, inline: true },
-        { name: '🪙 基準幣別', value: `\`${trip.baseCurrency}\``, inline: true },
+        { name: '🪙 結算用的幣別', value: `\`${trip.baseCurrency}\``, inline: true },
         { name: '👥 行程人數', value: `\`${trip.members.length} 人\``, inline: true },
         {
           name: '📒 帳目統計',
@@ -92,6 +94,9 @@ module.exports = {
     const quickRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('qs_start').setLabel('⚡ 快速分帳').setStyle(ButtonStyle.Primary)
     );
+    // 有設定 SPLITBILL_PUBLIC_URL 時，第二排加「在裊器分帳開啟」
+    const web = linkButton('在裊器分帳開啟', splitbillUrl(), '🌐');
+    if (web) quickRow.addComponents(web);
 
     const payload = { 
       embeds: [embed], 

@@ -521,6 +521,7 @@ function runParent() {
 // 2026-11-08 使用者要求：/music local list 改為 /music list；/splitbill-quick、/splitbill-attach 併入 /splitbill 子指令（panel／quick／attach）
 // 2026-11-22 UI 改版第 5 批（文案大掃除，ui-review/GLOSSARY.md）：/play、/music、/splitbill 的指令說明改用統一用詞
 //   （本地音樂→音樂庫、隨機排序→打亂順序、花費→支出、綁定→連到伺服器），只改說明文字，選項與行為不變。
+// 2026-11-22 UI 改版第 6 批：/music remove 的 position 加自動完成（顯示「3. 歌名」），說明改成「要移除第幾首（打數字會列出對應的歌名）」。
 const EXPECTED = {
   "commands": {
     "order": [
@@ -539,11 +540,11 @@ const EXPECTED = {
       "play",
       "music"
     ],
-    "hash": "9e6220e450e404ac8868a7254d4bcfeda3f45250c5923167b77c685cae95ad05",
+    "hash": "cd9a41773143e4d000a19988b27bbff40e98a89f6110b01be9e82ca4c17288fb",
     "perCommand": {
       "ai": "87328ef894fcd4ce0366a01fcfed1ca54e416bfd165ba046bccbb6ebec6dacdf",
       "autojoin": "3ac54ee7c6a6b7c7a0b4d98716ce2bb880d87c8a46f726b4b3e7846489426141",
-      "music": "fb6d2846b5e1e84d8f83cc089b94403b03e80cbbfade9a4f9e1e397924e21c6c",
+      "music": "1247bdb3ca7b9e64197e2c0e47c2c1b8a63f67ef29c02b115c369c2df5064b86",
       "nh": "2ac77d917b93d75311bf6338e4971d199c92b3b323154ad1c62b45c431e5b94c",
       "notify": "f62c8eb19c08f5e189157b8459c10fad6352a5504c9e4837784e524365c7d66b",
       "ping": "b449edfcb32695a478ad802cf05f36888e51737afd0f85b7cf5751167616df56",

@@ -8,6 +8,7 @@ const {
   StringSelectMenuBuilder,
 } = require('discord.js');
 
+const C = require('../../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const { _engines, activeSearchMessages } = require('../state');
 const { updateControlPanel, enqueue } = require('../playback');
 const { md } = require('../../../../utils/markdown');
@@ -33,7 +34,7 @@ async function _replyPlayResult(interaction, item, result) {
       ];
 
   const replyEmbed = new EmbedBuilder()
-    .setColor(0x1DB954)
+    .setColor(C.MUSIC)
     .setTitle(result.queued ? '➕ 已加入佇列' : '▶️ 開始播放')
     .setDescription(descText)
     .setTimestamp();
@@ -99,7 +100,7 @@ async function _handleOnlineSearch(interaction, keyword, guildId) {
 
   await interaction.editReply({
     embeds: [
-      new EmbedBuilder().setColor(0x95A5A6).setDescription(`🔍 正在 YouTube 和 Bilibili 搜尋「${keyword}」…（最多約 20 秒）`)
+      new EmbedBuilder().setColor(C.NEUTRAL).setDescription(`🔍 正在 YouTube 和 Bilibili 搜尋「${keyword}」…（最多約 20 秒）`)
     ],
     components: [],
   });
@@ -122,7 +123,7 @@ async function _handleOnlineSearch(interaction, keyword, guildId) {
   const message = await interaction.editReply({
     embeds: [
       new EmbedBuilder()
-        .setColor(0x1DB954)
+        .setColor(C.MUSIC)
         .setTitle(`🔍 搜尋結果：「${keyword}」（YouTube + Bilibili）`)
         .setDescription(listText)
         .setFooter({ text: '60 秒內從下方選單選一首（🎬 YouTube、📺 Bilibili），或按「取消搜尋」。' })
@@ -132,7 +133,7 @@ async function _handleOnlineSearch(interaction, keyword, guildId) {
 
   if (!message) return;
 
-  activeSearchMessages.add(message.id);
+  activeSearchMessages.set(message.id, interaction.user.id);
 
   let selection;
   try {
@@ -158,7 +159,7 @@ async function _handleOnlineSearch(interaction, keyword, guildId) {
 
   await selection.update({
     embeds: [
-      new EmbedBuilder().setColor(0x95A5A6).setDescription(`🔍 正在讀取「${picked.title}」…（通常 5 秒內）`)
+      new EmbedBuilder().setColor(C.NEUTRAL).setDescription(`🔍 正在讀取「${picked.title}」…（通常 5 秒內）`)
     ],
     components: [],
   });

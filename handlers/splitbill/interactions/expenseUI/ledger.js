@@ -3,6 +3,7 @@
 const {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder
 } = require('discord.js');
+const C = require('../../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const { memberDisplay } = require('../../utils/tripHelper');
 const { round2 } = require('../../utils/calculator');
 const { formatAmountConversion, formatParticipantsList, getBackNavConfig } = require('./helpers');
@@ -20,7 +21,7 @@ function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'ex
 
   if (!allRecords.length) {
     const embed = new EmbedBuilder()
-      .setColor(0x95a5a6)
+      .setColor(C.NEUTRAL)
       .setTitle(`📒 「${trip.name}」總帳目清單`)
       .setDescription('📭 還沒有任何支出或預收款。');
 
@@ -66,7 +67,7 @@ function renderLedgerPage(interaction, trip, page, alertMsg = null, source = 'ex
   const totalDepositBase = (trip.deposits || []).reduce((sum, d) => sum + (d.amountInBase || 0), 0);
 
   const embed = new EmbedBuilder()
-    .setColor(0x1abc9c)
+    .setColor(C.SPLITBILL)
     .setTitle(`📒 「${trip.name}」總帳目清單`)
     .setDescription(lines)
     .addFields(

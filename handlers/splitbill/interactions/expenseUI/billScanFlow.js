@@ -3,6 +3,7 @@
 const {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags
 } = require('discord.js');
+const C = require('../../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const { scanBillImage } = require('../../utils/billScanner');
 const logger = require('../../../../utils/logger');
 // processAttachments 內部（fetchImageAsBase64 -> fetchImageUrlAsBase64）已經會把圖片
@@ -32,7 +33,7 @@ async function startBillScan(interaction, trip, cache) {
   stopActiveBillScan(guildId, user.id, 'superseded');
 
   const waitEmbed = new EmbedBuilder()
-    .setColor(0x9b59b6)
+    .setColor(C.SPLITBILL)
     .setTitle('📷 掃描帳單新增支出')
     .setDescription(
       `請在 **${BILL_SCAN_TIMEOUT_MS / 1000} 秒內**，直接在本頻道傳送帳單／收據照片（拍照或截圖皆可）。\n` +
@@ -89,7 +90,7 @@ async function startBillScan(interaction, trip, cache) {
       await deliverResult({
         embeds: [
           new EmbedBuilder()
-            .setColor(0xe74c3c)
+            .setColor(C.DANGER)
             .setTitle('❌ 辨識失敗')
             .setDescription('讀不到你上傳的檔案，請上傳 JPG、PNG 或 WebP 圖片（iPhone 的 HEIC 照片請先轉成 JPG，或改用截圖）。')
         ],
@@ -164,7 +165,7 @@ async function startBillScan(interaction, trip, cache) {
       } catch (err) {
         logger.error('Splitbill', `帳單辨識失敗（${itemLabel || '單張'}）:`, err);
         const errEmbed = new EmbedBuilder()
-          .setColor(0xe74c3c)
+          .setColor(C.DANGER)
           .setTitle(`❌ ${itemLabel}辨識失敗`)
           .setDescription(`發生錯誤：${err.message || '未知錯誤'}\n這張可以重新上傳再試一次，或改用手動輸入；不影響同一批次裡的其他張。`);
 
@@ -220,7 +221,7 @@ async function startBillScan(interaction, trip, cache) {
     if (reason === 'navigated_away' || reason === 'superseded') return;
 
     const timeoutEmbed = new EmbedBuilder()
-      .setColor(0x95a5a6)
+      .setColor(C.NEUTRAL)
       .setTitle('⌛ 已逾時')
       .setDescription('沒有在時間內收到帳單照片，這次掃描已取消。');
 

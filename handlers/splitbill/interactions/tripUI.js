@@ -4,10 +4,12 @@ const {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, 
   ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, MessageFlags 
 } = require('discord.js');
+const C = require('../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const splitbillClient = require('../utils/splitbillClient');
 const { fetchRealTimeRate, parseMoneyInput } = require('../utils/calculator');
 const { showMainMenu } = require('../commands/splitbill');
 const { canDeleteTrip, canViewTrip, isCurrencyCode, CURRENCY_FORMAT_HINT } = require('../utils/tripHelper');
+const { splitbillUrl, linkButton } = require('../../../utils/publicUrls');
 
 const SWITCH_OPTIONS_MAX = 25;
 
@@ -31,14 +33,14 @@ async function renderTripNav(interaction, alertMsg = null, page = 0) {
   const trips = Object.values(guild.trips).filter(t => !t.archived && canViewTrip(t, interaction.user.id));
 
   const embed = new EmbedBuilder()
-    .setColor(0xe74c3c)
+    .setColor(C.SPLITBILL)
     .setTitle('🧳 行程與外幣設定')
     .setDescription(`你目前使用的行程：${activeName}\n*（只切換你自己的，不影響其他成員）*\n\n🌐 網頁上建立的行程：在網頁產生連線碼，再到這裡輸入 \`/splitbill attach\`。`);
 
   if (trip) {
     const rateLines = Object.entries(trip.rates)
       .map(([cur, rate]) => cur === trip.baseCurrency
-        ? `\`${cur}\`（基準幣別）`
+        ? `\`${cur}\`（結算用）`
         : `\`${cur}\`：1 ${cur} = ${rate} ${trip.baseCurrency}`)
       .join('\n');
     embed.addFields({ name: '🪙 目前可用幣別 / 匯率', value: rateLines || '（尚無資料）' });
@@ -50,6 +52,8 @@ async function renderTripNav(interaction, alertMsg = null, page = 0) {
     new ButtonBuilder().setCustomId('trip_btn_delete_ui').setLabel('❌ 刪除此行程').setStyle(ButtonStyle.Danger).setDisabled(!trip || !canDeleteTrip(trip, interaction.user.id)),
     new ButtonBuilder().setCustomId('nav_main').setLabel('🏠 返回主選單').setStyle(ButtonStyle.Secondary)
   );
+  const web = linkButton('在裊器分帳開啟', splitbillUrl(), '🌐');
+  if (web) btnRow.addComponents(web);
 
   const components = [btnRow];
 
@@ -157,15 +161,17 @@ module.exports = {
       if (!canDeleteTrip(trip, user.id)) return replyNotAllowedToDelete(interaction, trip);
 
       const embed = new EmbedBuilder()
-        .setColor(0xd35400)
+        .setColor(C.DANGER)
         .setTitle(`刪除行程「${trip.name}」？`)
-        .setDescription('這個行程的所有支出、轉帳、成員和紀錄都會被刪除，**無法復原**。');
+        .setDescription('這個行程的所有支出、轉帳、成員和紀錄都會被刪除，**無法復原**。\n想留一份的話，先到網頁「設定 → 備份與匯出」下載備份。');
 
       const btns = new ActionRowBuilder().addComponents(
         // 把要刪除的行程 ID 鎖進 customId：確認畫面開著的期間若切換了作用行程，仍只會刪除「畫面上寫的那一個」
-        new ButtonBuilder().setCustomId(`trip_btn_delete_confirm::${trip.id}`).setLabel('刪除行程').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(`trip_btn_delete_confirm::${trip.id}`).setLabel('永久刪除行程').setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId('trip_nav').setLabel('取消').setStyle(ButtonStyle.Secondary)
       );
+      const web = linkButton('在裊器分帳開啟', splitbillUrl(), '🌐');
+      if (web) btns.addComponents(web);
 
       return interaction.update({ embeds: [embed], components: [btns] });
     }
@@ -180,16 +186,37 @@ module.exports = {
       // 再次驗證：確認訊息可能被別人點到，或權限在確認前已改變
       if (!canDeleteTrip(trip, user.id)) return replyNotAllowedToDelete(interaction, trip);
 
-      // 🌐 [service 拆分] 清 defaultTripId／activeTripByUser 殘影、廣播
-      // trip-deleted SSE 事件，全部收斂進 splitbill-service 的
-      // DELETE /api/trip/:guildId/:tripId 端點內部處理，這裡不需要再自己做。
-      await splitbillClient.deleteTrip(guildId, trip.id, user.id);
-
-      return showMainMenu(interaction, `✅ 已刪除行程「${trip.name}」。`);
+      // 跟網頁一樣要輸入行程名稱才刪得掉（只按兩下太容易誤刪）
+      const modal = new ModalBuilder().setCustomId(`trip_modal_delete::${trip.id}`).setTitle('永久刪除行程');
+      const nameInput = new TextInputBuilder()
+        .setCustomId('name')
+        .setLabel('輸入行程名稱確認刪除')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder(String(trip.name).slice(0, 100))
+        .setRequired(true)
+        .setMaxLength(100);
+      modal.addComponents(new ActionRowBuilder().addComponents(nameInput));
+      return interaction.showModal(modal);
     }
   },
 
   async handleModal(interaction) {
+    if (interaction.customId.startsWith('trip_modal_delete::')) {
+      const { guildId, user } = interaction;
+      const trip = await splitbillClient.resolveTripById(guildId, interaction.customId.split('::')[1]);
+      if (!trip) return interaction.reply({ content: '⚠️ 找不到要刪除的行程（可能已被刪除）。', flags: MessageFlags.Ephemeral });
+      if (!canDeleteTrip(trip, user.id)) return replyNotAllowedToDelete(interaction, trip);
+      const typed = interaction.fields.getTextInputValue('name').trim();
+      if (typed !== String(trip.name).trim()) {
+        return interaction.reply({ content: `⚠️ 名稱跟「${trip.name}」不一樣，沒有刪除。`, flags: MessageFlags.Ephemeral });
+      }
+      // 🌐 [service 拆分] 清 defaultTripId／activeTripByUser 殘影、廣播
+      // trip-deleted SSE 事件，全部收斂進 splitbill-service 的
+      // DELETE /api/trip/:guildId/:tripId 端點內部處理，這裡不需要再自己做。
+      await splitbillClient.deleteTrip(guildId, trip.id, user.id);
+      return showMainMenu(interaction, `✅ 已刪除行程「${trip.name}」。`);
+    }
+
     if (interaction.customId === 'trip_modal_create') {
       const guildId = interaction.guildId;
 

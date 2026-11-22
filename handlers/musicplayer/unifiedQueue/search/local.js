@@ -8,9 +8,13 @@ const {
   StringSelectMenuBuilder,
 } = require('discord.js');
 
-const { _engines, activeSearchMessages } = require('../state');
+const C = require('../../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
+const { _engines, activeSearchMessages, nowPlaying, queues, loopSettings, randomPlaySettings } = require('../state');
 const logger = require('../../../../utils/logger');
-const { enqueue, ensureConnection, updateControlPanel } = require('../playback');
+const { enqueue, ensureConnection, updateControlPanel, playRandomLocal, resetShuffleBag } = require('../playback');
+
+// 一次把音樂庫全部加進佇列前要先確認的門檻（加太多會讓之後點的歌要等很久）
+const PLAY_ALL_CONFIRM_MIN = 20;
 
 // ════════════════════════════════════════════════════════
 //  Fisher-Yates 洗牌
@@ -30,20 +34,38 @@ function _shuffle(arr) {
 async function _handlePlayAll(interaction, shuffleOpt) {
   const guildId = interaction.guildId;
 
-  let connection;
-  try {
-    connection = await ensureConnection(interaction);
-  } catch {
-    return interaction.editReply('❌ 沒能加入語音頻道，請再試一次。');
-  }
-  if (!connection) return interaction.editReply('🔈 先加入一個語音頻道，Bot 才知道要去哪裡播。加入後再用一次指令。');
-
   const engine = _engines.local;
   if (!engine) return interaction.editReply('⏳ Bot 剛啟動，音樂庫還在準備，請過一下再試。');
 
   let files = engine.getMusicFiles();
   if (files.length === 0) {
     return interaction.editReply('ℹ️ 音樂庫還沒有歌。加歌之後就能用 /play 點播。');
+  }
+
+  // 超過門檻先確認：全部加入，或改用隨機連播（不會把整個音樂庫塞進共用佇列）。
+  // 確認完才進語音頻道：取消或逾時時 Bot 不會白白待在頻道裡
+  const choice = files.length > PLAY_ALL_CONFIRM_MIN ? await _confirmPlayAll(interaction, files.length) : 'all';
+  if (choice === 'cancel') return;
+
+  let connection;
+  try {
+    connection = await ensureConnection(interaction);
+  } catch {
+    return interaction.editReply({ content: '❌ 沒能加入語音頻道，請再試一次。', embeds: [], components: [] });
+  }
+  if (!connection) return interaction.editReply({ content: '🔈 先加入一個語音頻道，Bot 才知道要去哪裡播。加入後再用一次指令。', embeds: [], components: [] });
+
+  if (choice === 'random') {
+    if (nowPlaying.has(guildId)) {
+      randomPlaySettings.set(guildId, true);
+      loopSettings.set(guildId, 'off');
+      resetShuffleBag(guildId);
+    } else {
+      await playRandomLocal(guildId, interaction.channel, { enableContinuous: true });
+    }
+    await interaction.editReply({ content: '🎲 已開啟隨機連播，會從音樂庫隨機挑歌接著播。', embeds: [], components: [] }).catch(() => {});
+    await updateControlPanel(guildId, interaction.channel);
+    return;
   }
 
   if (shuffleOpt === 'yes') files = _shuffle(files);
@@ -69,7 +91,7 @@ async function _handlePlayAll(interaction, shuffleOpt) {
     : '';
 
   const embed = new EmbedBuilder()
-    .setColor(0x1DB954)
+    .setColor(C.MUSIC)
     .setTitle('📋 已把音樂庫的歌全部加入佇列')
     .addFields(
       { name: '✅ 加入數量', value: `${addedCount} 首`, inline: true },
@@ -79,9 +101,48 @@ async function _handlePlayAll(interaction, shuffleOpt) {
     .setFooter({ text: `由 ${interaction.user.tag} 加入` })
     .setTimestamp();
 
-  await interaction.editReply({ embeds: [embed] });
+  await interaction.editReply({ content: '', embeds: [embed], components: [] });
   await updateControlPanel(guildId, interaction.channel);
   logger.success('UnifiedQueue', `localAll: ${addedCount} 首已加入佇列 (${guildId})`);
+}
+
+// 「全部加入」的確認：回傳 'all' | 'random' | 'cancel'（逾時算取消）
+async function _confirmPlayAll(interaction, total) {
+  const queued = (queues.get(interaction.guildId) || []).length;
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('pa_all').setLabel(`全部加入（${total} 首）`).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('pa_random').setLabel('改用隨機連播').setEmoji('🎲').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('pa_cancel').setLabel('取消').setStyle(ButtonStyle.Secondary),
+  );
+  const message = await interaction.editReply({
+    embeds: [new EmbedBuilder().setColor(C.MUSIC)
+      .setTitle(`把音樂庫的 ${total} 首全部加進佇列？`)
+      .setDescription(queued
+        ? `會排在目前 ${queued} 首的後面，要播很久才輪到之後點的歌。`
+        : '要播很久才輪到之後點的歌。')
+      .setFooter({ text: '60 秒內沒選就取消。' })],
+    components: [row],
+  }).catch(() => null);
+  if (!message) return 'cancel';
+
+  activeSearchMessages.set(message.id, interaction.user.id);
+  let pick;
+  try {
+    pick = await message.awaitMessageComponent({
+      filter: (i) => i.user.id === interaction.user.id && ['pa_all', 'pa_random', 'pa_cancel'].includes(i.customId),
+      time: 60_000,
+    });
+  } catch {
+    await interaction.editReply({ content: '⌛ 超過 60 秒沒選，已取消。', embeds: [], components: [] }).catch(() => {});
+    return 'cancel';
+  } finally {
+    activeSearchMessages.delete(message.id);
+  }
+  const choice = pick.customId === 'pa_all' ? 'all' : pick.customId === 'pa_random' ? 'random' : 'cancel';
+  // 回應按鈕失敗（網路抖一下）不影響選擇：後面會用 editReply 更新同一則訊息
+  if (choice === 'cancel') await pick.update({ content: '已取消，沒有加入佇列。', embeds: [], components: [] }).catch(() => {});
+  else await pick.deferUpdate().catch(() => {});
+  return choice;
 }
 
 // ════════════════════════════════════════════════════════
@@ -143,7 +204,7 @@ async function _handleLocalMultiSelect(interaction) {
   const message = await interaction.editReply({
     embeds: [
       new EmbedBuilder()
-        .setColor(0x1DB954)
+        .setColor(C.MUSIC)
         .setTitle('📂 從音樂庫選多首')
         .setDescription(noteText)
         .setFooter({ text: '60 秒內勾選並送出，或按「取消」。' })
@@ -154,7 +215,7 @@ async function _handleLocalMultiSelect(interaction) {
   if (!message) return;
 
   // ★ 沿用既有的殭屍互動防護標記（與 _handleOnlineSearch 一致）
-  activeSearchMessages.add(message.id);
+  activeSearchMessages.set(message.id, interaction.user.id);
 
   let selection;
   try {
@@ -182,7 +243,7 @@ async function _handleLocalMultiSelect(interaction) {
 
   await selection.update({
     embeds: [
-      new EmbedBuilder().setColor(0x95A5A6).setDescription(`➕ 正在加入 ${pickedFiles.length} 首…`)
+      new EmbedBuilder().setColor(C.NEUTRAL).setDescription(`➕ 正在加入 ${pickedFiles.length} 首…`)
     ],
     components: [],
   });
@@ -202,7 +263,7 @@ async function _handleLocalMultiSelect(interaction) {
     : previewLinesRaw;
 
   const embed = new EmbedBuilder()
-    .setColor(0x1DB954)
+    .setColor(C.MUSIC)
     .setTitle('📂 已把選的歌加入佇列')
     .addFields(
       { name: '✅ 加入數量', value: `${addedCount} 首`, inline: true },

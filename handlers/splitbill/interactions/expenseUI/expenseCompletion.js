@@ -3,6 +3,7 @@
 const {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags
 } = require('discord.js');
+const C = require('../../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const splitbillClient = require('../../utils/splitbillClient');
 const { equalSplit } = require('../../utils/calculator');
 const { showMainMenu } = require('../../commands/splitbill');
@@ -25,7 +26,7 @@ async function resolveDraftTrip(interaction, cache, state) {
 function renderSplitMethodUI(interaction, state, trip) {
   const payerMentions = state.payers.map(p => `${memberMention(trip, p.userId)}(${p.amount})`).join(', ');
   const embed = new EmbedBuilder()
-    .setColor(0xe67e22)
+    .setColor(C.SPLITBILL)
     .setTitle('⚖️ 步驟 3/3：選擇分攤方式')
     .setDescription(`代墊者：${payerMentions}\n\n請點選下方按鈕直接完成分攤：`);
 

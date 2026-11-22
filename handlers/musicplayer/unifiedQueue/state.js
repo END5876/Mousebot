@@ -40,7 +40,8 @@ const LOCAL_KEY_MARKER = '__LOCAL__::';
 // 若是，全域監聽器就不該搶先 reply()，否則會跟 search.js 內
 // 真正要處理選擇結果的 selection.update() 搶著 ACK 同一個 interaction，
 // 導致後者出現 DiscordAPIError[10062] Unknown interaction。
-const activeSearchMessages = new Set();
+// 訊息 ID → 發起搜尋的使用者 ID：別人點了這則搜尋結果時，commands.js 回一句「只有他能選」
+const activeSearchMessages = new Map();
 
 // ── 列表循環模式下，記錄「本輪循環已經播放過」的本地曲目 filename ──
 // 用途：播放次數統計時，列表循環重複繞圈不該讓次數一直往上洗，

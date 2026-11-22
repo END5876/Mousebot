@@ -1,11 +1,45 @@
 'use strict';
 
+const C = require('../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, MessageFlags } = require('discord.js');
 const splitbillClient = require('../utils/splitbillClient');
 const { calcNetBalances, calcNetBalancesByCurrency, listTransfersByMember, getUsedCurrencies, fetchRealTimeRate, round2 } = require('../utils/calculator');
 const { simplifyDebts } = require('../utils/settlement');
 const { showMainMenu } = require('../commands/splitbill');
 const { memberMention } = require('../utils/tripHelper');
+const { addDeposit } = require('../utils/deposit');
+
+const memberNameOf = (trip, id) => (trip.members.find((m) => m.id === id) || {}).name || '已移除的成員';
+
+// 建議轉帳清單：每列「A ➡️ B：金額」，下面的選單「我已經付了…」選一列就能標記已付（跟網頁一樣新增一筆轉帳）
+function renderTransferList(interaction, trip, alertMsg) {
+  const transactions = simplifyDebts(calcNetBalances(trip));
+  const base = trip.baseCurrency;
+  const embed = new EmbedBuilder()
+    .setColor(C.SPLITBILL)
+    .setTitle(`🚀 「${trip.name}」建議轉帳（以 ${base} 計）`)
+    .setDescription(transactions.length
+      ? transactions.map((t, idx) => `**${idx + 1}.** ${memberMention(trip, t.from)} ➡️ ${memberMention(trip, t.to)}：**${round2(t.amount)} ${base}**`).join('\n')
+      : '🎉 大家都結清了，不用再轉帳！');
+
+  const components = [];
+  if (transactions.length) {
+    components.push(new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`set_select_paid::${trip.id}`)
+        .setPlaceholder('我已經付了…')
+        .addOptions(transactions.slice(0, 25).map((t) => ({
+          label: `${memberNameOf(trip, t.from)} 付給 ${memberNameOf(trip, t.to)} ${round2(t.amount)} ${base}`.slice(0, 100),
+          value: `${t.from}|${t.to}`,
+        })))
+    ));
+  }
+  components.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('set_btn_transfer_live').setLabel('💱 換算成其他幣別').setStyle(ButtonStyle.Primary).setDisabled(!transactions.length),
+    new ButtonBuilder().setCustomId('set_nav').setLabel('⬅️ 返回結算').setStyle(ButtonStyle.Secondary)
+  ));
+  return interaction.update({ content: alertMsg || '', embeds: [embed], components });
+}
 
 /**
  * 🆕【收支帳模式 v3】每人淨額明細呈現
@@ -148,7 +182,7 @@ module.exports = {
 
     if (customId === 'set_nav') {
       const embed = new EmbedBuilder()
-        .setColor(0x2ecc71)
+        .setColor(C.SPLITBILL)
         .setTitle('📊 結算')
         .setDescription(`目前行程：**${trip.name}**\n要看什麼？`);
 
@@ -222,7 +256,7 @@ module.exports = {
       const page = Math.min(pageMatch ? Number(pageMatch[1]) : 0, pages.length - 1);
 
       const embed = new EmbedBuilder()
-        .setColor(0x2ecc71)
+        .setColor(C.SPLITBILL)
         .setTitle(`🟢 「${trip.name}」每個人要付或可拿回多少`)
         .setDescription(pages[page]);
       if (pages.length > 1) embed.setFooter({ text: `第 ${page + 1} / ${pages.length} 頁` });
@@ -242,29 +276,32 @@ module.exports = {
     }
 
     // 2. 建議轉帳清單（未變動）
-    if (customId === 'set_btn_transfer') {
-      const net = calcNetBalances(trip);
-      const transactions = simplifyDebts(net);
+    // set_btn_transfer::<tripId>：從「我已經付了…」的確認畫面按「還沒付」回來，用當時鎖定的行程
+    if (customId === 'set_btn_transfer' || customId.startsWith('set_btn_transfer::')) {
+      const target = customId.includes('::') ? await splitbillClient.resolveTripById(guildId, customId.split('::')[1]) : trip;
+      if (!target) return interaction.reply({ content: '⚠️ 找不到行程（可能已被刪除）。', flags: MessageFlags.Ephemeral });
+      return renderTransferList(interaction, target);
+    }
 
-      const embed = new EmbedBuilder()
-        .setColor(0x2ecc71)
-        .setTitle(`🚀 「${trip.name}」建議轉帳（以 ${trip.baseCurrency} 計）`);
-
-      if (!transactions.length) {
-        embed.setDescription('🎉 大家都結清了，不用再轉帳！');
-      } else {
-        const lines = transactions.map((t, idx) =>
-          `**${idx + 1}.** ${memberMention(trip, t.from)} ➡️ ${memberMention(trip, t.to)}：**${round2(t.amount)} ${trip.baseCurrency}**`
-        ).join('\n');
-        embed.setDescription(lines);
+    // 「我已經付了…」確認後：重新算一次建議轉帳（確認期間帳目可能變了），新增一筆轉帳
+    if (customId.startsWith('set_paid_yes::')) {
+      const [, tripId, fromId, toId] = customId.split('::');
+      const pinned = await splitbillClient.resolveTripById(guildId, tripId);
+      if (!pinned) return interaction.reply({ content: '⚠️ 找不到行程（可能已被刪除）。', flags: MessageFlags.Ephemeral });
+      const t = simplifyDebts(calcNetBalances(pinned)).find((x) => x.from === fromId && x.to === toId);
+      if (!t) return renderTransferList(interaction, pinned, 'ℹ️ 這筆已經結清，或金額剛剛變了，請看最新的建議轉帳。');
+      const amount = round2(t.amount);
+      addDeposit(pinned, { collectorId: toId, payerId: fromId, amount, currency: pinned.baseCurrency, note: '結算轉帳' });
+      try {
+        await splitbillClient.saveTrip(guildId, pinned.id, pinned, { actorId: user.id });
+      } catch (err) {
+        // 同時有人改了行程（例如連按兩下、或別人也剛好標記）：存檔被擋下，不會記兩次
+        if (err.status !== 409) throw err;
+        const fresh = await splitbillClient.resolveTripById(guildId, pinned.id);
+        if (!fresh) return interaction.reply({ content: '⚠️ 找不到行程（可能已被刪除）。', flags: MessageFlags.Ephemeral });
+        return renderTransferList(interaction, fresh, 'ℹ️ 行程剛剛被其他人更新了，這次沒有記錄。請看最新的建議轉帳，需要的話再標記一次。');
       }
-
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('set_btn_transfer_live').setLabel('💱 換算成其他幣別').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('set_nav').setLabel('⬅️ 返回結算選單').setStyle(ButtonStyle.Secondary)
-      );
-
-      return interaction.update({ embeds: [embed], components: [row] });
+      return renderTransferList(interaction, pinned, `✅ 已標記已付：${memberNameOf(pinned, fromId)}付給${memberNameOf(pinned, toId)} ${amount} ${pinned.baseCurrency}`);
     }
 
     // 2a. 選擇目標幣別（未變動）
@@ -276,7 +313,7 @@ module.exports = {
       }
 
       const embed = new EmbedBuilder()
-        .setColor(0x9b59b6)
+        .setColor(C.SPLITBILL)
         .setTitle('💱 選擇最終結算的統一幣別')
         .setDescription(
           `此行程目前使用過的幣別有：**${currencies.join('、')}**\n` +
@@ -302,6 +339,23 @@ module.exports = {
   async handleSelectMenu(interaction) {
     const { customId, guildId, values, user } = interaction;
     const { trip } = await splitbillClient.resolveTrip(guildId, null, user.id);
+
+    // 「我已經付了…」：先確認（文字跟網頁的「標記已付」一樣）
+    if (customId.startsWith('set_select_paid')) {
+      const pinned = await splitbillClient.resolveTripById(guildId, customId.split('::')[1]);
+      if (!pinned) return interaction.reply({ content: '⚠️ 找不到行程（可能已被刪除）。', flags: MessageFlags.Ephemeral });
+      const [fromId, toId] = String(values[0] || '').split('|');
+      const t = simplifyDebts(calcNetBalances(pinned)).find((x) => x.from === fromId && x.to === toId);
+      if (!t) return renderTransferList(interaction, pinned, 'ℹ️ 這筆已經結清，或金額剛剛變了，請看最新的建議轉帳。');
+      const embed = new EmbedBuilder().setColor(C.SPLITBILL)
+        .setTitle(`${memberNameOf(pinned, fromId)}已經付給${memberNameOf(pinned, toId)} ${round2(t.amount)} ${pinned.baseCurrency} 了嗎？`)
+        .setDescription('會新增一筆轉帳，結算結果也會跟著更新。');
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`set_paid_yes::${pinned.id}::${fromId}::${toId}`).setLabel('標記已付').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`set_btn_transfer::${pinned.id}`).setLabel('還沒付').setStyle(ButtonStyle.Secondary)
+      );
+      return interaction.update({ content: '', embeds: [embed], components: [row] });
+    }
 
     if (customId === 'set_select_convert_target') {
       const targetCurrency = values[0];
@@ -331,7 +385,7 @@ module.exports = {
       const transactions = baseTransactions.map((t) => ({ ...t, amount: rate ? round2(t.amount * rate) : t.amount }));
 
       const embed = new EmbedBuilder()
-        .setColor(0x9b59b6)
+        .setColor(C.SPLITBILL)
         .setTitle(`💱 「${trip.name}」轉帳建議（換算成 ${shownCurrency}，依今天匯率，僅供參考）`)
         .setDescription(
           (rateNote ? `${rateNote}\n\n` : '') +

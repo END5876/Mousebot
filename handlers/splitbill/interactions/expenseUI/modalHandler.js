@@ -3,6 +3,7 @@
 const {
   EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, MessageFlags
 } = require('discord.js');
+const C = require('../../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const splitbillClient = require('../../utils/splitbillClient');
 const { validateCustomSplit, fetchRealTimeRate, round2, parseMoneyInput } = require('../../utils/calculator');
 const { addDeposit } = require('../../utils/deposit');
@@ -173,7 +174,9 @@ async function handleModal(interaction, cache) {
       const currency = rawId.replace('exp_modal_add_', '');
       const desc = interaction.fields.getTextInputValue('desc');
       const amount = parseMoneyInput(interaction.fields.getTextInputValue('amount'));
-      const customRateStr = interaction.fields.getTextInputValue('custom_rate');
+      // 實際扣款金額（結算幣別，選填）；表單沒有這一欄時（本來就是結算幣別）當作空白
+      let actualBaseStr = '';
+      try { actualBaseStr = interaction.fields.getTextInputValue('actual_base') || ''; } catch { /* 沒有這一欄 */ }
 
       if (isNaN(amount) || amount <= 0) {
         return interaction.reply({ content: '⚠️ 金額要是大於 0 的數字。', flags: MessageFlags.Ephemeral });
@@ -183,14 +186,18 @@ async function handleModal(interaction, cache) {
 
       let actualRate;
       let rateSource;
-      const customRate = parseMoneyInput(customRateStr);
+      const actualBase = parseMoneyInput(actualBaseStr);
 
-      if (customRateStr && !isNaN(customRate) && customRate > 0) {
-        actualRate = customRate;
-        rateSource = '手動自訂';
+      if (actualBaseStr.trim() && !(actualBase > 0)) {
+        return interaction.followUp({ content: '⚠️ 實際扣款金額要是大於 0 的數字，或留空。', flags: MessageFlags.Ephemeral });
+      }
+      if (currency !== trip.baseCurrency && actualBase > 0) {
+        // 用實際扣款金額回推匯率：之後算出來的結算金額就等於填的金額
+        actualRate = actualBase / amount;
+        rateSource = '實際扣款';
       } else if (currency === trip.baseCurrency) {
         actualRate = 1;
-        rateSource = '基準幣別';
+        rateSource = '結算用的幣別';
       } else {
         const liveRate = await fetchRealTimeRate(currency, trip.baseCurrency);
         if (liveRate) {
@@ -217,12 +224,14 @@ async function handleModal(interaction, cache) {
       });
 
       const embed = new EmbedBuilder()
-        .setColor(0xe67e22)
+        .setColor(C.SPLITBILL)
         .setTitle('👤 請選擇代墊者')
         .setDescription(
           `項目：**${desc}**\n` +
           `金額：**${amount} ${currency}**\n` +
-          `匯率：**1 ${currency} = ${actualRate} ${trip.baseCurrency}** (${rateSource})\n\n` +
+          (rateSource === '實際扣款'
+            ? `實際扣款：**${actualBase} ${trip.baseCurrency}**\n\n`
+            : `匯率：**1 ${currency} = ${actualRate} ${trip.baseCurrency}**（${rateSource}）\n\n`) +
           `👉 誰先幫大家付了這筆錢？\n*（💡 若為多人合資代墊，請直接複選）*`
         );
 

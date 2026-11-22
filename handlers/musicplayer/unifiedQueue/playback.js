@@ -16,6 +16,7 @@ const {
   ButtonStyle,
 } = require('discord.js');
 
+const C = require('../../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const { setMusicPlayer, stopMusicLayer, startSilenceLayer, restoreActiveLayer, isTTSActive } = require('../../audioManager');
 const voiceMonitor = require('../voiceActivityMonitor');
 
@@ -32,6 +33,7 @@ const {
 } = require('./state');
 const session = require('./session');
 const logger = require('../../../utils/logger');
+const { musicUrl, linkButton } = require('../../../utils/publicUrls');
 const { md } = require('../../../utils/markdown');
 
 // ════════════════════════════════════════════════════════
@@ -92,10 +94,10 @@ function _buildEmbed(guildId) {
   const paused = np.player?.state?.status === AudioPlayerStatus.Paused;
 
   const embed = new EmbedBuilder()
-    .setColor(paused ? 0x95A5A6 : isRandomPlay ? 0xFF8C00 : 0x1DB954)
+    .setColor(paused ? C.NEUTRAL : C.MUSIC)
     .setTitle(paused ? '⏸️ 已暫停' : '🎵 正在播放')
     .setTimestamp()
-    .setFooter({ text: '用下方按鈕控制播放' });
+    .setFooter({ text: isRandomPlay ? '隨機連播中：這首播完會先播佇列，佇列空了再從音樂庫隨機挑' : '用下方按鈕控制播放' });
 
   if (item.type === 'bilibili') {
     embed
@@ -119,7 +121,8 @@ function _buildEmbed(guildId) {
   return embed;
 }
 
-// 一列最多 5 個按鈕：第一列放播放控制（暫停／繼續、跳過、停止），第二列放模式切換
+// 一列最多 5 個按鈕：第一列放播放控制（暫停／繼續、跳過、停止播放、佇列），
+// 第二列放模式切換，有設定 MUSIC_PUBLIC_URL 時最後加「在網頁開啟」
 function _buildButtons(guildId) {
   const loopMode = loopSettings.get(guildId) || 'off';
   const isRandomPlay = randomPlaySettings.get(guildId) || false;
@@ -135,9 +138,14 @@ function _buildButtons(guildId) {
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
       .setCustomId('uq_stop')
-      .setLabel('停止')
+      .setLabel('停止播放')
       .setEmoji('⏹️')
       .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId('uq_queue')
+      .setLabel('佇列')
+      .setEmoji('📋')
+      .setStyle(ButtonStyle.Secondary),
   );
   const modes = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -156,7 +164,59 @@ function _buildButtons(guildId) {
       .setEmoji('🎲')
       .setStyle(isRandomPlay ? ButtonStyle.Success : ButtonStyle.Secondary),
   );
+  const web = linkButton('在網頁開啟', musicUrl(), '🌐');
+  if (web) modes.addComponents(web);
   return [controls, modes];
+}
+
+// ════════════════════════════════════════════════════════
+//  佇列畫面（/music queue 與面板的「佇列」按鈕共用）：每頁 20 首，◀ ▶ 換頁
+// ════════════════════════════════════════════════════════
+const QUEUE_PAGE_SIZE = 20;
+
+function buildQueueView(guildId, page = 0) {
+  const np = nowPlaying.get(guildId);
+  const list = queues.get(guildId) || [];
+  const loopMode = loopSettings.get(guildId) || 'off';
+  const isRandomPlay = randomPlaySettings.get(guildId) || false;
+  const loopText = isRandomPlay ? '🎲 隨機連播' : loopMode === 'one' ? '🔂 單曲循環' : loopMode === 'all' ? '🔁 列表循環' : '➡️ 不循環';
+
+  const pages = Math.max(1, Math.ceil(list.length / QUEUE_PAGE_SIZE));
+  const p = Math.min(Math.max(0, page), pages - 1);
+  const start = p * QUEUE_PAGE_SIZE;
+  const shown = list.slice(start, start + QUEUE_PAGE_SIZE);
+
+  const lines = [];
+  if (np) {
+    lines.push(`🎧 正在播放：${np.item.type === 'bilibili' ? `[${md(np.item.title)}](${np.item.url})` : `**${md(np.item.title)}**`}`);
+    lines.push('');
+  }
+  if (shown.length) {
+    lines.push(...shown.map((t, i) => (t.type === 'bilibili'
+      ? `${start + i + 1}. [${md(t.title)}](${t.url})`
+      : `${start + i + 1}. ${md(t.title)}`)));
+  } else {
+    lines.push(isRandomPlay ? '佇列是空的，播完會從音樂庫隨機挑下一首。' : '佇列是空的。');
+  }
+  let desc = lines.join('\n');
+  if (desc.length > 4096) desc = desc.slice(0, 4095) + '…';
+
+  const embed = new EmbedBuilder()
+    .setColor(C.MUSIC)
+    .setTitle(list.length > QUEUE_PAGE_SIZE
+      ? `📋 佇列：第 ${start + 1}～${start + shown.length} 首，共 ${list.length} 首`
+      : `📋 佇列（${list.length} 首）`)
+    .setDescription(desc)
+    .addFields({ name: '循環模式', value: loopText, inline: true });
+
+  const components = [];
+  if (pages > 1) {
+    components.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`uq_qpage:${p - 1}`).setLabel('上一頁').setEmoji('◀️').setStyle(ButtonStyle.Secondary).setDisabled(p === 0),
+      new ButtonBuilder().setCustomId(`uq_qpage:${p + 1}`).setLabel('下一頁').setEmoji('▶️').setStyle(ButtonStyle.Secondary).setDisabled(p >= pages - 1),
+    ));
+  }
+  return { embeds: [embed], components };
 }
 
 // 就地更新現有的控制面板（暫停／繼續時用）：不像 updateControlPanel 會刪掉重發、把面板移到最底下
@@ -170,13 +230,15 @@ async function refreshControlPanel(guildId) {
 // guildId → 進行中的面板更新（同一個 guild 的更新排隊執行）
 const _panelUpdates = new Map();
 
-async function updateControlPanel(guildId, channel) {
+// preferEdit：換歌時就地編輯原本的面板（不刪掉重發，手機上要按的按鈕才不會在手指底下消失）；
+//   面板已經被聊天推上去（後面有 PANEL_BURY_LIMIT 則以上訊息）才刪掉重發到最底下
+async function updateControlPanel(guildId, channel, { preferEdit = false } = {}) {
   // 循環 / 隨機連播 / 佇列變動後都會更新面板，順便排程寫出播放快照
   session.schedule();
   // 播完換曲、/play 回覆、按鈕、網頁都會各自更新面板；同時進行時會讀到同一個舊面板、
   // 各送出一個新的，只有最後一個被記住，其他的永遠刪不掉 → 同一個 guild 排隊依序執行
   const prev = _panelUpdates.get(guildId) || Promise.resolve();
-  const run = prev.catch(() => {}).then(() => _doUpdateControlPanel(guildId, channel));
+  const run = prev.catch(() => {}).then(() => _doUpdateControlPanel(guildId, channel, { preferEdit }));
   _panelUpdates.set(guildId, run);
   try {
     await run;
@@ -185,12 +247,27 @@ async function updateControlPanel(guildId, channel) {
   }
 }
 
-async function _doUpdateControlPanel(guildId, channel) {
+const PANEL_BURY_LIMIT = 8;
+
+async function _doUpdateControlPanel(guildId, channel, { preferEdit = false } = {}) {
   const embed = _buildEmbed(guildId);
   if (!embed) return;
   const rows = _buildButtons(guildId);
 
   const targetChannel = _getNotifyChannel(guildId, channel);
+
+  const current = controlMsgs.get(guildId);
+  if (preferEdit && current && targetChannel && current.channelId === targetChannel.id) {
+    try {
+      const after = await targetChannel.messages.fetch({ after: current.id, limit: PANEL_BURY_LIMIT });
+      if (after.size < PANEL_BURY_LIMIT) {
+        await current.edit({ embeds: [embed], components: rows });
+        return;
+      }
+    } catch {
+      // 沒有讀取訊息紀錄的權限、或面板已被刪掉：照舊刪掉重發
+    }
+  }
 
   try {
     const oldMsg = controlMsgs.get(guildId);
@@ -390,22 +467,9 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
       if (manualNext) {
         logger.info('UnifiedQueue', `🎵 隨機連播中插播使用者點歌: ${manualNext.title}`);
 
-        const manualEmbed = new EmbedBuilder()
-          .setColor(0x1DB954)
-          .setTitle('▶️ 正在播放（插播）')
-          .setDescription(
-            manualNext.type === 'bilibili'
-              ? `[${md(manualNext.title)}](${manualNext.url})`
-              : `🎧 **${md(manualNext.title)}**`
-          )
-          .addFields({ name: '提示', value: '這首播完會繼續隨機連播。', inline: false })
-          .setTimestamp();
-        if (manualNext.thumbnail) manualEmbed.setThumbnail(manualNext.thumbnail);
-        sendTo.send({ embeds: [manualEmbed] }).catch(() => {});
-
-        // 手動點歌視為正常請求，計入播放次數
+        // 手動點歌視為正常請求，計入播放次數；面板就地換成這首（隨機連播的說明在面板裡）
         await _playItem(guildId, manualNext, channel, { silent: false, countPlay: true });
-        await updateControlPanel(guildId, channel);
+        await updateControlPanel(guildId, channel, { preferEdit: true });
         return;
       }
 
@@ -418,16 +482,9 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
         return;
       }
 
-      const nextEmbed = new EmbedBuilder()
-        .setColor(0xFF8C00)
-        .setTitle('🎲 隨機連播：下一首')
-        .setDescription(`🎧 **${md(next.title)}**`)
-        .setTimestamp();
-      sendTo.send({ embeds: [nextEmbed] }).catch(() => {});
-
       // 隨機連播播出的曲目不計入播放次數排序
       await _playItem(guildId, next, channel, { silent: false, countPlay: false });
-      await updateControlPanel(guildId, channel);
+      await updateControlPanel(guildId, channel, { preferEdit: true });
       return;
     }
 
@@ -440,23 +497,7 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
       const next = queue.shift();
       queues.set(guildId, queue);
 
-      if (!isLoopAll) {
-        logger.info('UnifiedQueue', `⏭️ 播放下一首: ${next.title}`);
-
-        const nextEmbed = new EmbedBuilder()
-          .setColor(0x1DB954)
-          .setTitle('⏭️ 正在播放下一首')
-          .setDescription(
-            next.type === 'bilibili'
-              ? `[${md(next.title)}](${next.url})`
-              : `🎧 **${md(next.title)}**`
-          )
-          .addFields({ name: '剩餘佇列', value: `${queue.length} 首`, inline: true });
-
-        if (next.thumbnail) nextEmbed.setThumbnail(next.thumbnail);
-
-        sendTo.send({ embeds: [nextEmbed] }).catch(() => {});
-      }
+      if (!isLoopAll) logger.info('UnifiedQueue', `⏭️ 播放下一首: ${next.title}`);
 
       let countPlay = true;
       if (isLoopAll && next.type === 'local' && next.filename) {
@@ -469,7 +510,7 @@ async function _playItem(guildId, item, channel, { silent = false, countPlay = t
       }
 
       await _playItem(guildId, next, channel, { silent: isLoopAll, countPlay });
-      await updateControlPanel(guildId, channel);
+      await updateControlPanel(guildId, channel, { preferEdit: true });
     } else {
       logger.success('UnifiedQueue', '播放完畢，佇列為空');
       stopAll(guildId, { reason: failed ? 'stopped' : 'finished' });
@@ -607,7 +648,7 @@ function stopAll(guildId, { reason = 'stopped' } = {}) {
 // 排在進行中的面板更新之後：那次更新可能剛送出新面板（舊的已刪），也要一起改掉
 function _endControlPanel(guildId, panel, lastItem, reason) {
   const embed = new EmbedBuilder()
-    .setColor(0x4F545C)
+    .setColor(C.NEUTRAL)
     .setTitle(reason === 'finished' ? '✅ 佇列播完了' : '⏹️ 已停止播放')
     .setDescription(lastItem?.title
       ? `最後播的是「${md(lastItem.title)}」。用 /play 再點歌。`
@@ -943,6 +984,7 @@ function getNowPlaying(guildId) { return nowPlaying.get(guildId)?.item ?? null; 
 
 module.exports = {
   loopOneSkipText,
+  buildQueueView,
   _buildEmbed,
   _buildButtons,
   refreshControlPanel,

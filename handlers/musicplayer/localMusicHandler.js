@@ -9,7 +9,10 @@ const {
 const {
   EmbedBuilder,
   MessageFlags,
+  ActionRowBuilder,
 } = require('discord.js');
+const { musicUrl, linkButton } = require('../../utils/publicUrls');
+const C = require('../../utils/embedColors'); // embed 色票（utils/embedColors.js）
 const fs = require('fs');
 const path = require('path');
 
@@ -365,13 +368,15 @@ function buildLocalListReply() {
     .join('\n') + (rest > 0 ? `\n…還有 ${rest} 首，可以用 /play 打歌名找到。` : '');
 
   const embed = new EmbedBuilder()
-    .setColor(0x1DB954)
+    .setColor(C.MUSIC)
     .setTitle(`📁 音樂庫（共 ${musicFiles.length} 首，依播放次數排序）`)
     .setDescription(listText.length > 4096 ? listText.slice(0, 4095) + '…' : listText)
     .setFooter({ text: '用 /play 打歌名就能點播。' })
     .setTimestamp();
 
-  return { embeds: [embed] };
+  // 有設定 MUSIC_PUBLIC_URL 時附「在網頁看全部」
+  const web = linkButton('在網頁看全部', musicUrl(), '🌐');
+  return { embeds: [embed], components: web ? [new ActionRowBuilder().addComponents(web)] : [] };
 }
 
 // ════════════════════════════════════════════════════════
