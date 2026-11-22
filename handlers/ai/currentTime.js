@@ -52,7 +52,7 @@ function currentTimePart(date = new Date()) {
     return { text: `【${TIME_LABEL}：${formatNow(date)}】` };
 }
 
-// 模型偶爾會照抄這行標籤：回覆送出前（也在 TTS 朗讀與寫進歷史之前）整段拿掉。
+// 模型偶爾會照抄這行標籤。實際回覆用的是 chatSanitize.stripPromptEcho（一併處理其他系統標記），這裡保留單獨版本。
 // 只擋原樣照抄；用自己的話講時間（「現在下午兩點喔」）是正常回答，不處理。
 const TIME_ECHO = new RegExp(`[ \\t]*【${TIME_LABEL}：[^】\\n]*】[ \\t]*\\n?`, 'g');
 

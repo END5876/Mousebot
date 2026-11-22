@@ -29,7 +29,7 @@ function removalProblem(trip, ids, userId) {
   // 🔒 [修正：孤兒行程] 最終防線：以當下最新的成員名單重新驗證一次，只要移除後
   // 不再有任何已連結 Discord 的成員就整批拒絕、完全不寫入。
   if (!wouldLeaveTripNonEmpty(trip, ids)) {
-    return `❌ 無法移除：移除後行程「${trip.name}」將沒有任何已連結 Discord 的成員，屆時 Discord 這邊沒有人能再操作它。請至少保留 1 位（如需結束行程，請改用「🧳 行程設定 → ❌ 刪除此行程」）。`;
+    return `❌ 不能全部移除：行程「${trip.name}」至少要留 1 位已連結 Discord 的成員。要結束行程請用「🧳 行程設定 → ❌ 刪除此行程」。`;
   }
   // 🔒 以最新的成員名單再確認一次權限（選單打開之後，可能有人剛連結了 Discord 帳號）
   const notAllowed = trip.members.filter((m) => ids.includes(m.id) && !canRemoveMember(trip, m, userId));
@@ -205,7 +205,7 @@ module.exports = {
         return interaction.reply({ content: '✅ 所有成員都已經連結 Discord 帳號了。', flags: MessageFlags.Ephemeral });
       }
       const embed = new EmbedBuilder().setColor(0x9b59b6).setTitle('🔗 連結 Discord 帳號（1/2）')
-        .setDescription('這些成員是在網頁上建立的，還沒有對應的 Discord 帳號。\n請先選擇要連結的是哪一位：\n\n*（本人也可以用網頁的邀請連結自己認領）*');
+        .setDescription('要連結哪一位？');
       const menuRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(`mem_select_link_member::${trip.id}`)
@@ -287,7 +287,7 @@ module.exports = {
         return interaction.reply({ content: '⚠️ 這位成員已經被連結或已被移除，請重新操作。', flags: MessageFlags.Ephemeral });
       }
       const embed = new EmbedBuilder().setColor(0x9b59b6).setTitle('🔗 連結 Discord 帳號（2/2）')
-        .setDescription(`要把成員「**${member.name}**」連結到哪一位 Discord 使用者？\n\n連結後，他過去的代墊與分攤紀錄都會保留，並且可以開始操作這個行程的面板。`);
+        .setDescription(`要把「**${member.name}**」連結到哪一位 Discord 使用者？帳目都會保留。`);
       // customId：mem_select_link_user::<tripId>::<memberId>（第二段固定是 tripId，
       // 讓 index.js 的權限檢查能鎖定同一個行程）
       const menuRow = new ActionRowBuilder().addComponents(

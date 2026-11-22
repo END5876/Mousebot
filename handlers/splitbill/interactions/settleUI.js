@@ -280,8 +280,8 @@ module.exports = {
         .setTitle('💱 選擇最終結算的統一幣別')
         .setDescription(
           `此行程目前使用過的幣別有：**${currencies.join('、')}**\n` +
-          `請選擇要換算成哪一種幣別進行最終結算：\n\n` +
-          `*💡 會把 ${trip.baseCurrency} 的轉帳建議依今天的匯率換算成你選的幣別，跟網頁的結算頁是同一套算法，僅供參考；記好的帳目不會變。*`
+          `要換算成哪一種幣別？\n\n` +
+          `*💡 依今天的匯率換算，僅供參考，記好的帳目不會變。*`
         );
 
       const selectRow = new ActionRowBuilder().addComponents(

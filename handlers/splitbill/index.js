@@ -91,7 +91,7 @@ async function enforceTripPermission(interaction) {
   if (!targetTrip) return true;
 
   if (!isTripMember(targetTrip, user.id)) {
-    const msg = `❌ 你不是行程「${targetTrip.name}」的成員（或你的 Discord 帳號尚未連結到行程裡的成員），無法操作此行程。請行程內的成員從「👥 成員管理」把你加入，或用「🔗 連結 Discord 帳號」把你連結到既有的成員。`;
+    const msg = `❌ 你還不是行程「${targetTrip.name}」的成員。請行程裡的人從「👥 成員管理」把你加入。`;
     if (interaction.replied || interaction.deferred) {
       await interaction.followUp({ content: msg, flags: MessageFlags.Ephemeral });
     } else {

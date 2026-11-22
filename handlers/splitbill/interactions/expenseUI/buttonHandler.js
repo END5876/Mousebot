@@ -54,7 +54,7 @@ async function handleButton(interaction, cache) {
       const embed = new EmbedBuilder()
         .setColor(0x2ecc71)
         .setTitle('💰 步驟 1/4：選擇幣別')
-        .setDescription(`預收款是出發前先向大家收的錢（例如團費、公基金）。這筆是用哪種幣別收的？\n*會依今天的匯率換算成 ${trip.baseCurrency} 記下來，之後匯率變動不影響這筆。*`);
+        .setDescription('預收款是出發前先向大家收的錢，例如團費。這筆是用哪種幣別收的？');
 
       const selectRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()

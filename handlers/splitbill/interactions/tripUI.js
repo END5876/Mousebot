@@ -33,7 +33,7 @@ async function renderTripNav(interaction, alertMsg = null, page = 0) {
   const embed = new EmbedBuilder()
     .setColor(0xe74c3c)
     .setTitle('🧳 行程與外幣設定')
-    .setDescription(`你目前使用的行程：${activeName}\n*（每人各自獨立，切換行程不會影響其他成員看到的行程）*\n\n請直接由下方選單切換行程，或使用按鈕建立/刪除行程、新增幣別匯率。\n\n🌐 網頁上建立的行程，可以在網頁的「設定 → 行程 → 連到 Discord 伺服器」產生連線碼，再到這裡輸入 \`/splitbill attach\`。`);
+    .setDescription(`你目前使用的行程：${activeName}\n*（只切換你自己的，不影響其他成員）*\n\n🌐 網頁上建立的行程：在網頁產生連線碼，再到這裡輸入 \`/splitbill attach\`。`);
 
   if (trip) {
     const rateLines = Object.entries(trip.rates)
