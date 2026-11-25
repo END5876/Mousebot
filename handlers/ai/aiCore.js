@@ -40,6 +40,7 @@ const {
 // ════════════════════════════════════════════════════════
 const HISTORY_FETCH_LIMIT  = 30;
 const HISTORY_PAIR_LIMIT   = 12; 
+const HISTORY_IMAGE_MSGS   = 3;   // 只帶最後幾則歷史訊息的圖片
 const HISTORY_TIME_LIMIT_MS = 10 * 60 * 1000;
 // 單一人格：搜尋階段只帶最近 4 段、工具判斷只帶最近 6 段純文字（限制 part 數與字數，不是 content 數）
 const RESEARCH_TIMEOUT_MS = 30_000;   // 搜尋階段逾時就略過，直接回答
@@ -328,7 +329,11 @@ async function renderHistoryMessages(msgs, botId, { labelFn, imageMsgCount = Inf
             parts.push({ text: `【發言者：${labelFn(msg)}】\n${escapeLabelBrackets(textContent)}` });
         }
 
-        if (parts.length === 0) parts.push({ text: '[使用者傳了一張無法讀取的圖片]' });
+        if (parts.length === 0) {
+            // 太舊而沒下載的圖片不是「讀不到」，用跟群組相同的標記
+            const skipped = index < firstImageIndex && split[index].attachments?.size > 0;
+            parts.push({ text: skipped ? '[圖片]' : '[使用者傳了一張無法讀取的圖片]' });
+        }
         history.push({ role: isBot ? 'model' : 'user', parts });
     }
     return history;
@@ -421,6 +426,7 @@ async function fetchUserChannelHistory(channel, userId, currentMessageId, botId,
 
         const history = await renderHistoryMessages([...relevantMessages.values()], botId, {
             labelFn: msg => labelForMessage(msg, null),
+            imageMsgCount: HISTORY_IMAGE_MSGS,
             mode,
         });
         const finalHistory = finalizeHistory(history);
