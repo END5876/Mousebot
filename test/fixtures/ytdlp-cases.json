@@ -1,0 +1,96 @@
+{
+ "errors": [
+  {
+   "kind": "youtube",
+   "output": "ERROR: [youtube] abc403xyz12: Some other failure",
+   "expect": "UNKNOWN"
+  },
+  {
+   "kind": "youtube",
+   "output": "ERROR: HTTP Error 403: Forbidden",
+   "expect": "FORBIDDEN_403"
+  },
+  {
+   "kind": "youtube",
+   "output": "ERROR: HTTP Error 429: Too Many Requests",
+   "expect": "RATE_LIMITED"
+  },
+  {
+   "kind": "youtube",
+   "output": "ERROR: Sign in to confirm you are not a bot",
+   "expect": "BOT_DETECTED"
+  },
+  {
+   "kind": "youtube",
+   "output": "ERROR: Private video",
+   "expect": "PRIVATE"
+  },
+  {
+   "kind": "youtube",
+   "output": "ERROR: Video unavailable",
+   "expect": "UNAVAILABLE"
+  },
+  {
+   "kind": "youtube",
+   "output": "ERROR: HTTP Error 410: Gone",
+   "expect": "REMOVED"
+  },
+  {
+   "kind": "bilibili",
+   "output": "ERROR: BV1412xx403: HTTP Error 412: Precondition Failed",
+   "expect": "412"
+  },
+  {
+   "kind": "bilibili",
+   "output": "ERROR: HTTP Error 403: Forbidden",
+   "expect": "403"
+  },
+  {
+   "kind": "bilibili",
+   "output": "ERROR: HTTP Error 404: Not Found",
+   "expect": "404"
+  },
+  {
+   "kind": "bilibili",
+   "output": "ERROR: [BiliBili] BV1412xx403: something broke",
+   "expect": "未知錯誤"
+  }
+ ],
+ "filenames": [
+  {
+   "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+   "title": "Never Gonna",
+   "filename": "Never Gonna [yt_dQw4w9WgXcQ].mp3"
+  },
+  {
+   "url": "https://youtu.be/dQw4w9WgXcQ",
+   "title": "",
+   "filename": "yt_dQw4w9WgXcQ.mp3"
+  },
+  {
+   "url": "https://youtu.be/dQw4w9WgXcQ",
+   "title": " a/b:c   100% ",
+   "filename": "abc 100% [yt_dQw4w9WgXcQ].mp3"
+  },
+  {
+   "url": "https://www.youtube.com/watch?v=Xav1bcdefgh",
+   "title": "T",
+   "filename": "T [yt_Xav1bcdefgh].mp3"
+  },
+  {
+   "url": "https://www.bilibili.com/video/BV1xx411c7mD?p=2",
+   "title": "標題",
+   "filename": "標題 [BV1xx411c7mD].mp3"
+  },
+  {
+   "url": "https://www.bilibili.com/video/av170001",
+   "title": "T",
+   "filename": "T [av170001].mp3"
+  },
+  {
+   "url": "https://youtu.be/dQw4w9WgXcQ",
+   "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx😀",
+   "filename": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx [yt_dQw4w9WgXcQ].mp3"
+  }
+ ]
+}

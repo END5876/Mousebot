@@ -12,6 +12,9 @@ const normalizer = require('./musicNormalizer');
 
 const ytdlpPath = 'yt-dlp';
 
+// 單一下載的最長時間；yt-dlp 卡死時強制終止，否則下載鎖與預先下載的名額永遠不會釋放
+const DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000;
+
 // ── 快取資料夾 ────────────────────────────────────────────
 const MUSIC_DIR = path.join(__dirname, '..', '..', 'data', 'music');
 const CACHE_DIR = MUSIC_DIR;
@@ -220,7 +223,8 @@ function downloadAndCache(url, title, ytdlpArgs, onProgress) {
     const mp3Tmp   = path.join(CACHE_DIR, filename.replace(/\.mp3$/, `.enc_${Date.now()}.tmp.mp3`));
 
     // 將輸出路徑注入參數（替換佔位符 __OUTPUT__）
-    const finalArgs = ytdlpArgs.map(a => a === '__OUTPUT__' ? rawTmp : a);
+    // -o 是 yt-dlp 的輸出範本：標題裡的 % 要寫成 %%，否則「%(id)s」會被展開成別的檔名
+    const finalArgs = ytdlpArgs.map(a => a === '__OUTPUT__' ? rawTmp.replace(/%/g, '%%') : a);
 
     const platform = url.includes('youtube.com') || url.includes('youtu.be')
       ? 'YouTube' : 'Bilibili';
@@ -230,18 +234,26 @@ function downloadAndCache(url, title, ytdlpArgs, onProgress) {
 
     let errorOutput = '';
 
-    ytdlp.stderr.on('data', data => {
-      const line = data.toString();
-      errorOutput += line;
-      const progressMatch = line.match(/\[download\]\s+([\d.]+)%/);
-      if (progressMatch && onProgress) {
-        onProgress(parseFloat(progressMatch[1]));
-      }
-    });
+    // 下載進度印在 stdout；沒人讀的話管線緩衝滿了 yt-dlp 會卡死
+    const onChunk = (data) => {
+      const text = data.toString();
+      const progressMatch = text.match(/\[download\]\s+([\d.]+)%/);
+      if (progressMatch && onProgress) onProgress(parseFloat(progressMatch[1]));
+      return text;
+    };
+    ytdlp.stdout.on('data', onChunk);
+    ytdlp.stderr.on('data', data => { errorOutput = (errorOutput + onChunk(data)).slice(-4000); }); // 只留尾端
 
-    ytdlp.on('error', err => reject(new Error('執行 yt-dlp 失敗：' + err.message)));
+    const timer = setTimeout(() => {
+      logger.warn(platform, `下載逾時（${DOWNLOAD_TIMEOUT_MS / 60000} 分鐘），強制終止: ${filename}`);
+      try { ytdlp.kill('SIGKILL'); } catch {}
+      reject(new Error('下載逾時')); // 不等 close：殘留的子行程可能讓 close 一直不觸發
+    }, DOWNLOAD_TIMEOUT_MS);
+
+    ytdlp.on('error', err => { clearTimeout(timer); reject(new Error('執行 yt-dlp 失敗：' + err.message)); });
 
     ytdlp.on('close', code => {
+      clearTimeout(timer);
       if (code !== 0) {
         safeUnlink(rawTmp);
         safeUnlink(`${rawTmp}.part`);
@@ -261,6 +273,7 @@ function downloadAndCache(url, title, ytdlpArgs, onProgress) {
         .then(({ normalized }) => {
           safeUnlink(rawTmp);
           fs.renameSync(mp3Tmp, filePath);
+          evictCacheIfNeeded(); // 下載前的檢查看不到這一首，加入後再檢查一次容量
           const sizeMB = (fs.statSync(filePath).size / 1024 / 1024).toFixed(2);
           logger.success(platform, `下載完成: ${filename} (${sizeMB} MB${normalized ? '，已正規化響度' : '，未正規化'})`);
           resolve(filePath);

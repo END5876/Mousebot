@@ -134,6 +134,12 @@ function isSupportedMediaUrl(url) {
   return isYouTubeUrl(url) || isBilibiliUrl(url);
 }
 
+// 排除 generic extractor：白名單網域內、但不是影片頁的網址，不會被當成任意網頁解析而連去其他網站。
+// b23.tv 短網址沒有專屬 extractor，要靠 generic 跟著轉址，所以保留
+function _extractorLimitArgs(url) {
+  return _hostOf(url) === 'b23.tv' ? [] : ['--use-extractors', 'default,-generic'];
+}
+
 // yt-dlp 已棄用 `--add-header Cookie:`（會對所有網域送出），改寫成暫存的 Netscape cookie 檔，
 // 讓 Cookie 只套用在指定網域；寫檔失敗時才退回 header 模式
 function _writeTempCookieFile(name, domain, cookies) {
@@ -311,7 +317,7 @@ function buildYouTubeArgs(url, strategy, streamMode = true) {
     );
   }
 
-  args.push('--ignore-errors');
+  args.push('--ignore-errors', ..._extractorLimitArgs(url));
 
   args.push(url);
   return args;
@@ -348,6 +354,7 @@ function buildBilibiliArgs(url, streamMode = true) {
   }
 
   args.push(
+    ..._extractorLimitArgs(url),
     '--extractor-args', 'bilibili:getcomments=false',
     '--extractor-args', 'bilibili:getdanmaku=false'
   );
@@ -395,8 +402,11 @@ function buildYouTubeSearchArgs() {
   return args;
 }
 
+// getInfo 實際用到的欄位，輸出成單行 JSON（完整的 --dump-json 在 YouTube 動輒數 MB）
+const INFO_FIELDS_TEMPLATE = '%(.{title,uploader,channel,creator,duration,thumbnail})j';
+
 function buildInfoArgs(url) {
-  const base = ['--dump-json', '--no-playlist', '--no-warnings', '--skip-download'];
+  const base = ['-O', INFO_FIELDS_TEMPLATE, '--no-playlist', '--no-warnings', '--skip-download', ..._extractorLimitArgs(url)];
 
   if (isYouTubeUrl(url)) {
     if (WARP_PROXY) {
@@ -440,7 +450,7 @@ function buildInfoArgs(url) {
 //  播放清單偵測專用參數（不加 --no-playlist，flat 模式快速列出項目）
 // ════════════════════════════════════════════════════════
 function buildPlaylistCheckArgs(url) {
-  const base = ['--flat-playlist', '--dump-single-json', '--no-warnings', '--skip-download'];
+  const base = ['--flat-playlist', '--dump-single-json', '--no-warnings', '--skip-download', ..._extractorLimitArgs(url)];
 
   if (isYouTubeUrl(url)) {
     if (WARP_PROXY) base.push('--proxy', WARP_PROXY);
