@@ -2,7 +2,8 @@
 ARG BGUTIL_VERSION=2.0.2
 
 # ── 建置 bgutil PO Token Provider HTTP 伺服器（git / devDependencies 只留在這個 stage）──
-FROM node:22-slim AS bgutil-build
+# 基底映像固定到 digest，每次建置內容一致；新版由 Dependabot 每月開 PR 更新
+FROM node:22-slim@sha256:be979e5523c76fa4d5ca4ebd3099078f220aa47ec39c48ad5b5df9314debd6eb AS bgutil-build
 ARG BGUTIL_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -14,7 +15,7 @@ RUN git clone --depth 1 --single-branch --branch ${BGUTIL_VERSION} \
     npm prune --omit=dev && \
     mkdir -p /opt/bgutil && cp -r build node_modules package.json /opt/bgutil/
 
-FROM node:22-slim
+FROM node:22-slim@sha256:be979e5523c76fa4d5ca4ebd3099078f220aa47ec39c48ad5b5df9314debd6eb
 ARG BGUTIL_VERSION
 
 # ── 系統依賴 ────────────────────────────────────────────

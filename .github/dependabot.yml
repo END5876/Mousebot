@@ -20,7 +20,7 @@ updates:
   - package-ecosystem: docker
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     ignore:
       - dependency-name: node
         update-types: [version-update:semver-major]

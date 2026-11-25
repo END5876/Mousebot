@@ -187,6 +187,8 @@ async function saveTrip(guildId, tripId, trip, opts = {}) {
         current = merged; // 用合併後的版本重試
         continue;
       }
+      // 伺服器的訊息是寫給網頁看的（重新整理）；在 Discord 要重新開啟面板
+      if (err.status === 409) err.message = '這個行程剛被改過，這次沒有存到，請重新開啟再操作一次。';
       throw err;
     }
   }

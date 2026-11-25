@@ -154,3 +154,20 @@ test('addDeposit：外幣優先用傳進來的當天匯率，基準幣別不換�
   const base = addDeposit(trip, { collectorId: 'a', payerId: 'b', amount: 500, currency: 'TWD', rateToBase: 9 });
   assert.equal(base.amountInBase, 500);
 });
+
+// 與網頁共用的結算測試資料：splitbill-service 的 test/settlement-shared.test.js 用同一份
+const { cases: sharedCases } = require('./fixtures/splitbill-cases.json');
+for (const c of sharedCases) {
+  test(`共用結算資料：${c.name}`, () => {
+    const net = calcNetBalances(c.trip);
+    assert.deepEqual(net, c.net);
+    assert.deepEqual(simplifyDebts(net), c.settlement);
+  });
+}
+
+test('共用結算資料：與分帳服務那份內容相同', (t) => {
+  const fs = require('node:fs');
+  const other = require('node:path').join(__dirname, '../../splitbill-service/test/fixtures/splitbill-cases.json');
+  if (!fs.existsSync(other)) return t.skip('旁邊沒有 splitbill-service');
+  assert.deepEqual(JSON.parse(fs.readFileSync(other, 'utf8')).cases, sharedCases);
+});
