@@ -42,6 +42,7 @@ const HISTORY_FETCH_LIMIT  = 30;
 const HISTORY_PAIR_LIMIT   = 12; 
 const HISTORY_TIME_LIMIT_MS = 10 * 60 * 1000;
 // 單一人格：搜尋階段只帶最近 4 段、工具判斷只帶最近 6 段純文字（限制 part 數與字數，不是 content 數）
+const RESEARCH_TIMEOUT_MS = 30_000;   // 搜尋階段逾時就略過，直接回答
 const RESEARCH_HISTORY_LIMIT = Object.freeze({ maxParts: 4, maxChars: GROUP_TEXT_MAX });
 const TOOL_HISTORY_LIMIT     = Object.freeze({ maxParts: 6, maxChars: 300 });
 
@@ -165,6 +166,7 @@ async function researchIfNeeded({ history, parts, guildId, userId, mode, mergeUs
             systemInstruction: RESEARCH_PROMPT,
             contents: appendUserTurn(history, parts, mergeUser),
             config: RESEARCH_CONFIG,
+            timeoutMs: RESEARCH_TIMEOUT_MS,
         });
     } catch (err) {
         // 例如模型不支援、API Key 為免費方案：直接略過搜尋，不影響回覆

@@ -1208,7 +1208,8 @@ const EXPECTED = {
             ],
             "temperature": 1,
             "maxOutputTokens": 600
-          }
+          },
+          "timeoutMs": 30000
         },
         {
           "systemInstruction": "CHAT_PROMPT\n\nGENERAL_RULES\n\nGROUP_RULES\n\n【目前這段對話中的成員】\n- hua (@hua)\n- 明明 (@ming)",

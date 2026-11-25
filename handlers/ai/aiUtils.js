@@ -27,6 +27,8 @@ const IMAGE_CACHE_TTL_MS = 10 * 60 * 1000;
 const IMAGE_CACHE_MAX_ENTRIES = 40;          // 每筆最多約 1MB 級 base64，限制總量避免吃光記憶體
 const IMAGE_FETCH_TIMEOUT_MS = 10_000;
 const IMAGE_MAX_REDIRECTS = 3;
+const IMAGE_MAX_CONCURRENT = 3;              // 全 Bot 同時下載＋解碼的圖片數，其餘排隊（單張最多 30MB、4000 萬像素）
+const IMAGE_URL_MAX_COUNT = 10;              // 每則訊息最多處理的圖片網址數，跟 Discord 一則訊息的附件上限相同
 const EMOJI_MAX_SIZE_PX = 64;                // emoji 只需辨識表情，縮小以節省 token
 // 解碼時的像素上限（寬×高，動圖是所有影格加總）：小檔案也可能宣稱超大尺寸，解碼時吃光記憶體
 const MAX_INPUT_PIXELS = 40_000_000;
@@ -298,6 +300,26 @@ function sniffImageType(buf) {
 }
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
 
+// 下載＋解碼很吃記憶體，全 Bot 共用名額；超過的依序等待
+let activeImageJobs = 0;
+const imageJobQueue = [];
+async function withImageSlot(job) {
+    if (activeImageJobs >= IMAGE_MAX_CONCURRENT) {
+        await new Promise(resolve => imageJobQueue.push(resolve));   // 名額由前一個工作直接交接，不必再加一
+    } else {
+        activeImageJobs++;
+    }
+    try {
+        return await job();
+    } finally {
+        const next = imageJobQueue.shift();
+        if (next) next();
+        else activeImageJobs--;
+    }
+}
+
+const imageInFlight = new Map();   // 同一網址正在處理中：共用同一次下載
+
 async function fetchImageUrlAsBase64(url) {
     const cached = imageCache.get(url);
     if (cached && (Date.now() - cached.cachedAt) < IMAGE_CACHE_TTL_MS) {
@@ -305,6 +327,15 @@ async function fetchImageUrlAsBase64(url) {
         return { base64: cached.base64, mimeType: cached.mimeType };
     }
 
+    let pending = imageInFlight.get(url);
+    if (!pending) {
+        pending = withImageSlot(() => downloadImage(url)).finally(() => imageInFlight.delete(url));
+        imageInFlight.set(url, pending);
+    }
+    return pending;
+}
+
+async function downloadImage(url) {
     try {
         const sizeLimit = MAX_IMAGE_SIZE_MB * 1024 * 1024;
         const { buffer: rawBuffer } = await safeFetchBuffer(url, sizeLimit);
@@ -408,6 +439,7 @@ async function processImageUrls(content, client, viewer) {
     const urlRegex = /(https?:\/\/[^\s)\]>]+)/g;
     const urls = [...new Set(content.match(urlRegex) || [])];
 
+    let imageUrlCount = 0;
     // 每個網址各自處理（並行），最後依網址出現順序組回結果；非圖片網址回傳 null
     const processOne = async (url) => {
         const isDiscordCDN = url.includes('cdn.discordapp.com/attachments/');
@@ -416,7 +448,7 @@ async function processImageUrls(content, client, viewer) {
         const isLikelyImage = /\.(png|jpg|jpeg|webp|heic|heif|gif)(?:\?.*)?$/i.test(url)
             || isDiscordCDN;
 
-        if (!isLikelyImage) return null;
+        if (!isLikelyImage || ++imageUrlCount > IMAGE_URL_MAX_COUNT) return null;
 
         // 缺簽名的 Discord CDN 網址：先嘗試修復，別急著判死刑
         if (isDiscordCDN && !hasSignature) {
@@ -525,7 +557,7 @@ setInterval(() => {
         if (now - entry.cachedAt >= IMAGE_CACHE_TTL_MS) { imageCache.delete(url); cleared++; }
     }
     if (cleared > 0) logger.debug('Image Cache', `已清除 ${cleared} 筆過期快取`);
-}, IMAGE_CACHE_TTL_MS);
+}, IMAGE_CACHE_TTL_MS).unref();
 
 // ════════════════════════════════════════════════════════
 //  withTyping：持續顯示「正在輸入中」直到 asyncFn 結束

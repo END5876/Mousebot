@@ -16,6 +16,9 @@ const DEFAULT_MODEL = 'gemini-3.1-flash-lite';
 const MODEL_NAME        = process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
 const VISION_MODEL_NAME = process.env.GEMINI_VISION_MODEL?.trim() || MODEL_NAME;
 
+// 沒有指定 timeoutMs 的呼叫都套用這個上限：Gemini 卡住時不能讓使用者一直等、請求一直佔著
+const DEFAULT_TIMEOUT_MS = 60_000;
+
 const SAFETY_SETTINGS = [
     HarmCategory.HARM_CATEGORY_HARASSMENT,
     HarmCategory.HARM_CATEGORY_HATE_SPEECH,
@@ -45,11 +48,11 @@ function getClient() {
  * @param {object} [opts.config]                 generationConfig 欄位（temperature、maxOutputTokens、responseMimeType...）
  * @param {string} [opts.model]                  預設 MODEL_NAME
  * @param {AbortSignal} [opts.signal]
- * @param {number} [opts.timeoutMs]
+ * @param {number} [opts.timeoutMs]             預設 DEFAULT_TIMEOUT_MS
  * @returns {Promise<import('@google/genai').GenerateContentResponse>}
  *          回傳值的 .text 是 getter（不是函式），.usageMetadata 給 tokenTracker 用
  */
-async function generate({ contents, systemInstruction, config = {}, model = MODEL_NAME, signal, timeoutMs }) {
+async function generate({ contents, systemInstruction, config = {}, model = MODEL_NAME, signal, timeoutMs = DEFAULT_TIMEOUT_MS }) {
     return getClient().models.generateContent({
         model,
         contents,
@@ -59,9 +62,9 @@ async function generate({ contents, systemInstruction, config = {}, model = MODE
             ...(systemInstruction ? { systemInstruction } : {}),
             safetySettings: SAFETY_SETTINGS,
             ...(signal ? { abortSignal: signal } : {}),
-            ...(timeoutMs ? { httpOptions: { timeout: timeoutMs } } : {}),
+            httpOptions: { timeout: timeoutMs },
         },
     });
 }
 
-module.exports = { generate, MODEL_NAME, VISION_MODEL_NAME };
+module.exports = { generate, DEFAULT_TIMEOUT_MS, MODEL_NAME, VISION_MODEL_NAME };
