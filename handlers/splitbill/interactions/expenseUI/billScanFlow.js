@@ -132,7 +132,7 @@ async function startBillScan(interaction, trip, cache) {
           throw new Error('讀不到這張圖片，請上傳 JPG、PNG 或 WebP 圖片。');
         }
 
-        const result = await scanBillImage(imageParts, tripCurrencies, trip.baseCurrency, user.id);
+        const result = await scanBillImage(imageParts, tripCurrencies, trip.baseCurrency, user.id, guildId);
 
         const matchedCurrency = tripCurrencies.find((c) => c.toUpperCase() === result.currency) || trip.baseCurrency;
         const currencyNote = matchedCurrency !== result.currency && result.currency

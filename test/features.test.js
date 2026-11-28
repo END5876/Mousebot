@@ -109,8 +109,23 @@ test('parseFeatures：hidden 條目不能寫進 FEATURES', () => {
 
 test('list()：不含 hidden，順序和 setup 順序相同', () => {
   assert.deepEqual(features.list(), [
-    'voice', 'stt', 'basic', 'responses', 'ai', 'autojoin', 'tts', 'notice', 'timeannounce', 'splitbill', 'music',
+    'voice', 'stt', 'basic', 'responses', 'ai', 'autojoin', 'tts', 'notice', 'timeannounce', 'splitbill', 'music', 'privacy',
   ]);
+});
+
+// 公開上線階段 1：/privacy 只在 PUBLIC_MODE=1 時存在，私人版不註冊也不列在開機摘要
+test('privacy：私人版是 private（setupModules 不回報），公開模式才 on', () => {
+  const saved = process.env.PUBLIC_MODE;
+  try {
+    delete process.env.PUBLIC_MODE;
+    assert.equal(features.status('privacy').state, 'private');
+    assert.equal(features.isEnabled('privacy'), false);
+    process.env.PUBLIC_MODE = '1';
+    assert.equal(features.status('privacy').state, 'on');
+  } finally {
+    if (saved === undefined) delete process.env.PUBLIC_MODE;
+    else process.env.PUBLIC_MODE = saved;
+  }
 });
 
 // ── status ─────────────────────────────────────────────────

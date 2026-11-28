@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const logger = require('../../utils/logger');
 const { readJson, writeJsonAtomic } = require('../../utils/jsonStore');
 const { dataPath } = require('../../utils/dataDir');
+const { envRatioByMode } = require('../../utils/publicMode');
 
 // ════════════════════════════════════════════════════════
 //  路徑設定
@@ -13,9 +14,13 @@ const DISABLED_PATH = dataPath('replyChanceDisabled.json');
 // ════════════════════════════════════════════════════════
 //  預設值與記憶體快取
 // ════════════════════════════════════════════════════════
-const DEFAULT_CHANCE = 0.15;
+// 私人版：預設 15%、最高 100%。
+// 公開模式（PUBLIC_MODE=1）：預設 0%（伺服器管理員自己用 /ai chance set 打開）、最高 10%。
+// 隨機插話不用被叫就會呼叫 AI，是大伺服器裡最主要的費用來源，所以公開時要保守。
+// 兩者都可以用環境變數覆寫（0～1 的小數）：AI_RANDOM_CHANCE_DEFAULT、AI_RANDOM_CHANCE_MAX
 const MIN_CHANCE     = 0;
-const MAX_CHANCE     = 1;
+const MAX_CHANCE     = envRatioByMode('AI_RANDOM_CHANCE_MAX', 1, 0.1);
+const DEFAULT_CHANCE = Math.min(MAX_CHANCE, envRatioByMode('AI_RANDOM_CHANCE_DEFAULT', 0.15, 0));
 
 /** @type {Map<string, number>}  guildId   → chance (0~1) */
 let chanceMap = new Map();
@@ -70,7 +75,8 @@ function saveDisabledChannels() {
  */
 function getReplyChance(guildId) {
     if (!guildId) return DEFAULT_CHANCE;
-    return chanceMap.has(guildId) ? chanceMap.get(guildId) : DEFAULT_CHANCE;
+    // 上限調低之前存的設定可能比較高：以目前的上限計
+    return chanceMap.has(guildId) ? Math.min(MAX_CHANCE, chanceMap.get(guildId)) : DEFAULT_CHANCE;
 }
 
 // ════════════════════════════════════════════════════════
@@ -129,6 +135,8 @@ function shouldRandomReply(messageId, chance, offset = getSlotOffset()) {
 function setReplyChance(guildId, chance) {
     if (typeof chance !== 'number' || isNaN(chance))
         return { success: false, error: '機率必須是數字' };
+    if (MAX_CHANCE < 1 && chance > MAX_CHANCE && chance <= 1)
+        return { success: false, error: `這個 Bot 的隨機回覆機率最高 ${+(MAX_CHANCE * 100).toFixed(1)}%` };
     if (chance < MIN_CHANCE || chance > MAX_CHANCE)
         return { success: false, error: `機率必須介於 ${MIN_CHANCE} ~ ${MAX_CHANCE} 之間` };
 
@@ -212,6 +220,7 @@ loadDisabledChannels();
 
 module.exports = {
     DEFAULT_CHANCE,
+    MAX_CHANCE,
     getReplyChance,
     shouldRandomReply,
     messageRoll,

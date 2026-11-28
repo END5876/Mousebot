@@ -92,6 +92,24 @@ function getBotMessageContext(messageId) {
     return entry;
 }
 
+/**
+ * 刪除指定使用者的所有回覆紀錄（/privacy delete）；紀錄裡有使用者名稱和 /ai ask 的問題原文
+ * @returns {number} 刪掉幾筆
+ */
+function deleteUserEntries(userId) {
+    if (!userId) return 0;
+    const map = load();
+    let removed = 0;
+    for (const [id, e] of map) {
+        if (e.userId === userId) {
+            map.delete(id);
+            removed++;
+        }
+    }
+    if (removed) writer.schedule();
+    return removed;
+}
+
 /** 測試用：立即寫出 */
 function _flush() {
     if (log) writer?.flush();
@@ -104,7 +122,7 @@ function _reset() {
 }
 
 module.exports = {
-    recordBotMessageContext, getBotMessageContext,
+    recordBotMessageContext, getBotMessageContext, deleteUserEntries,
     MAX_ENTRIES, RETENTION_MS, ASK_TEXT_MAX,
     _flush, _reset,
 };

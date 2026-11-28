@@ -174,7 +174,7 @@ async function researchIfNeeded({ history, parts, guildId, userId, mode, mergeUs
         logger.warn('Search', `搜尋階段失敗，略過：${err.message}`);
         return null;
     }
-    recordUsage('search', response, { userId, mode });
+    recordUsage('search', response, { userId, mode, guildId });
 
     const { queries, sources } = getGroundingInfo(response);
     const facts = (response.text ?? '').trim();
@@ -744,7 +744,8 @@ async function getGeminiResponse({
     message = null, mode = null, scope = null, userName = null, toolCtx = null,
 } = {}) {
     try {
-        consumeQuota(userId);
+        const guildId = channel?.guildId ?? message?.guildId ?? null;
+        consumeQuota(userId, guildId);
         scope ??= persona.resolveScope(channel ?? message?.channel ?? null, message?.guildId ?? null);
         mode ||= getUserMode(userId, scope);
         const { history, speakers } = await loadHistory({ scope, channel, userId, messageId, botId, mode });
@@ -754,13 +755,12 @@ async function getGeminiResponse({
             ? await buildMessagePartsWithReference(message, prompt, imageParts, botId, mode, userId, scope)
             : buildPlainParts(prompt, imageParts, scope, userName);
 
-        const guildId = channel?.guildId ?? message?.guildId ?? null;
         const { response, skipTTS } = await sendWithHistory({
             mode, scope, history, parts: messageParts, config: GENERATION_CONFIG, guildId, userId,
             toolCtx, toolText: prompt,
             roster: rosterFor(scope, speakers, userId, message, userName),
         });
-        recordUsage('chat', response, { userId, mode });
+        recordUsage('chat', response, { userId, mode, guildId });
         const text = stripPromptEcho(response.text ?? '');
         // 被擋下（PROHIBITED_CONTENT/RECITATION 等）時沒有任何文字，送空訊息會被 Discord 拒絕，改丟專用錯誤讓呼叫端提示使用者
         if (!text.trim()) {
@@ -774,6 +774,7 @@ async function getGeminiResponse({
         return { text: replyText, chunks: replyText ? splitMessage(replyText) : [], files, skipTTS };
     } catch (error) {
         if (isEmptyResponseError(error)) logger.warn('AI', error.message);
+        else if (error?.name === 'AiBusyError') logger.warn('AI', error.message);
         else if (!isQuotaError(error)) logger.error('AI', `Gemini Error (${MODEL_NAME}): ${error.message}`);
         throw error;
     }
@@ -788,7 +789,8 @@ async function getGeminiResponse({
  */
 async function getGeminiResponseVoice(userId, prompt, channel = null, messageId = null, botId = null, mode = null, guildId = null, toolCtx = null, opts = {}) {
     try {
-        consumeQuota(userId);
+        const voiceGuildId = guildId ?? channel?.guildId ?? null;
+        consumeQuota(userId, voiceGuildId);
         // 語音沒有 channel，用語音對應的文字頻道解析頻道層級的覆寫，沒有就看伺服器設定
         const scope = opts?.scope ?? persona.resolveScope(
             channel ?? opts?.textChannel ?? toolCtx?.textChannel ?? null,
@@ -811,12 +813,12 @@ async function getGeminiResponseVoice(userId, prompt, channel = null, messageId 
             mode, isVoice: true, scope, history,
             parts: [{ text: voiceText }],
             config: { ...GENERATION_CONFIG, maxOutputTokens: 150 },
-            guildId: guildId ?? channel?.guildId ?? null,
+            guildId: voiceGuildId,
             userId,
             toolCtx, toolText: prompt,
         });
         const response = stripPromptEcho((result.text ?? '').trim());
-        recordUsage('voice', result, { userId, mode });
+        recordUsage('voice', result, { userId, mode, guildId: voiceGuildId });
         logger.debug('Voice AI', `${userId}: "${prompt}" → "${response}"`);
         // text：回覆文字；skipTTS：這次用到了音樂工具，呼叫端不要朗讀
         return { text: response, skipTTS };
@@ -836,7 +838,8 @@ async function getShortResponse({
     message = null, mode = null, scope = null, userName = null,
 } = {}) {
     try {
-        consumeQuota(userId);
+        const guildId = channel?.guildId ?? message?.guildId ?? null;
+        consumeQuota(userId, guildId);
         scope ??= persona.resolveScope(channel ?? message?.channel ?? null, message?.guildId ?? null);
         mode ||= getUserMode(userId, scope);
         const { history, speakers } = await loadHistory({ scope, channel, userId, messageId, botId, mode });
@@ -853,9 +856,9 @@ async function getShortResponse({
             mode, scope, history, parts: messageParts, userId,
             roster: rosterFor(scope, speakers, userId, message, userName),
             config: { ...GENERATION_CONFIG, maxOutputTokens: 300 },
-            guildId: channel?.guildId ?? message?.guildId ?? null,
+            guildId,
         });
-        recordUsage('short', response, { userId, mode });
+        recordUsage('short', response, { userId, mode, guildId });
         const { text, memes } = memeStore.extractMemes(stripPromptEcho((response.text ?? '').trim()), mode);
         const files = await memeStore.toFiles(memes);
         if (!text && files.length === 0) return null;

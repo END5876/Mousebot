@@ -14,11 +14,13 @@ const {
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
   MessageFlags,
+  PermissionFlagsBits,
 } = require('discord.js');
 
 const logger = require('../utils/logger');
 const bootSummary = require('../utils/bootSummary');
 const features = require('../utils/features');
+const { isPublicMode } = require('../utils/publicMode');
 
 // STT、AI、TTS 都是選用模組，而且 sttHandler、aiHandler 會反過來載入這裡，
 // 所以一律在函式裡透過登錄表取得（不可以在最上層呼叫 features.get）。
@@ -456,6 +458,13 @@ async function handleStt(interaction, sub) {
       }
 
       if (sub === 'start') {
+        // 公開模式：喚醒詞會監聽頻道裡所有人的聲音，限有「管理伺服器」權限的人開啟（關閉不限，任何人都能停止監聽）
+        if (isPublicMode() && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+          return interaction.reply({
+            content: '❌ 只有伺服器管理員可以開啟語音辨識，因為它會聽到頻道裡每個人的聲音。',
+            flags: MessageFlags.Ephemeral,
+          });
+        }
         const sttTextChannel = findTranscriptChannel(interaction.guild) || interaction.channel;
         const result = startWakeWord(interaction.guild, sttTextChannel);
 

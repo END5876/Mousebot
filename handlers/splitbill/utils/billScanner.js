@@ -88,7 +88,7 @@ function buildPrompt(tripCurrencies, baseCurrency) {
  * @param {string|null} [userId] 發起辨識的使用者（用量統計 / AI 額度用）
  * @returns {Promise<{description: string, amount: number|null, currency: string, date: string, confidence: string, language: string, descriptionTranslated: string, isForeignLanguage: boolean}>}
  */
-async function scanBillImage(imageParts, tripCurrencies = [], baseCurrency = 'TWD', userId = null) {
+async function scanBillImage(imageParts, tripCurrencies = [], baseCurrency = 'TWD', userId = null, guildId = null) {
   if (!imageParts || !imageParts.length) {
     throw new Error('讀不到圖片內容，請上傳 JPG、PNG 或 WebP 圖片。');
   }
@@ -97,7 +97,7 @@ async function scanBillImage(imageParts, tripCurrencies = [], baseCurrency = 'TW
     throw new Error('帳單辨識目前沒有開放，請改用手動輸入。');
   }
   try {
-    consumeQuota(userId);
+    consumeQuota(userId, guildId);
   } catch (err) {
     if (isQuotaError(err)) throw new Error(quotaMessage(err));
     throw err;
@@ -130,11 +130,16 @@ async function scanBillImage(imageParts, tripCurrencies = [], baseCurrency = 'TW
       signal: controller.signal,
       timeoutMs: GEMINI_REQUEST_TIMEOUT_MS
     });
-    recordUsage('billScan', response, { userId });
+    recordUsage('billScan', response, { userId, guildId });
   } catch (err) {
     if (controller.signal.aborted || err?.name === 'AbortError') {
       logger.error('billScanner', `Gemini API 呼叫逾時（超過 ${GEMINI_REQUEST_TIMEOUT_MS / 1000} 秒）`);
       throw new Error(`辨識逾時（超過 ${GEMINI_REQUEST_TIMEOUT_MS / 1000} 秒未回應），請稍後再試一次，或改用手動輸入。`);
+    }
+    // AI 排隊滿了或一直回 429：顯示「太忙」，和其他 AI 功能一致
+    if (isQuotaError(err)) {
+      logger.warn('billScanner', `Gemini 忙碌：${err.message}`);
+      throw new Error(quotaMessage(err));
     }
     logger.error('billScanner', `Gemini API 呼叫失敗: ${err.message}`);
     throw new Error('帳單辨識暫時無法使用，請稍後再試一次，或改用手動輸入。');

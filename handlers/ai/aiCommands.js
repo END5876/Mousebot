@@ -242,7 +242,7 @@ async function handleGugu(interaction) {
     await interaction.reply({ content: '⏳ 我操了老鐵...' });
 
     try {
-        const article = await gugu.generateGuguArticle(topic, interaction.user.id);
+        const article = await gugu.generateGuguArticle(topic, interaction.user.id, interaction.guildId ?? null);
         // 主題可能誘導模型寫超長文，超過 2000 字要切開送，否則整篇作廢
         const [first, ...rest] = splitMessage(article);
         await interaction.editReply({ content: first });

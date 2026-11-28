@@ -121,6 +121,15 @@ const MODULES = [
     },
     intents: ['GuildVoiceStates', 'GuildMembers'],
   },
+  {
+    name: 'privacy',
+    label: '隱私 (/privacy)',
+    entry: 'handlers/privacyHandler',
+    setup: (m, client) => m.setupPrivacyCommands(client),
+    intents: [],
+    // 只在公開模式（PUBLIC_MODE=1）存在：私人版不註冊、開機摘要也不列，指令清單維持原樣
+    publicOnly: true,
+  },
   { name: 'aiTools', hidden: true, entry: 'handlers/ai/tools', requires: ['ai'] },
   { name: 'aiTts', hidden: true, entry: 'handlers/ai/aiTTS', requires: ['ai', 'tts'] },
   { name: 'gugu', hidden: true, entry: 'handlers/ai/gugugagaGenerator', requires: ['ai'] },
@@ -193,6 +202,8 @@ function isPresent(name) {
 function status(name) {
   const mod = findModule(name);
   if (!isPresent(name)) return { name, state: 'absent', detail: null };
+  // publicMode 沒有任何依賴，可以在這裡 require
+  if (mod.publicOnly && !require('./publicMode').isPublicMode()) return { name, state: 'private', detail: null };
   if (!isListed(name)) return { name, state: 'excluded', detail: 'FEATURES 未包含' };
   for (const dep of mod.requires ?? []) {
     const depStatus = status(dep);
@@ -230,14 +241,14 @@ function intents() {
   return [...set].sort((a, b) => rank(a) - rank(b));
 }
 
-// 依清單順序 setup 啟用的模組；沒啟用的回報 off（檔案不存在的不回報）。回傳已啟用的名稱。
+// 依清單順序 setup 啟用的模組；沒啟用的回報 off（檔案不存在、只限公開模式的不回報）。回傳已啟用的名稱。
 function setupModules(client, report) {
   if (!report) report = require('./bootSummary').report;
   const enabled = [];
   for (const mod of MODULES) {
     if (mod.hidden) continue;
     const { state, detail } = status(mod.name);
-    if (state === 'absent') continue;
+    if (state === 'absent' || state === 'private') continue;
     if (state !== 'on') {
       report(mod.label, 'off', detail);
       continue;

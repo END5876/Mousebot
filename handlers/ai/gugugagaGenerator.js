@@ -14,9 +14,9 @@ const GENERATION_CONFIG = {
  * @param {string} topic - 用戶提供的主題
  * @returns {Promise<string>} 生成的文章
  */
-async function generateGuguArticle(topic, userId = null) {
+async function generateGuguArticle(topic, userId = null, guildId = null) {
     try {
-        consumeQuota(userId);
+        consumeQuota(userId, guildId);
 
         const prompt = `請根據以下主題，創作一篇完整的「咕咕嘎嘎體」文章：
 
@@ -39,7 +39,7 @@ async function generateGuguArticle(topic, userId = null) {
             contents: prompt,
             config: GENERATION_CONFIG,
         });
-        recordUsage('gugu', response, { userId });
+        recordUsage('gugu', response, { userId, guildId });
         const text = response.text ?? '';
         // 空字串送給 Discord 會被拒絕，當成生成失敗處理
         if (!text.trim()) throw new Error(`模型沒有產生任何內容 (finishReason: ${response.candidates?.[0]?.finishReason ?? 'unknown'})`);

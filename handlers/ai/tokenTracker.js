@@ -1,11 +1,12 @@
-const path = require('path');
 const logger = require('../../utils/logger');
 const { readJson, createDebouncedWriter } = require('../../utils/jsonStore');
+const { dataPath } = require('../../utils/dataDir');
 
 // ════════════════════════════════════════════════════════
 //  路徑與設定
 // ════════════════════════════════════════════════════════
-const USAGE_PATH       = path.resolve(__dirname, '../../data/tokenUsage.json');
+// 資料目錄可用 MOUSEBOT_DATA_DIR 覆寫（測試不讀寫正式的 data/）
+const USAGE_PATH       = dataPath('tokenUsage.json');
 const RETENTION_DAYS   = 90;
 const SAVE_DEBOUNCE_MS = 10 * 1000;
 
@@ -16,6 +17,7 @@ const SAVE_DEBOUNCE_MS = 10 * 1000;
 //     bySource: { chat: {...}, short: {...}, voice: {...}, gugu: {...}, billScan: {...} },
 //     byMode:   { loss: {...}, ... },
 //     byUser:   { "<userId>": {...} },
+//     byGuild:  { "<guildId>": {...} },   // 伺服器每日上限用（AI_GUILD_DAILY_TOKEN_BUDGET）；私訊不記
 //   }
 // }
 //
@@ -69,9 +71,9 @@ function addTo(group, key, counts) {
  * 記錄單次 Gemini 呼叫的 token 用量（同時印出 log 並累加進每日統計）
  * @param {string} source 呼叫來源：chat / short / voice / gugu / billScan / search / tools
  * @param {object} response Gemini 的 result.response
- * @param {{ userId?: string, mode?: string }} [meta]
+ * @param {{ userId?: string, mode?: string, guildId?: string|null }} [meta]
  */
-function recordUsage(source, response, { userId = null, mode = null } = {}) {
+function recordUsage(source, response, { userId = null, mode = null, guildId = null } = {}) {
     const meta = response?.usageMetadata;
     const label = [source, userId && `user:${userId}`, mode && `mode:${mode}`].filter(Boolean).join(' / ');
     if (!meta) {
@@ -95,11 +97,13 @@ function recordUsage(source, response, { userId = null, mode = null } = {}) {
         `思考: ${counts.thoughts} | 搜尋: ${counts.searches} 次 (取回 ${counts.toolUse}) | 總計: ${counts.total}`
     );
 
-    const day = usage[dateKey()] ?? (usage[dateKey()] = { total: emptyBucket(), bySource: {}, byMode: {}, byUser: {} });
+    const day = usage[dateKey()] ?? (usage[dateKey()] = { total: emptyBucket(), bySource: {}, byMode: {}, byUser: {}, byGuild: {} });
     addTo(day, 'total', counts);
     addTo(day.bySource, source, counts);
-    if (mode)   addTo(day.byMode, mode, counts);
-    if (userId) addTo(day.byUser, userId, counts);
+    if (mode)    addTo(day.byMode, mode, counts);
+    if (userId)  addTo(day.byUser, userId, counts);
+    // 舊紀錄沒有 byGuild
+    if (guildId) addTo(day.byGuild ?? (day.byGuild = {}), String(guildId), counts);
     writer.schedule();
 }
 
@@ -116,6 +120,29 @@ function getTodayTotal() {
 /** 今日指定使用者已使用的（計費）token 總數 */
 function getTodayUserTotal(userId) {
     return billableTotal(usage[dateKey()]?.byUser?.[userId]);
+}
+
+/** 今日指定伺服器已使用的（計費）token 總數 */
+function getTodayGuildTotal(guildId) {
+    if (!guildId) return 0;
+    return billableTotal(usage[dateKey()]?.byGuild?.[String(guildId)]);
+}
+
+/**
+ * 刪除指定使用者在每日統計裡的個人紀錄（/privacy delete）。
+ * 全體、來源、人格、伺服器的總數不動：那些是匯總數字，不含個人身分。
+ * @returns {number} 刪掉幾天的紀錄
+ */
+function deleteUserUsage(userId) {
+    let removed = 0;
+    for (const day of Object.values(usage)) {
+        if (day?.byUser && Object.hasOwn(day.byUser, userId)) {
+            delete day.byUser[userId];
+            removed++;
+        }
+    }
+    if (removed) writer.schedule();
+    return removed;
 }
 
 /**
@@ -144,4 +171,6 @@ function getUsageHistory(days) {
 
 load();
 
-module.exports = { recordUsage, getTodayTotal, getTodayUserTotal, getUsageHistory, billableTotal };
+module.exports = {
+    recordUsage, getTodayTotal, getTodayUserTotal, getTodayGuildTotal, getUsageHistory, billableTotal, deleteUserUsage,
+};

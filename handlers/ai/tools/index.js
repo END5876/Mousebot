@@ -29,6 +29,7 @@ const { recordUsage } = require('../tokenTracker');
 const logger = require('../../../utils/logger');
 const { ToolError } = require('./toolError');
 const features = require('../../../utils/features');
+const { isPublicMode } = require('../../../utils/publicMode');
 
 const MAX_CALLS = 3;
 const ROUTER_TIMEOUT_MS = 15_000;
@@ -44,8 +45,9 @@ const GROUPS = [
     { key: 'freeGames', file: './freeGames', available: () => features.isEnabled('notice'),    noAction: '查遊戲' },
     { key: 'voice',     file: './voice',     available: () => features.isEnabled('voice') || features.isEnabled('tts'), noAction: '進出語音頻道' },
     // 禁言辱罵者：不是使用者要求的動作，所以不列進「這次沒有替使用者…」的提醒（沒有 noAction）
-    // 名單（AI_TIMEOUT_USERS）是空的就整組停用：不宣告、預篩也不收罵人的關鍵字，預設零成本
-    { key: 'moderation', file: './moderation', available: () => require('./moderation').hasList() },
+    // 名單（AI_TIMEOUT_USERS）是空的就整組停用：不宣告、預篩也不收罵人的關鍵字，預設零成本。
+    // 公開模式（PUBLIC_MODE=1）一律停用：在別人的伺服器裡讓 AI 自動禁言成員，容易被當成濫權、違反 Discord 政策
+    { key: 'moderation', file: './moderation', available: () => !isPublicMode() && require('./moderation').hasList() },
 ];
 const loadedGroups = new Map(); // key → { tools, keywords }
 
@@ -200,7 +202,7 @@ async function runToolStage({ history, parts, text, ctx, mode = null, mergeUser 
         logger.warn('AITool', `判斷階段失敗，略過：${err.message}`);
         return { text: NO_ACTION_RULE, skipTTS: false };
     }
-    recordUsage('tools', response, { userId: ctx.userId, mode });
+    recordUsage('tools', response, { userId: ctx.userId, mode, guildId: ctx.guild?.id ?? null });
 
     const allowed = new Set(tools.map(t => t.declaration.name));
     const calls = (response.functionCalls ?? []).filter(c => allowed.has(c.name)).slice(0, MAX_CALLS);
@@ -232,6 +234,7 @@ module.exports = {
     _ROUTER_PROMPT: ROUTER_PROMPT,
     _routerPrompt: routerPrompt,
     _allTools: () => allTools(),
+    _availableGroupKeys: () => availableGroups().map(g => g.key),
     _noActionRule: () => noActionRule(),
     _textOnly: textOnly,
     _recentTurns: recentTurns,
